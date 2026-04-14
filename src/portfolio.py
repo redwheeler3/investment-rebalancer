@@ -6,7 +6,6 @@ and builds a unified portfolio view.
 """
 
 from dataclasses import dataclass, field
-from typing import Optional
 
 
 @dataclass
@@ -67,7 +66,6 @@ def build_portfolio(clients: list, transient_symbols: list, usd_to_cad_rate: flo
     total_value_cad = 0.0
     total_cash_cad = 0.0
     total_cash_usd = 0.0
-    transient_alerts = []  # For DLR.TO / DLR.U.TO notifications
 
     for client in clients:
         accounts = client.get_accounts()
@@ -282,16 +280,13 @@ def calculate_accuracy(current_allocations: dict, targets: dict) -> float:
     Returns:
         Accuracy score as a percentage (0-100).
     """
-    all_symbols = set(list(current_allocations.keys()) + list(targets.keys()))
-    total_abs_drift = 0.0
+    all_symbols = current_allocations.keys() | targets.keys()
+    total_abs_drift = sum(
+        abs(current_allocations.get(s, 0.0) - targets.get(s, 0.0))
+        for s in all_symbols
+    )
 
-    for symbol in all_symbols:
-        current = current_allocations.get(symbol, 0.0)
-        target = targets.get(symbol, 0.0)
-        total_abs_drift += abs(current - target)
-
-    accuracy = 100.0 - (total_abs_drift / 2.0)
-    return max(0.0, accuracy)  # Floor at 0%
+    return max(0.0, 100.0 - (total_abs_drift / 2.0))
 
 
 def get_drifts(current_allocations: dict, targets: dict) -> dict:
@@ -305,12 +300,8 @@ def get_drifts(current_allocations: dict, targets: dict) -> dict:
     Returns:
         Dictionary mapping symbol -> drift percentage.
     """
-    all_symbols = set(list(current_allocations.keys()) + list(targets.keys()))
-    drifts = {}
-
-    for symbol in all_symbols:
-        current = current_allocations.get(symbol, 0.0)
-        target = targets.get(symbol, 0.0)
-        drifts[symbol] = current - target
-
-    return drifts
+    all_symbols = current_allocations.keys() | targets.keys()
+    return {
+        s: current_allocations.get(s, 0.0) - targets.get(s, 0.0)
+        for s in all_symbols
+    }

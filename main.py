@@ -106,22 +106,14 @@ def run_rebalancer():
     console.print("  [dim]Connecting to Questrade...[/dim]")
     clients = []
 
-    jeff_token = TOKENS_DIR / "jeff_token.json"
-    eunee_token = TOKENS_DIR / "eunee_token.json"
-
-    if jeff_token.exists():
-        try:
-            clients.append(QuestradeClient(str(jeff_token), "Jeff"))
-            console.print("  [green]✓[/green] Jeff connected")
-        except Exception as e:
-            console.print(f"  [red]✗ Jeff connection failed: {e}[/red]")
-
-    if eunee_token.exists():
-        try:
-            clients.append(QuestradeClient(str(eunee_token), "Eunee"))
-            console.print("  [green]✓[/green] Eunee connected")
-        except Exception as e:
-            console.print(f"  [red]✗ Eunee connection failed: {e}[/red]")
+    for name, filename in [("Jeff", "jeff_token.json"), ("Eunee", "eunee_token.json")]:
+        token_path = TOKENS_DIR / filename
+        if token_path.exists():
+            try:
+                clients.append(QuestradeClient(str(token_path), name))
+                console.print(f"  [green]✓[/green] {name} connected")
+            except Exception as e:
+                console.print(f"  [red]✗ {name} connection failed: {e}[/red]")
 
     if not clients:
         console.print("[red]ERROR: No Questrade connections established. Check your tokens.[/red]")

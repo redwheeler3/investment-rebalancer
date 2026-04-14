@@ -321,7 +321,7 @@ def calculate_trades(
                 # Generate the fundraiser sell
                 sell_note = ""
                 if not is_overweight:
-                    sell_note = "Displacement sell (will re-buy elsewhere)"
+                    sell_note = "Displacement sell"
 
                 sell_trade = TradeRecommendation(
                     symbol=cand_pos.symbol,
@@ -441,7 +441,7 @@ def calculate_trades(
                     price=disp_ask,
                     currency=disp_currency,
                     estimated_value=disp_ask * buy_qty,
-                    note="Displacement buy (repairing sell from another account)",
+                    note="Displacement buy",
                 )
                 all_trades.append(trade)
                 available_cash[acct.number][disp_currency] -= trade.estimated_value

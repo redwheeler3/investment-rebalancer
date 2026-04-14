@@ -15,6 +15,40 @@ from rich import box
 
 console = Console()
 
+# Shared constants
+_CASH_SYMBOLS = {"CAD", "USD"}
+
+
+def _partition_symbols(allocations: dict, targets: dict, drifts: dict):
+    """Split symbols into stocks (sorted by drift) and cash (sorted alphabetically)."""
+    all_symbols = allocations.keys() | targets.keys()
+    stocks = sorted(
+        [s for s in all_symbols if s not in _CASH_SYMBOLS],
+        key=lambda s: drifts.get(s, 0.0),
+    )
+    cash = sorted(s for s in all_symbols if s in _CASH_SYMBOLS)
+    return stocks, cash
+
+
+def _add_drift_row(table, symbol: str, value_pct: float, target: float, drift: float):
+    """Add an allocation/drift row to a table (shared by current and projected tables)."""
+    if abs(drift) < 0.1:
+        drift_style = "dim"
+        status = "[green]OK[/green]"
+    elif drift > 0:
+        drift_style = "red"
+        status = "[red]OVER[/red]"
+    else:
+        drift_style = "yellow"
+        status = "[yellow]UNDER[/yellow]"
+    table.add_row(
+        symbol,
+        f"{target:.2f}%",
+        f"{value_pct:.2f}%",
+        Text(f"{drift:+.2f}%", style=drift_style),
+        status,
+    )
+
 
 def display_header():
     """Display the application header."""
@@ -139,50 +173,17 @@ def display_allocations(current_allocations: dict, targets: dict, drifts: dict):
     table.add_column("Drift", justify="right", min_width=10)
     table.add_column("Status", justify="center", min_width=8)
 
-    # Separate stocks from cash, sort stocks by drift ascending
-    cash_symbols = {"CAD", "USD"}
-    all_symbols = set(list(current_allocations.keys()) + list(targets.keys()))
-    stock_symbols = sorted(
-        [s for s in all_symbols if s not in cash_symbols],
-        key=lambda s: drifts.get(s, 0.0),
-    )
-    cash_list = sorted([s for s in all_symbols if s in cash_symbols])
-
-    def _add_alloc_row(table, symbol, current, target, drift):
-        if abs(drift) < 0.1:
-            drift_str = f"{drift:+.2f}%"
-            drift_style = "dim"
-            status = "[green]OK[/green]"
-        elif drift > 0:
-            drift_str = f"{drift:+.2f}%"
-            drift_style = "red"
-            status = "[red]OVER[/red]"
-        else:
-            drift_str = f"{drift:+.2f}%"
-            drift_style = "yellow"
-            status = "[yellow]UNDER[/yellow]"
-        table.add_row(
-            symbol,
-            f"{target:.2f}%",
-            f"{current:.2f}%",
-            Text(drift_str, style=drift_style),
-            status,
-        )
+    stock_symbols, cash_list = _partition_symbols(current_allocations, targets, drifts)
 
     for symbol in stock_symbols:
-        current = current_allocations.get(symbol, 0.0)
-        target = targets.get(symbol, 0.0)
-        drift = drifts.get(symbol, 0.0)
-        _add_alloc_row(table, symbol, current, target, drift)
+        _add_drift_row(table, symbol, current_allocations.get(symbol, 0.0),
+                       targets.get(symbol, 0.0), drifts.get(symbol, 0.0))
 
-    # Cash section
     if cash_list:
         table.add_section()
         for symbol in cash_list:
-            current = current_allocations.get(symbol, 0.0)
-            target = targets.get(symbol, 0.0)
-            drift = drifts.get(symbol, 0.0)
-            _add_alloc_row(table, symbol, current, target, drift)
+            _add_drift_row(table, symbol, current_allocations.get(symbol, 0.0),
+                           targets.get(symbol, 0.0), drifts.get(symbol, 0.0))
 
     console.print(table)
     console.print()
@@ -364,10 +365,8 @@ def display_projected_allocations(projected_allocations: dict, targets: dict):
         return
 
     # Calculate projected drifts
-    proj_drifts = {}
-    all_symbols = set(list(projected_allocations.keys()) + list(targets.keys()))
-    for symbol in all_symbols:
-        proj_drifts[symbol] = projected_allocations.get(symbol, 0.0) - targets.get(symbol, 0.0)
+    all_symbols = projected_allocations.keys() | targets.keys()
+    proj_drifts = {s: projected_allocations.get(s, 0.0) - targets.get(s, 0.0) for s in all_symbols}
 
     table = Table(
         title="Projected Allocation (After Trades)",
@@ -382,49 +381,17 @@ def display_projected_allocations(projected_allocations: dict, targets: dict):
     table.add_column("Drift", justify="right", min_width=10)
     table.add_column("Status", justify="center", min_width=8)
 
-    # Separate stocks from cash, sort stocks by drift ascending
-    cash_symbols = {"CAD", "USD"}
-    stock_symbols = sorted(
-        [s for s in all_symbols if s not in cash_symbols],
-        key=lambda s: proj_drifts.get(s, 0.0),
-    )
-    cash_list = sorted([s for s in all_symbols if s in cash_symbols])
-
-    def _add_proj_row(table, symbol, projected, target, drift):
-        if abs(drift) < 0.1:
-            drift_str = f"{drift:+.2f}%"
-            drift_style = "dim"
-            status = "[green]OK[/green]"
-        elif drift > 0:
-            drift_str = f"{drift:+.2f}%"
-            drift_style = "red"
-            status = "[red]OVER[/red]"
-        else:
-            drift_str = f"{drift:+.2f}%"
-            drift_style = "yellow"
-            status = "[yellow]UNDER[/yellow]"
-        table.add_row(
-            symbol,
-            f"{target:.2f}%",
-            f"{projected:.2f}%",
-            Text(drift_str, style=drift_style),
-            status,
-        )
+    stock_symbols, cash_list = _partition_symbols(projected_allocations, targets, proj_drifts)
 
     for symbol in stock_symbols:
-        projected = projected_allocations.get(symbol, 0.0)
-        target = targets.get(symbol, 0.0)
-        drift = proj_drifts.get(symbol, 0.0)
-        _add_proj_row(table, symbol, projected, target, drift)
+        _add_drift_row(table, symbol, projected_allocations.get(symbol, 0.0),
+                       targets.get(symbol, 0.0), proj_drifts.get(symbol, 0.0))
 
-    # Cash section
     if cash_list:
         table.add_section()
         for symbol in cash_list:
-            projected = projected_allocations.get(symbol, 0.0)
-            target = targets.get(symbol, 0.0)
-            drift = proj_drifts.get(symbol, 0.0)
-            _add_proj_row(table, symbol, projected, target, drift)
+            _add_drift_row(table, symbol, projected_allocations.get(symbol, 0.0),
+                           targets.get(symbol, 0.0), proj_drifts.get(symbol, 0.0))
 
     console.print(table)
     console.print()

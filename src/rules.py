@@ -6,7 +6,6 @@ like "only trade existing positions" and currency conversion handling.
 """
 
 from dataclasses import dataclass
-from typing import Optional
 
 
 @dataclass
@@ -23,15 +22,6 @@ class TradeRecommendation:
     currency: str
     estimated_value: float  # price * quantity in native currency
     note: str = ""  # Optional note (e.g., currency conversion needed)
-
-
-@dataclass
-class CurrencyAlert:
-    """Alert about currency conversion needs."""
-
-    direction: str  # "CAD_TO_USD" or "USD_TO_CAD"
-    amount: float  # Amount to convert in source currency
-    note: str
 
 
 @dataclass
@@ -91,105 +81,6 @@ def get_position_quantity(account, symbol: str) -> float:
         if pos.symbol == symbol:
             return pos.quantity
     return 0.0
-
-
-def allocate_buy(
-    symbol: str,
-    total_shares: int,
-    price: float,
-    currency: str,
-    accounts: list,
-    existing_only: bool = True,
-) -> list:
-    """
-    Allocate a BUY order across accounts respecting rules.
-
-    Strategy:
-    - Only place in accounts that already hold the symbol (if existing_only)
-    - Prefer accounts with more available cash
-    - Distribute proportionally if multiple accounts qualify
-
-    Args:
-        symbol: Ticker to buy.
-        total_shares: Total shares to buy.
-        price: Current price per share.
-        currency: "CAD" or "USD".
-        accounts: All AccountInfo objects.
-        existing_only: If True, only buy in accounts that already hold the symbol.
-
-    Returns:
-        List of TradeRecommendation objects.
-    """
-    if total_shares <= 0:
-        return []
-
-    # Find eligible accounts
-    if existing_only:
-        eligible = find_accounts_for_symbol(symbol, accounts)
-    else:
-        eligible = accounts
-
-    if not eligible:
-        return []  # Can't place this trade (respecting existing_only rule)
-
-    # Sort by available cash (descending) — prefer accounts with more cash
-    eligible.sort(key=lambda a: get_account_cash(a, currency), reverse=True)
-
-    trades = []
-    remaining = total_shares
-
-    for acct in eligible:
-        if remaining <= 0:
-            break
-
-        available_cash = get_account_cash(acct, currency)
-        max_affordable = int(available_cash / price) if price > 0 else 0
-        shares_to_buy = min(remaining, max_affordable)
-
-        if shares_to_buy > 0:
-            trades.append(TradeRecommendation(
-                symbol=symbol,
-                action="BUY",
-                quantity=shares_to_buy,
-                account_number=acct.number,
-                account_type=acct.account_type,
-                owner=acct.owner,
-                price=price,
-                currency=currency,
-                estimated_value=price * shares_to_buy,
-            ))
-            remaining -= shares_to_buy
-
-    # If we couldn't allocate all shares (no cash yet — sells haven't freed it),
-    # still recommend the full buy on the first eligible account
-    if remaining > 0 and not trades:
-        if eligible:
-            trades.append(TradeRecommendation(
-                symbol=symbol,
-                action="BUY",
-                quantity=total_shares,
-                account_number=eligible[0].number,
-                account_type=eligible[0].account_type,
-                owner=eligible[0].owner,
-                price=price,
-                currency=currency,
-                estimated_value=price * total_shares,
-            ))
-    elif remaining > 0 and trades:
-        # Assign remaining to the account with most cash
-        trades.append(TradeRecommendation(
-            symbol=symbol,
-            action="BUY",
-            quantity=remaining,
-            account_number=eligible[0].number,
-            account_type=eligible[0].account_type,
-            owner=eligible[0].owner,
-            price=price,
-            currency=currency,
-            estimated_value=price * remaining,
-        ))
-
-    return trades
 
 
 def allocate_sell(
