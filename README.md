@@ -10,7 +10,10 @@ A Python-based portfolio rebalancer for Questrade accounts. Replaces Passiv with
 - **Smart Trade Placement** — Only recommends trades in accounts that already hold the position (never introduces new tickers into an account)
 - **Currency Handling** — Detects USD/CAD conversion needs and flags Norbert's Gambit (DLR.TO/DLR.U.TO) status
 - **Projected Accuracy** — Shows what the accuracy would be after executing recommended trades
-- **Automatic Token Refresh** — GitHub Actions cron job refreshes Questrade OAuth tokens every 12 hours
+- **Whole-Share Trading** — Recommends whole shares only, using bid price for sells and ask price for buys
+- **Multi-Pass Algorithm** — 7-phase rebalancing: direct sells/buys, cash-raising, displacement recovery, cross-currency, and cash sweep
+- **±0.1% Drift Tolerance** — Positions within tolerance are left alone to avoid unnecessary trades
+- **Automatic Token Refresh** — GitHub Actions cron job refreshes Questrade OAuth tokens every 6 hours
 
 ## Quick Start
 
@@ -92,14 +95,14 @@ investment-rebalancer/
 │   ├── currency.py                # USD/CAD exchange rate & Norbert's Gambit
 │   └── display.py                 # Rich terminal output
 ├── .github/workflows/
-│   └── refresh_tokens.yml         # 12hr token refresh cron
+│   └── refresh_tokens.yml         # 6hr token refresh cron
 ├── main.py                        # Entry point
 └── requirements.txt
 ```
 
 ## GitHub Actions Token Refresh
 
-The workflow in `.github/workflows/refresh_tokens.yml` runs every 12 hours to keep Questrade OAuth tokens fresh. If a refresh fails, it creates a GitHub Issue alerting you to manually regenerate tokens.
+The workflow in `.github/workflows/refresh_tokens.yml` runs every 6 hours to keep Questrade OAuth tokens fresh. The Questrade API goes offline periodically, so an issue is only created if refreshes fail for more than 48 consecutive hours.
 
 **Before running locally:** Always `git pull` to get the latest refreshed tokens.
 
