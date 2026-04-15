@@ -255,17 +255,20 @@ def calculate_currency_needs(
         elif net_cad < -0.01 and net_usd > 0.01:
             # Need CAD but have USD surplus -> Convert USD to CAD
             cad_shortfall = abs(net_cad)
-            usd_needed = cad_shortfall / usd_to_cad_rate
 
             # DLR.U.TO price is approximately DLR.TO price / exchange rate
             dlr_u_price = dlr_price / usd_to_cad_rate if dlr_price > 0 else 0
 
-            # No fee reserve needed for USD->CAD (fee is on CAD side, but we'll
-            # have CAD from the conversion)
+            # Fee is always CAD-side, so we need enough USD to cover
+            # the shortfall PLUS the fee after conversion
+            usd_needed = (cad_shortfall + NORBERTS_GAMBIT_FEE_CAD) / usd_to_cad_rate
             usd_for_shares = min(usd_needed, net_usd)
 
             if usd_for_shares > 0 and dlr_u_price > 0:
-                dlr_shares = int(math.floor(usd_for_shares / dlr_u_price))
+                # Ceil to ensure enough CAD after conversion; cap at what's affordable
+                dlr_shares_needed = int(math.ceil(usd_needed / dlr_u_price))
+                dlr_shares_affordable = int(math.floor(net_usd / dlr_u_price))
+                dlr_shares = min(dlr_shares_needed, dlr_shares_affordable)
             else:
                 dlr_shares = 0
 
