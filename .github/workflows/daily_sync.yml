@@ -1,4 +1,4 @@
-name: Refresh Questrade Tokens
+name: Portfolio Sync
 
 on:
   schedule:
@@ -12,7 +12,7 @@ permissions:
   issues: write      # needed for creating issues on failure
 
 jobs:
-  refresh:
+  sync:
     runs-on: ubuntu-latest
 
     steps:
@@ -29,21 +29,30 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Refresh tokens
+      - name: Refresh tokens and snapshot portfolio
         run: python main.py --refresh-only
 
-      - name: Check for token changes
+      - name: Check for changes
         id: check_changes
         run: |
-          git diff --quiet tokens/ && echo "changed=false" >> $GITHUB_OUTPUT || echo "changed=true" >> $GITHUB_OUTPUT
+          # Check for modified tracked files OR new untracked files in data/
+          TRACKED_CHANGED=false
+          UNTRACKED_NEW=false
+          git diff --quiet tokens/ data/ || TRACKED_CHANGED=true
+          [ -n "$(git ls-files --others --exclude-standard data/)" ] && UNTRACKED_NEW=true
+          if [ "$TRACKED_CHANGED" = "true" ] || [ "$UNTRACKED_NEW" = "true" ]; then
+            echo "changed=true" >> $GITHUB_OUTPUT
+          else
+            echo "changed=false" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Commit updated tokens
+      - name: Commit and push
         if: steps.check_changes.outputs.changed == 'true'
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add tokens/
-          git commit -m "🔄 Auto-refresh Questrade tokens [skip ci]"
+          git add tokens/ data/
+          git commit -m "🔄 Auto-sync tokens and portfolio history [skip ci]"
           git push
 
       - name: Alert on prolonged failure (>48h)
@@ -55,7 +64,7 @@ jobs:
             const runs = await github.rest.actions.listWorkflowRuns({
               owner: context.repo.owner,
               repo: context.repo.repo,
-              workflow_id: 'refresh_tokens.yml',
+              workflow_id: 'daily_sync.yml',
               per_page: 20,
               status: 'completed',
             });

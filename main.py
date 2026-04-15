@@ -241,10 +241,12 @@ def _push_synced_files():
 def main():
     """Entry point."""
     if "--refresh-only" in sys.argv:
+        # GitHub Actions handles its own git commit/push in the workflow,
+        # so we don't call _push_synced_files() here.
         refresh_tokens_only()
     else:
         run_rebalancer()
-    _push_synced_files()
+        _push_synced_files()
 
 
 if __name__ == "__main__":
