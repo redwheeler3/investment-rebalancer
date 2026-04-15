@@ -897,6 +897,184 @@ def calculate_trades(
                 )
 
     # ══════════════════════════════════════════════════════════════════
+    # PHASE 9: Cross-currency drift optimization
+    # ══════════════════════════════════════════════════════════════════
+    # After all phases, some positions (especially expensive cross-currency
+    # ones like IVV) may still be beyond tolerance because same-currency
+    # buys consumed all the cash before cross-currency conversion could
+    # happen. Fix this by reducing same-currency buys (that brought their
+    # positions to/past target) to free cash for cross-currency conversion.
+
+    for _opt_round in range(20):  # Iterate — each round buys 1 share
+        # Find the worst remaining underweight symbol beyond tolerance
+        worst_symbol = None
+        worst_drift = 0
+        for sym, drift in effective_drift.items():
+            if sym in ("CAD", "USD"):
+                continue
+            if drift < -TOLERANCE_PCT and drift < worst_drift:
+                worst_symbol = sym
+                worst_drift = drift
+
+        if worst_symbol is None:
+            break  # All within tolerance
+
+        holding = portfolio.holdings.get(worst_symbol)
+        if not holding:
+            break
+
+        buy_currency = holding["currency"]
+        ask = holding.get("ask_price", holding["current_price"])
+        if ask <= 0:
+            break
+
+        source_currency = "CAD" if buy_currency == "USD" else "USD"
+
+        # Cost in source currency for 1 share (including conversion fee)
+        if source_currency == "CAD":
+            one_share_source_cost = ask * usd_to_cad_rate + NORBERTS_GAMBIT_FEE_CAD
+        else:
+            one_share_source_cost = ask / usd_to_cad_rate
+
+        # Would buying 1 more share improve drift (not overshoot)?
+        one_share_drift_impact = (_to_cad(ask, buy_currency) / total_value) * 100
+        if worst_drift + one_share_drift_impact > TOLERANCE_PCT:
+            break  # Would overshoot past tolerance in the other direction
+
+        # Find an account that holds worst_symbol and has a donor position
+        eligible = find_accounts_for_symbol(worst_symbol, portfolio.accounts)
+        bought_one = False
+
+        for acct in eligible:
+            if bought_one:
+                break
+
+            # First: check if account already has enough source cash
+            source_cash = available_cash.get(acct.number, {}).get(source_currency, 0)
+            if source_cash >= one_share_source_cost:
+                # Buy directly with existing cash
+                trade = TradeRecommendation(
+                    symbol=worst_symbol,
+                    action="BUY",
+                    quantity=1,
+                    account_number=acct.number,
+                    account_type=acct.account_type,
+                    owner=acct.owner,
+                    price=ask,
+                    currency=buy_currency,
+                    estimated_value=ask,
+                    note="Requires currency conversion",
+                )
+                all_trades.append(trade)
+                available_cash[acct.number][source_currency] -= one_share_source_cost
+                _apply_trade_to_drift(worst_symbol, _to_cad(ask, buy_currency), "BUY")
+                bought_one = True
+                continue
+
+            # Not enough cash — look for donor positions to reduce
+            donors = []
+            for pos in acct.positions:
+                if pos.currency != source_currency:
+                    continue
+                if pos.symbol in transient_symbols or pos.quantity <= 0:
+                    continue
+
+                donor_drift = effective_drift.get(pos.symbol, 0)
+                if donor_drift <= -TOLERANCE_PCT:
+                    continue  # Already underweight
+
+                donor_holding = portfolio.holdings.get(pos.symbol)
+                if not donor_holding:
+                    continue
+                donor_bid = donor_holding.get("bid_price", pos.current_price)
+                if donor_bid <= 0:
+                    continue
+
+                donors.append((pos.symbol, donor_drift, donor_bid))
+
+            if not donors:
+                continue
+
+            # Prefer donors closest to target (least overweight first —
+            # reduce the ones that have the least impact)
+            donors.sort(key=lambda x: x[1])
+
+            # Calculate total cash needed from donors (minus existing source cash)
+            cash_still_needed = one_share_source_cost - max(0, source_cash)
+            cash_raised = 0
+            donor_trades = []
+
+            for donor_sym, donor_drift, donor_bid in donors:
+                if cash_raised >= cash_still_needed:
+                    break
+
+                # How many shares to sell?
+                shortfall = cash_still_needed - cash_raised
+                shares_to_sell = int(math.ceil(shortfall / donor_bid))
+
+                # Cap: don't push donor beyond tolerance
+                max_sell_cad = ((donor_drift + TOLERANCE_PCT) / 100.0) * total_value
+                max_sell_native = max_sell_cad / usd_to_cad_rate if source_currency == "USD" else max_sell_cad
+                max_shares = int(math.floor(max_sell_native / donor_bid))
+
+                if max_shares <= 0:
+                    continue
+
+                shares_to_sell = min(shares_to_sell, max_shares)
+
+                # Also cap by held quantity in this account
+                held = int(get_position_quantity(acct, donor_sym))
+                shares_to_sell = min(shares_to_sell, held)
+
+                if shares_to_sell <= 0:
+                    continue
+
+                donor_trades.append((donor_sym, shares_to_sell, donor_bid))
+                cash_raised += shares_to_sell * donor_bid
+
+            if cash_raised + max(0, source_cash) < one_share_source_cost:
+                continue  # Can't raise enough
+
+            # Execute: sell donor positions, then buy target
+            for donor_sym, sell_qty, donor_bid in donor_trades:
+                sell_trade = TradeRecommendation(
+                    symbol=donor_sym,
+                    action="SELL",
+                    quantity=sell_qty,
+                    account_number=acct.number,
+                    account_type=acct.account_type,
+                    owner=acct.owner,
+                    price=donor_bid,
+                    currency=source_currency,
+                    estimated_value=donor_bid * sell_qty,
+                )
+                all_trades.append(sell_trade)
+                available_cash[acct.number][source_currency] += sell_trade.estimated_value
+                _apply_trade_to_drift(
+                    donor_sym, _to_cad(sell_trade.estimated_value, source_currency), "SELL"
+                )
+
+            buy_trade = TradeRecommendation(
+                symbol=worst_symbol,
+                action="BUY",
+                quantity=1,
+                account_number=acct.number,
+                account_type=acct.account_type,
+                owner=acct.owner,
+                price=ask,
+                currency=buy_currency,
+                estimated_value=ask,
+                note="Requires currency conversion",
+            )
+            all_trades.append(buy_trade)
+            available_cash[acct.number][source_currency] -= one_share_source_cost
+            _apply_trade_to_drift(worst_symbol, _to_cad(ask, buy_currency), "BUY")
+            bought_one = True
+
+        if not bought_one:
+            break  # No account could fund another share
+
+    # ══════════════════════════════════════════════════════════════════
     # POST-PROCESSING: Net and consolidate trades
     # ══════════════════════════════════════════════════════════════════
     # Trades for the same symbol + account may have been generated as
