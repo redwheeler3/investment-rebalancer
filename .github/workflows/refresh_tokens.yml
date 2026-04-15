@@ -7,6 +7,7 @@ on:
   workflow_dispatch: # Allow manual trigger
 
 permissions:
+  actions: read      # needed for listing workflow runs (failure counter)
   contents: write    # needed for git push
   issues: write      # needed for creating issues on failure
 
