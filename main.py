@@ -21,7 +21,7 @@ if sys.platform == "win32":
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8")
 
-from src.questrade_client import QuestradeClient, refresh_token_only
+from src.questrade_client import QuestradeClient
 from src.portfolio import build_portfolio, freeze_symbols, fetch_quotes_for_holdings, get_current_allocations, calculate_accuracy, get_drifts
 from src.rebalancer import calculate_trades, simulate_rebalance
 from src.rules import get_transient_status
@@ -61,8 +61,9 @@ def load_config() -> tuple:
 def refresh_tokens_only():
     """Refresh all tokens and record portfolio value. Used by GitHub Actions.
 
-    Also snapshots the portfolio value for ATH tracking so that the
-    daily cron job contributes data points even without a full rebalance.
+    Creates QuestradeClient objects which handle token refresh internally
+    (one rotation per token file — NOT two). Also snapshots the portfolio
+    value for ATH tracking so the daily cron contributes data points.
     """
     token_files = list(TOKENS_DIR.glob("*_token.json"))
 
@@ -75,16 +76,14 @@ def refresh_tokens_only():
     for token_file in token_files:
         name = token_file.stem.replace("_token", "")
         print(f"Refreshing token for {name}...")
-        ok = refresh_token_only(str(token_file))
-        if ok:
+        try:
+            # QuestradeClient.__init__ handles the token refresh and saves
+            # the new token — no need to call refresh_token_only() separately.
+            client = QuestradeClient(str(token_file), name)
+            clients.append(client)
             print(f"  ✓ {name} token refreshed successfully")
-            # Build a client from the freshly-refreshed token for portfolio snapshot
-            try:
-                clients.append(QuestradeClient(str(token_file), name))
-            except Exception:
-                pass  # Non-fatal — snapshot is best-effort
-        else:
-            print(f"  ✗ {name} token refresh FAILED")
+        except Exception as e:
+            print(f"  ✗ {name} token refresh FAILED: {e}")
             all_ok = False
 
     if not all_ok:
