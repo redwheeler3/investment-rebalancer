@@ -2,8 +2,8 @@ name: Portfolio Sync
 
 on:
   schedule:
-    # Run every 6 hours (UTC)
-    - cron: '0 */6 * * *'
+    # Run every 12 hours (UTC) — offset by 7 minutes to avoid on-the-hour congestion
+    - cron: '7 */12 * * *'
   workflow_dispatch: # Allow manual trigger
 
 permissions:
@@ -78,13 +78,13 @@ jobs:
               }
             }
 
-            // With 6-hour intervals, >48 hours means strictly more than 8 consecutive failures
-            if (consecutiveFailures <= 8) {
-              console.log(`Only ${consecutiveFailures} consecutive failure(s) (~${consecutiveFailures * 6}h). Skipping issue creation (threshold: >48h).`);
+            // With 12-hour intervals, >48 hours means strictly more than 4 consecutive failures
+            if (consecutiveFailures <= 4) {
+              console.log(`Only ${consecutiveFailures} consecutive failure(s) (~${consecutiveFailures * 12}h). Skipping issue creation (threshold: >48h).`);
               return;
             }
 
-            console.log(`${consecutiveFailures} consecutive failures (~${consecutiveFailures * 6}h). Creating issue.`);
+            console.log(`${consecutiveFailures} consecutive failures (~${consecutiveFailures * 12}h). Creating issue.`);
 
             // Check for existing open issue to avoid duplicates
             const issues = await github.rest.issues.listForRepo({
