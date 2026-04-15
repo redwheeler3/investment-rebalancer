@@ -43,9 +43,9 @@ def _add_drift_row(table, symbol: str, value_pct: float, target: float, drift: f
         status = "[yellow]UNDER[/yellow]"
     table.add_row(
         symbol,
-        f"{target:.2f}%",
-        f"{value_pct:.2f}%",
-        Text(f"{drift:+.2f}%", style=drift_style),
+        f"{target:.1f}%",
+        f"{value_pct:.1f}%",
+        Text(f"{drift:+.1f}%", style=drift_style),
         status,
     )
 
