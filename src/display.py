@@ -57,7 +57,7 @@ def display_header():
     header.append("PORTFOLIO REBALANCER", style="bold cyan")
     header.append(f"  —  {now}", style="dim")
     console.print()
-    console.print(Panel(header, box=box.DOUBLE, style="cyan"))
+    console.print(Panel(header, box=box.DOUBLE, style="cyan", expand=False))
     console.print()
 
 
