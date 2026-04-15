@@ -11,7 +11,7 @@ A Python-based portfolio rebalancer for Questrade accounts. Replaces Passiv with
 - **Currency Handling** — Detects USD/CAD conversion needs and flags Norbert's Gambit (DLR.TO/DLR.U.TO) status
 - **Projected Accuracy** — Shows what the accuracy would be after executing recommended trades
 - **Whole-Share Trading** — Recommends whole shares only, using bid price for sells and ask price for buys
-- **Multi-Pass Algorithm** — 7-phase rebalancing: direct sells/buys, cash-raising, displacement recovery, cross-currency, and cash sweep
+- **Iterative Algorithm** — Repeats Sell → Buy → Sweep rounds until all positions are within tolerance, handling same-currency, cross-currency, and displacement trades in a single unified pass
 - **±0.1% Drift Tolerance** — Positions within tolerance are left alone to avoid unnecessary trades
 - **Automatic Token Refresh** — GitHub Actions cron job refreshes Questrade OAuth tokens every 6 hours
 
@@ -50,11 +50,9 @@ python main.py
 python main.py --refresh-only
 ```
 
-## Configuration
+## Configuration (`config/targets.yaml`)
 
-### Target Allocations (`config/targets.yaml`)
-
-Edit target percentages (must sum to 100%):
+Edit target percentages (must sum to 100%) and transient symbols:
 
 ```yaml
 targets:
@@ -68,22 +66,19 @@ targets:
   XEC.TO: 6.0
   XBB.TO: 6.0
   CASH.TO: 8.0
+
+# Excluded from portfolio valuation and rebalancing
+transient_symbols:
+  - DLR.TO
+  - DLR.U.TO
 ```
-
-### Placement Rules (`config/rules.yaml`)
-
-Toggle rules on/off:
-
-- **existing_positions_only** — Only trade positions that already exist in a given account
-- **norberts_gambit** — Handle DLR.TO/DLR.U.TO as transient currency conversion instruments
 
 ## Project Structure
 
 ```
 investment-rebalancer/
 ├── config/
-│   ├── targets.yaml              # Target allocation percentages
-│   └── rules.yaml                # Placement rules
+│   └── targets.yaml              # Target allocations & transient symbols
 ├── tokens/
 │   ├── jeff_token.json            # Jeff's Questrade refresh token
 │   └── eunee_token.json           # Eunee's Questrade refresh token
@@ -104,7 +99,7 @@ investment-rebalancer/
 
 The workflow in `.github/workflows/refresh_tokens.yml` runs every 6 hours to keep Questrade OAuth tokens fresh. The Questrade API goes offline periodically, so an issue is only created if refreshes fail for more than 48 consecutive hours.
 
-**Before running locally:** Always `git pull` to get the latest refreshed tokens.
+**Before running locally:** Always `git pull` to get the latest refreshed tokens. After running, the updated tokens are automatically committed and pushed back to git.
 
 ## ⚠️ Security
 

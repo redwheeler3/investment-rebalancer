@@ -9,8 +9,8 @@ Usage:
     python main.py --refresh-only   # Just refresh tokens (used by GitHub Actions)
 """
 
+import subprocess
 import sys
-import os
 import yaml
 from pathlib import Path
 
@@ -35,28 +35,25 @@ TOKENS_DIR = ROOT / "tokens"
 CONFIG_DIR = ROOT / "config"
 
 
-def load_targets() -> dict:
-    """Load target allocations from config/targets.yaml."""
+def load_config() -> tuple:
+    """Load targets and transient symbols from config/targets.yaml.
+
+    Returns:
+        (targets, transient_symbols) tuple.
+    """
     targets_path = CONFIG_DIR / "targets.yaml"
     with open(targets_path, "r") as f:
         data = yaml.safe_load(f)
 
     targets = data.get("targets", {})
+    transient_symbols = data.get("transient_symbols", [])
 
     # Validate targets sum to ~100%
     total = sum(targets.values())
     if abs(total - 100.0) > 0.5:
         console.print(f"  [yellow]⚠ Warning: Target allocations sum to {total:.1f}% (expected 100%)[/yellow]")
 
-    return targets
-
-
-def load_rules() -> dict:
-    """Load placement rules from config/rules.yaml."""
-    rules_path = CONFIG_DIR / "rules.yaml"
-    with open(rules_path, "r") as f:
-        data = yaml.safe_load(f)
-    return data
+    return targets, transient_symbols
 
 
 def refresh_tokens_only():
@@ -89,13 +86,7 @@ def run_rebalancer():
 
     # Load config
     console.print("  [dim]Loading configuration...[/dim]")
-    targets = load_targets()
-    rules_config = load_rules()
-
-    # Determine which rules are enabled
-    rules = {r["name"]: r["enabled"] for r in rules_config.get("rules", [])}
-    transient_symbols = rules_config.get("transient_symbols", [])
-    existing_only = rules.get("existing_positions_only", True)
+    targets, transient_symbols = load_config()
 
     # Connect to Questrade accounts
     console.print("  [dim]Connecting to Questrade...[/dim]")
@@ -145,7 +136,7 @@ def run_rebalancer():
 
     # Calculate trades
     console.print("  [dim]Calculating trades...[/dim]")
-    trades = calculate_trades(portfolio, targets, usd_to_cad_rate, existing_only, transient_symbols)
+    trades = calculate_trades(portfolio, targets, usd_to_cad_rate, existing_only=True, transient_symbols=transient_symbols)
 
     # Calculate currency conversion needs (per-account with DLR share counts)
     currency_conversions = calculate_currency_needs(trades, portfolio.accounts, usd_to_cad_rate, dlr_price)
@@ -174,12 +165,46 @@ def run_rebalancer():
     )
 
 
+def _push_tokens():
+    """Commit and push updated token files so GitHub Actions stays in sync.
+    Questrade uses single-use refresh tokens (token rotation), so every run
+    invalidates the old token. If we don't push, the next GitHub Actions
+    run will fail with a stale token."""
+    try:
+        # Check if there are token changes to push
+        result = subprocess.run(
+            ["git", "diff", "--quiet", "tokens/"],
+            cwd=str(ROOT), capture_output=True,
+        )
+        if result.returncode == 0:
+            return  # No changes
+
+        subprocess.run(
+            ["git", "add", "tokens/"],
+            cwd=str(ROOT), check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "commit", "-m", "🔄 Auto-refresh Questrade tokens (local run)"],
+            cwd=str(ROOT), check=True, capture_output=True,
+        )
+        subprocess.run(
+            ["git", "push"],
+            cwd=str(ROOT), check=True, capture_output=True,
+        )
+        console.print("\n  [green]✓[/green] [dim]Token files pushed to git[/dim]")
+    except FileNotFoundError:
+        console.print("\n  [yellow]⚠ git not found — remember to push token files manually[/yellow]")
+    except subprocess.CalledProcessError:
+        console.print("\n  [yellow]⚠ Could not auto-push tokens — remember to push manually[/yellow]")
+
+
 def main():
     """Entry point."""
     if "--refresh-only" in sys.argv:
         refresh_tokens_only()
     else:
         run_rebalancer()
+        _push_tokens()
 
 
 if __name__ == "__main__":

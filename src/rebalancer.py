@@ -134,6 +134,29 @@ def calculate_trades(
                 shares = 1
         return shares
 
+    def _sweep_candidates(acct, currency, max_price=None):
+        """Find buyable positions in an account for the given currency.
+        Returns list of (symbol, drift, ask_price) sorted most-underweight first.
+        If max_price is given, only include positions with ask ≤ max_price."""
+        candidates = []
+        for pos in acct.positions:
+            if pos.currency != currency or pos.quantity <= 0:
+                continue
+            if pos.symbol in transient_symbols:
+                continue
+            holding = portfolio.holdings.get(pos.symbol)
+            if not holding:
+                continue
+            ask_price = holding.get("ask_price", pos.current_price)
+            if ask_price <= 0:
+                continue
+            if max_price is not None and ask_price > max_price:
+                continue
+            drift = effective_drift.get(pos.symbol, 0)
+            candidates.append((pos.symbol, drift, ask_price))
+        candidates.sort(key=lambda x: x[1])  # Most underweight first
+        return candidates
+
     # ══════════════════════════════════════════════════════════════════
     all_trades = []
 
@@ -252,28 +275,28 @@ def calculate_trades(
                 # Sell another position in this account to raise cash.
                 # Prefer overweight positions; accept at-target if held
                 # in multiple accounts (so next round can repair).
-                candidates = []
+                displacement_candidates = []
                 for pos in acct.positions:
                     if pos.symbol == symbol or pos.symbol in transient_symbols:
                         continue
                     if pos.currency != currency or pos.quantity <= 0:
                         continue
-                    h = portfolio.holdings.get(pos.symbol)
-                    if not h:
+                    pos_holding = portfolio.holdings.get(pos.symbol)
+                    if not pos_holding:
                         continue
-                    cbid = h.get("bid_price", pos.current_price)
-                    if cbid <= 0:
+                    pos_bid = pos_holding.get("bid_price", pos.current_price)
+                    if pos_bid <= 0:
                         continue
-                    cdrift = effective_drift.get(pos.symbol, 0)
-                    candidates.append((pos.symbol, cdrift, cbid))
+                    pos_drift = effective_drift.get(pos.symbol, 0)
+                    displacement_candidates.append((pos.symbol, pos_drift, pos_bid))
 
-                if not candidates:
+                if not displacement_candidates:
                     continue
 
                 # Most overweight first (best displacement targets)
-                candidates.sort(key=lambda x: x[1], reverse=True)
+                displacement_candidates.sort(key=lambda x: x[1], reverse=True)
 
-                for cand_sym, cand_drift, cand_bid in candidates:
+                for cand_sym, cand_drift, cand_bid in displacement_candidates:
                     if remaining <= 0:
                         break
 
@@ -355,107 +378,81 @@ def calculate_trades(
                     if acct_cash <= 0:
                         break
 
-                    cands = []
-                    for pos in acct.positions:
-                        if pos.currency != currency or pos.quantity <= 0:
-                            continue
-                        if pos.symbol in transient_symbols:
-                            continue
-                        h = portfolio.holdings.get(pos.symbol)
-                        if not h:
-                            continue
-                        a = h.get("ask_price", pos.current_price)
-                        if a <= 0 or a > acct_cash:
-                            continue
-                        cands.append((pos.symbol, effective_drift.get(pos.symbol, 0), a))
-
-                    if not cands:
+                    candidates = _sweep_candidates(acct, currency, max_price=acct_cash)
+                    if not candidates:
                         break
 
-                    cands.sort(key=lambda x: x[1])
-                    sym, d, a = cands[0]
+                    best_symbol, best_drift, best_ask = candidates[0]
 
-                    affordable = int(math.floor(acct_cash / a))
+                    affordable = int(math.floor(acct_cash / best_ask))
                     if affordable <= 0:
                         break
 
-                    # Cap at drift gap if underweight, else dump remaining
-                    if d < -TOLERANCE_PCT:
-                        gap_cad = abs(d / 100.0) * total_value
-                        gap_n = gap_cad / usd_to_cad_rate if currency == "USD" else gap_cad
-                        shares = min(int(math.ceil(gap_n / a)), affordable)
+                    # Cap at drift gap if underweight, else deploy all remaining cash
+                    if best_drift < -TOLERANCE_PCT:
+                        gap_cad = abs(best_drift / 100.0) * total_value
+                        gap_native = gap_cad / usd_to_cad_rate if currency == "USD" else gap_cad
+                        shares = min(int(math.ceil(gap_native / best_ask)), affordable)
                     else:
                         shares = affordable
 
                     if shares <= 0:
                         break
 
-                    cost = a * shares
+                    cost = best_ask * shares
                     all_trades.append(TradeRecommendation(
-                        symbol=sym,
+                        symbol=best_symbol,
                         action="BUY",
                         quantity=shares,
                         account_number=acct.number,
                         account_type=acct.account_type,
                         owner=acct.owner,
-                        price=a,
+                        price=best_ask,
                         currency=currency,
                         estimated_value=cost,
                     ))
                     available_cash[acct.number][currency] -= cost
-                    _apply_trade(sym, _to_cad(cost, currency), "BUY")
+                    _apply_trade(best_symbol, _to_cad(cost, currency), "BUY")
                     round_count += shares
 
             # Cross-currency sweep (stranded cash in the wrong currency)
-            for cash_cur in ["CAD", "USD"]:
-                acct_cash = available_cash.get(acct.number, {}).get(cash_cur, 0)
-                if acct_cash <= 0:
+            for source_currency in ["CAD", "USD"]:
+                source_cash = available_cash.get(acct.number, {}).get(source_currency, 0)
+                if source_cash <= 0:
                     continue
 
-                buy_cur = "USD" if cash_cur == "CAD" else "CAD"
-                cands = []
-                for pos in acct.positions:
-                    if pos.currency != buy_cur or pos.quantity <= 0:
-                        continue
-                    if pos.symbol in transient_symbols:
-                        continue
-                    h = portfolio.holdings.get(pos.symbol)
-                    if not h:
-                        continue
-                    a = h.get("ask_price", pos.current_price)
-                    if a <= 0:
-                        continue
-                    cands.append((pos.symbol, effective_drift.get(pos.symbol, 0), a))
-
-                if not cands:
+                target_currency = "USD" if source_currency == "CAD" else "CAD"
+                candidates = _sweep_candidates(acct, target_currency)
+                if not candidates:
                     continue
 
-                cands.sort(key=lambda x: x[1])
-                sym, _, a = cands[0]
+                best_symbol, _, best_ask = candidates[0]
 
-                if cash_cur == "CAD":
-                    eff_buy = max(0, acct_cash - NORBERTS_GAMBIT_FEE_CAD) / usd_to_cad_rate
+                # Convert source cash to target currency, less Norbert's Gambit fee
+                if source_currency == "CAD":
+                    buying_power = max(0, source_cash - NORBERTS_GAMBIT_FEE_CAD) / usd_to_cad_rate
                 else:
-                    eff_buy = max(0, acct_cash * usd_to_cad_rate - NORBERTS_GAMBIT_FEE_CAD)
+                    buying_power = max(0, source_cash * usd_to_cad_rate - NORBERTS_GAMBIT_FEE_CAD)
 
-                shares = int(math.floor(eff_buy / a))
+                shares = int(math.floor(buying_power / best_ask))
                 if shares <= 0:
                     continue
 
-                cost = shares * a
+                cost = shares * best_ask
                 all_trades.append(TradeRecommendation(
-                    symbol=sym,
+                    symbol=best_symbol,
                     action="BUY",
                     quantity=shares,
                     account_number=acct.number,
                     account_type=acct.account_type,
                     owner=acct.owner,
-                    price=a,
-                    currency=buy_cur,
+                    price=best_ask,
+                    currency=target_currency,
                     estimated_value=cost,
                     note="Requires currency conversion",
                 ))
-                if cash_cur == "CAD":
+                # Deduct from source currency (cost converted back + fee)
+                if source_currency == "CAD":
                     available_cash[acct.number]["CAD"] -= (
                         cost * usd_to_cad_rate + NORBERTS_GAMBIT_FEE_CAD
                     )
@@ -464,7 +461,7 @@ def calculate_trades(
                         cost + NORBERTS_GAMBIT_FEE_CAD
                     ) / usd_to_cad_rate
 
-                _apply_trade(sym, _to_cad(cost, buy_cur), "BUY")
+                _apply_trade(best_symbol, _to_cad(cost, target_currency), "BUY")
                 round_count += shares
 
         # ── Check: any more work to do? ──
