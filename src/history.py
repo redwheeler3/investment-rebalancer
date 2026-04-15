@@ -87,19 +87,39 @@ def get_all_time_high(current_value: float = None) -> AllTimeHigh | None:
 
 
 def _load_history() -> list:
-    """Load history from the JSON file. Returns empty list if file doesn't exist."""
+    """Load history from a JSONL file (one JSON object per line).
+
+    Also handles the legacy format (a single JSON array) for backward
+    compatibility — it will be converted to JSONL on the next save.
+
+    Each line: {"date":"2026-04-14","value":156432.50}
+    """
     if not HISTORY_FILE.exists():
         return []
     try:
         with open(HISTORY_FILE, "r") as f:
-            return json.load(f)
+            content = f.read().strip()
+        if not content:
+            return []
+
+        # Legacy format: entire file is a JSON array
+        if content.startswith("["):
+            return json.loads(content)
+
+        # JSONL format: one JSON object per line
+        entries = []
+        for line in content.splitlines():
+            line = line.strip()
+            if line:
+                entries.append(json.loads(line))
+        return entries
     except (json.JSONDecodeError, IOError):
         return []
 
 
 def _save_history(history: list) -> None:
-    """Save history to the JSON file. Creates the data/ directory if needed."""
+    """Save history as JSONL (one JSON object per line). Creates data/ if needed."""
     HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
     with open(HISTORY_FILE, "w") as f:
-        json.dump(history, f, indent=None, separators=(",", ":"))
-        f.write("\n")
+        for entry in history:
+            f.write(json.dumps(entry, separators=(",", ":")) + "\n")
