@@ -201,6 +201,23 @@ def run_rebalancer():
     )
 
 
+def _pull_latest():
+    """Pull the latest tokens and data from remote before running locally.
+    Uses --ff-only so it only applies clean fast-forwards; warns and continues on failure."""
+    try:
+        result = subprocess.run(
+            ["git", "pull", "--ff-only"],
+            cwd=str(ROOT), capture_output=True, text=True,
+        )
+        if result.returncode == 0:
+            if "Already up to date." not in result.stdout:
+                console.print("  [dim]✓ Pulled latest tokens from remote[/dim]")
+        else:
+            console.print("  [yellow]⚠ Could not pull latest — running with local tokens[/yellow]")
+    except FileNotFoundError:
+        pass  # git not available, silently continue
+
+
 def _push_synced_files():
     """Commit and push tokens + portfolio history so GitHub Actions stays in sync.
     Questrade uses single-use refresh tokens (token rotation), so every run
@@ -245,6 +262,7 @@ def main():
         # so we don't call _push_synced_files() here.
         refresh_tokens_only()
     else:
+        _pull_latest()
         run_rebalancer()
         _push_synced_files()
 
