@@ -5,8 +5,8 @@ Connects to Questrade accounts, builds a unified portfolio view,
 calculates rebalancing trades, and displays a formatted report.
 
 Usage:
-    python main.py                  # Run the rebalancer
-    python main.py --refresh-only   # Just refresh tokens (used by GitHub Actions)
+    python main.py          # Run the rebalancer interactively
+    python main.py --sync   # Scheduled sync mode: refresh tokens + snapshot portfolio (used by GitHub Actions)
 """
 
 import subprocess
@@ -58,12 +58,12 @@ def load_config() -> tuple:
     return targets, transient_symbols, norberts_gambit_fee_cad
 
 
-def refresh_tokens_only():
-    """Refresh all tokens and record portfolio value. Used by GitHub Actions.
+def run_scheduled_sync():
+    """Scheduled sync mode used by GitHub Actions.
 
-    Creates QuestradeClient objects which handle token refresh internally
-    (one rotation per token file — NOT two). Also snapshots the portfolio
-    value for ATH tracking so the daily cron contributes data points.
+    Refreshes all Questrade OAuth tokens (single rotation per token file)
+    and snapshots the current portfolio value for ATH tracking.
+    GitHub Actions handles committing and pushing the updated files.
     """
     token_files = list(TOKENS_DIR.glob("*_token.json"))
 
@@ -99,7 +99,7 @@ def refresh_tokens_only():
         except Exception as e:
             print(f"  ⚠ Could not snapshot portfolio value: {e}")
 
-    print("\nAll tokens refreshed successfully.")
+    print("\nPortfolio sync complete.")
 
 
 def run_rebalancer():
@@ -257,10 +257,11 @@ def _push_synced_files():
 
 def main():
     """Entry point."""
-    if "--refresh-only" in sys.argv:
+    if "--sync" in sys.argv:
+        # Scheduled sync mode (GitHub Actions): refresh tokens + snapshot portfolio.
         # GitHub Actions handles its own git commit/push in the workflow,
         # so we don't call _push_synced_files() here.
-        refresh_tokens_only()
+        run_scheduled_sync()
     else:
         _pull_latest()
         run_rebalancer()

@@ -15,7 +15,7 @@ A Python-based portfolio rebalancer for Questrade accounts. Replaces Passiv with
 - **Whole-Share Trading** — Recommends whole shares only, using bid price for sells and ask price for buys
 - **Iterative Algorithm** — Repeats Sell → Buy → Sweep rounds until all positions are within tolerance, handling same-currency, cross-currency, and displacement trades in a single unified pass
 - **±0.1% Drift Tolerance** — Positions within tolerance are left alone to avoid unnecessary trades
-- **Automatic Token Refresh** — GitHub Actions cron job refreshes Questrade OAuth tokens every 6 hours
+- **Automatic Portfolio Sync** — GitHub Actions cron job refreshes Questrade OAuth tokens and snapshots portfolio value twice daily
 
 ## Quick Start
 
@@ -46,10 +46,10 @@ pip install -r requirements.txt
 python main.py
 ```
 
-### 4. Token Refresh Only (used by GitHub Actions)
+### 4. Scheduled Sync Mode (used by GitHub Actions)
 
 ```bash
-python main.py --refresh-only
+python main.py --sync
 ```
 
 ## Configuration (`config/targets.yaml`)
@@ -97,16 +97,16 @@ investment-rebalancer/
 │   ├── currency.py                # USD/CAD exchange rate & Norbert's Gambit
 │   └── display.py                 # Rich terminal output
 ├── .github/workflows/
-│   └── refresh_tokens.yml         # 6hr token refresh cron
+│   └── portfolio_sync.yml         # Twice-daily portfolio sync (token refresh + history snapshot)
 ├── main.py                        # Entry point
 └── requirements.txt
 ```
 
-## GitHub Actions Token Refresh
+## GitHub Actions Portfolio Sync
 
-The workflow in `.github/workflows/refresh_tokens.yml` runs every 6 hours to keep Questrade OAuth tokens fresh. The Questrade API goes offline periodically, so an issue is only created if refreshes fail for more than 48 consecutive hours.
+The workflow in `.github/workflows/portfolio_sync.yml` runs twice daily (3:00 AM and 3:00 PM PDT) to keep Questrade OAuth tokens fresh and snapshot the portfolio value for ATH tracking. The Questrade API goes offline periodically, so an alert issue is only created if syncs fail for more than 48 consecutive hours.
 
-**Before running locally:** Always `git pull` to get the latest refreshed tokens. After running, the updated tokens are automatically committed and pushed back to git.
+When running locally, `python main.py` automatically pulls the latest tokens from the remote before connecting to Questrade, and pushes the refreshed tokens and updated portfolio history back when done.
 
 ## ⚠️ Security
 

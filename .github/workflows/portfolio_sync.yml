@@ -29,8 +29,8 @@ jobs:
       - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Refresh tokens and snapshot portfolio
-        run: python main.py --refresh-only
+      - name: Sync portfolio data (refresh tokens + snapshot value)
+        run: python main.py --sync
 
       - name: Check for changes
         id: check_changes
