@@ -191,7 +191,7 @@ def _push_tokens():
             ["git", "push"],
             cwd=str(ROOT), check=True, capture_output=True,
         )
-        console.print("\n  [green]✓[/green] [dim]Token files pushed to git[/dim]")
+        pass  # Pushed silently
     except FileNotFoundError:
         console.print("\n  [yellow]⚠ git not found — remember to push token files manually[/yellow]")
     except subprocess.CalledProcessError:
