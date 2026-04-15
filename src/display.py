@@ -70,10 +70,10 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
         header_style="bold magenta",
     )
 
-    table.add_column("Symbol", style="bold", min_width=10)
-    table.add_column("Shares", justify="right", min_width=10)
-    table.add_column("Price", justify="right", min_width=12)
-    table.add_column("Value (CAD)", justify="right", min_width=14)
+    table.add_column("Symbol", style="bold")
+    table.add_column("Shares", justify="right")
+    table.add_column("Price", justify="right")
+    table.add_column("Value (CAD)", justify="right")
 
     # Collect holdings sorted alphabetically
     rows = []
@@ -197,11 +197,11 @@ def _display_allocation_table(
         header_style=header_style,
     )
 
-    table.add_column("Symbol", style="bold", min_width=10)
-    table.add_column("Target %", justify="right", min_width=10)
-    table.add_column(value_column_name, justify="right", min_width=10)
-    table.add_column("Drift", justify="right", min_width=10)
-    table.add_column("Status", justify="center", min_width=8)
+    table.add_column("Symbol", style="bold")
+    table.add_column("Target %", justify="right")
+    table.add_column(value_column_name, justify="right")
+    table.add_column("Drift", justify="right")
+    table.add_column("Status", justify="center")
 
     stock_symbols, cash_list = _partition_symbols(allocations, targets, drifts)
 
@@ -255,13 +255,13 @@ def display_trades(trades: list):
         header_style="bold magenta",
     )
 
-    table.add_column("Symbol", style="bold", min_width=10)
-    table.add_column("Action", justify="center", min_width=6)
-    table.add_column("Qty", justify="right", min_width=5)
-    table.add_column("Price", justify="right", min_width=10)
-    table.add_column("Est. Value", justify="right", min_width=12)
-    table.add_column("Account", min_width=25)
-    table.add_column("Note", style="dim", min_width=15)
+    table.add_column("Symbol", style="bold")
+    table.add_column("Action", justify="center")
+    table.add_column("Qty", justify="right")
+    table.add_column("Price", justify="right")
+    table.add_column("Est. Value", justify="right")
+    table.add_column("Account")
+    table.add_column("Note", style="dim")
 
     prev_account = None
 
@@ -304,12 +304,12 @@ def display_currency_conversions(conversions: list):
         header_style="bold yellow",
     )
 
-    table.add_column("Account", min_width=25)
-    table.add_column("Direction", justify="center", min_width=12)
-    table.add_column("Buy", style="bold", min_width=12)
-    table.add_column("Shares", justify="right", min_width=8)
-    table.add_column("DLR Price", justify="right", min_width=10)
-    table.add_column("Amount (incl. fee)", justify="right", min_width=14)
+    table.add_column("Account")
+    table.add_column("Direction", justify="center")
+    table.add_column("Buy", style="bold")
+    table.add_column("Shares", justify="right")
+    table.add_column("DLR Price", justify="right")
+    table.add_column("Amount (incl. fee)", justify="right")
 
     for conv in conversions:
         account_label = f"{conv.owner} {conv.account_type} ({conv.account_number})"
@@ -364,13 +364,13 @@ def display_account_summary(accounts: list, usd_to_cad_rate: float):
         header_style="bold magenta",
     )
 
-    table.add_column("Owner", min_width=8)
-    table.add_column("Type", min_width=15)
-    table.add_column("Number", min_width=10)
-    table.add_column("Total Value (CAD)", justify="right", min_width=16)
-    table.add_column("Cash CAD", justify="right", min_width=12)
-    table.add_column("Cash USD", justify="right", min_width=12)
-    table.add_column("Positions", justify="center", min_width=10)
+    table.add_column("Owner", style="bold")
+    table.add_column("Type")
+    table.add_column("Number")
+    table.add_column("Total Value (CAD)", justify="right")
+    table.add_column("Cash CAD", justify="right")
+    table.add_column("Cash USD", justify="right")
+    table.add_column("Positions", justify="center")
 
     # Track totals for the summary row
     total_value_sum = 0.0
