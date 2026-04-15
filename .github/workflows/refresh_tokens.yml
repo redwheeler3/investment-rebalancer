@@ -94,6 +94,7 @@ jobs:
               owner: context.repo.owner,
               repo: context.repo.repo,
               title: '🚨 Questrade Token Refresh Failed (>48h)',
-              body: `The automatic token refresh has been failing for more than 48 hours (${consecutiveFailures} consecutive failures).\n\nPlease manually refresh your tokens:\n1. Go to https://www.questrade.com/api\n2. Generate new refresh tokens for each account\n3. Update \`tokens/jeff_token.json\` and \`tokens/eunee_token.json\`\n4. Push to the repo\n\n[Workflow Run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+              body: `@redwheeler3 — The automatic token refresh has been failing for more than 48 hours (${consecutiveFailures} consecutive failures).\n\nPlease manually refresh your tokens:\n1. Go to https://www.questrade.com/api\n2. Generate new refresh tokens for each account\n3. Update \`tokens/jeff_token.json\` and \`tokens/eunee_token.json\`\n4. Push to the repo\n\n[Workflow Run](${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId})`,
+              assignees: ['redwheeler3'],
               labels: ['bug', 'token-refresh']
             });
