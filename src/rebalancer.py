@@ -323,6 +323,15 @@ def calculate_trades(
 
                 is_overweight = cand_drift > TOLERANCE_PCT
 
+                # Don't displace single-account holdings — Phase 5
+                # can't repair them (no other account to re-buy in)
+                if not is_overweight:
+                    other_holders = find_accounts_for_symbol(
+                        cand_pos.symbol, portfolio.accounts
+                    )
+                    if len(other_holders) <= 1:
+                        continue
+
                 # Generate the fundraiser sell
                 sell_note = ""
                 if not is_overweight:
@@ -551,38 +560,57 @@ def calculate_trades(
     # After all phases, some accounts may have excess cash from sells
     # that couldn't be fully redeployed. Since cash target is 0%,
     # buy the least-overweight (or most-underweight) existing position.
+    # Iterative: buy only enough to close each symbol's drift gap, then
+    # re-evaluate so cash is spread across multiple underweight positions.
 
     for acct in portfolio.accounts:
         for currency in ["CAD", "USD"]:
-            acct_cash = available_cash.get(acct.number, {}).get(currency, 0)
-            if acct_cash <= 0:
-                continue
+            # Iterative sweep: buy the most underweight, re-evaluate, repeat
+            for _sweep in range(50):  # Safety limit
+                acct_cash = available_cash.get(acct.number, {}).get(currency, 0)
+                if acct_cash <= 0:
+                    break
 
-            # Find buyable positions in this account (same currency)
-            candidates = []
-            for pos in acct.positions:
-                if pos.currency != currency or pos.quantity <= 0:
-                    continue
-                if pos.symbol in transient_symbols:
-                    continue
-                holding = portfolio.holdings.get(pos.symbol)
-                if not holding:
-                    continue
-                ask = holding.get("ask_price", pos.current_price)
-                if ask <= 0 or ask > acct_cash:
-                    continue
-                drift = effective_drift.get(pos.symbol, 0)
-                candidates.append((pos.symbol, drift, ask))
+                # Find buyable positions in this account (same currency)
+                candidates = []
+                for pos in acct.positions:
+                    if pos.currency != currency or pos.quantity <= 0:
+                        continue
+                    if pos.symbol in transient_symbols:
+                        continue
+                    holding = portfolio.holdings.get(pos.symbol)
+                    if not holding:
+                        continue
+                    ask = holding.get("ask_price", pos.current_price)
+                    if ask <= 0 or ask > acct_cash:
+                        continue
+                    drift = effective_drift.get(pos.symbol, 0)
+                    candidates.append((pos.symbol, drift, ask))
 
-            if not candidates:
-                continue
+                if not candidates:
+                    break
 
-            # Buy the most underweight (or least overweight) position
-            candidates.sort(key=lambda x: x[1])
-            symbol, drift, ask = candidates[0]
+                # Buy the most underweight (or least overweight) position
+                candidates.sort(key=lambda x: x[1])
+                symbol, drift, ask = candidates[0]
 
-            shares = int(math.floor(acct_cash / ask))
-            if shares > 0:
+                max_affordable = int(math.floor(acct_cash / ask))
+                if max_affordable <= 0:
+                    break
+
+                # Limit buy to what's needed to close this symbol's drift gap
+                if drift < -TOLERANCE_PCT:
+                    gap_cad = abs(drift / 100.0) * total_value
+                    gap_native = gap_cad / usd_to_cad_rate if currency == "USD" else gap_cad
+                    gap_shares = int(math.ceil(gap_native / ask))
+                    shares = min(gap_shares, max_affordable)
+                else:
+                    # At or above target — dump remaining cash here
+                    shares = max_affordable
+
+                if shares <= 0:
+                    break
+
                 trade = TradeRecommendation(
                     symbol=symbol,
                     action="BUY",
