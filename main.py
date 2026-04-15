@@ -26,6 +26,7 @@ from src.portfolio import build_portfolio, freeze_symbols, fetch_quotes_for_hold
 from src.rebalancer import calculate_trades, simulate_rebalance
 from src.rules import get_transient_status
 from src.currency import get_usd_to_cad_rate, fetch_dlr_quotes, calculate_currency_needs
+from src.history import record_value, get_all_time_high
 from src.display import display_full_report, console
 
 
@@ -58,7 +59,11 @@ def load_config() -> tuple:
 
 
 def refresh_tokens_only():
-    """Refresh all tokens without running the rebalancer. Used by GitHub Actions."""
+    """Refresh all tokens and record portfolio value. Used by GitHub Actions.
+
+    Also snapshots the portfolio value for ATH tracking so that the
+    daily cron job contributes data points even without a full rebalance.
+    """
     token_files = list(TOKENS_DIR.glob("*_token.json"))
 
     if not token_files:
@@ -66,18 +71,34 @@ def refresh_tokens_only():
         sys.exit(1)
 
     all_ok = True
+    clients = []
     for token_file in token_files:
         name = token_file.stem.replace("_token", "")
         print(f"Refreshing token for {name}...")
         ok = refresh_token_only(str(token_file))
         if ok:
             print(f"  ✓ {name} token refreshed successfully")
+            # Build a client from the freshly-refreshed token for portfolio snapshot
+            try:
+                clients.append(QuestradeClient(str(token_file), name))
+            except Exception:
+                pass  # Non-fatal — snapshot is best-effort
         else:
             print(f"  ✗ {name} token refresh FAILED")
             all_ok = False
 
     if not all_ok:
         sys.exit(1)
+
+    # Snapshot portfolio value for ATH tracking (best-effort)
+    if clients:
+        try:
+            usd_to_cad_rate = get_usd_to_cad_rate(client=clients[0])
+            portfolio = build_portfolio(clients, usd_to_cad_rate)
+            record_value(portfolio.total_value_cad)
+            print(f"  ✓ Portfolio value recorded: ${portfolio.total_value_cad:,.2f}")
+        except Exception as e:
+            print(f"  ⚠ Could not snapshot portfolio value: {e}")
 
     print("\nAll tokens refreshed successfully.")
 
@@ -160,6 +181,10 @@ def run_rebalancer():
         projected_accuracy = simulation["projected_accuracy"]
         projected_allocations = simulation["projected_allocations"]
 
+    # Record portfolio value and check all-time high
+    record_value(portfolio.total_value_cad)
+    ath = get_all_time_high(current_value=portfolio.total_value_cad)
+
     # Display the report
     display_full_report(
         portfolio=portfolio,
@@ -173,29 +198,35 @@ def run_rebalancer():
         usd_to_cad_rate=usd_to_cad_rate,
         projected_accuracy=projected_accuracy,
         projected_allocations=projected_allocations,
+        all_time_high=ath,
     )
 
 
-def _push_tokens():
-    """Commit and push updated token files so GitHub Actions stays in sync.
+def _push_synced_files():
+    """Commit and push tokens + portfolio history so GitHub Actions stays in sync.
     Questrade uses single-use refresh tokens (token rotation), so every run
-    invalidates the old token. If we don't push, the next GitHub Actions
-    run will fail with a stale token."""
+    invalidates the old token. Portfolio history is also pushed so ATH
+    tracking is shared between local runs and GitHub Actions."""
     try:
-        # Check if there are token changes to push
+        # Check if there are changes to push (tokens or data)
         result = subprocess.run(
-            ["git", "diff", "--quiet", "tokens/"],
+            ["git", "diff", "--quiet", "tokens/", "data/"],
             cwd=str(ROOT), capture_output=True,
         )
-        if result.returncode == 0:
+        # Also check for untracked files in data/ (first run)
+        untracked = subprocess.run(
+            ["git", "ls-files", "--others", "--exclude-standard", "data/"],
+            cwd=str(ROOT), capture_output=True, text=True,
+        )
+        if result.returncode == 0 and not untracked.stdout.strip():
             return  # No changes
 
         subprocess.run(
-            ["git", "add", "tokens/"],
+            ["git", "add", "tokens/", "data/"],
             cwd=str(ROOT), check=True, capture_output=True,
         )
         subprocess.run(
-            ["git", "commit", "-m", "🔄 Auto-refresh Questrade tokens (local run)"],
+            ["git", "commit", "-m", "🔄 Auto-sync tokens and portfolio history"],
             cwd=str(ROOT), check=True, capture_output=True,
         )
         subprocess.run(
@@ -203,9 +234,9 @@ def _push_tokens():
             cwd=str(ROOT), check=True, capture_output=True,
         )
     except FileNotFoundError:
-        console.print("\n  [yellow]⚠ git not found — remember to push token files manually[/yellow]")
+        console.print("\n  [yellow]⚠ git not found — remember to push files manually[/yellow]")
     except subprocess.CalledProcessError:
-        console.print("\n  [yellow]⚠ Could not auto-push tokens — remember to push manually[/yellow]")
+        console.print("\n  [yellow]⚠ Could not auto-push — remember to push manually[/yellow]")
 
 
 def main():
@@ -214,7 +245,7 @@ def main():
         refresh_tokens_only()
     else:
         run_rebalancer()
-        _push_tokens()
+    _push_synced_files()
 
 
 if __name__ == "__main__":

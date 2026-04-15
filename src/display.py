@@ -131,6 +131,26 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
     console.print()
 
 
+def display_all_time_high(ath):
+    """Display the all-time high portfolio value with drawdown indicator."""
+    if ath is None:
+        return
+
+    if ath.is_new_ath:
+        console.print(
+            f"  [bold]All-Time High:[/bold]           "
+            f"[bold green]${ath.value:,.2f}[/bold green]  "
+            f"[green]🎉 NEW ATH (today!)[/green]"
+        )
+    else:
+        console.print(
+            f"  [bold]All-Time High:[/bold]           "
+            f"${ath.value:,.2f} ({ath.date})  "
+            f"[yellow]▼ {ath.drawdown_pct:.1f}%[/yellow]"
+        )
+    console.print()
+
+
 def display_accuracy(current_accuracy: float, projected_accuracy: float = None):
     """Display the portfolio accuracy score."""
     # Color based on accuracy
@@ -397,10 +417,12 @@ def display_full_report(
     usd_to_cad_rate: float,
     projected_accuracy: float = None,
     projected_allocations: dict = None,
+    all_time_high=None,
 ):
     """Display the complete rebalancing report."""
     display_header()
     display_accuracy(accuracy, projected_accuracy)
+    display_all_time_high(all_time_high)
     display_holdings_summary(portfolio, usd_to_cad_rate)
     display_account_summary(portfolio.accounts)
     display_allocations(current_allocations, targets, drifts)
