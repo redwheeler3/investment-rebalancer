@@ -3,16 +3,12 @@ Currency handling module.
 
 Fetches USD/CAD exchange rate and handles Norbert's Gambit logic.
 Calculates per-account currency conversion needs with DLR.TO/DLR.U.TO share counts.
-Accounts for the $9.99 + GST trading fee on CAD-side conversions.
+The trading fee is loaded from config/targets.yaml and passed in by the caller.
 """
 
 import math
 import requests
 from dataclasses import dataclass
-
-
-# Norbert's Gambit trading fee: $9.99 + 5% GST = $10.49 CAD
-NORBERTS_GAMBIT_FEE_CAD = 10.49
 
 
 @dataclass
@@ -91,72 +87,66 @@ def get_usd_to_cad_rate(client=None) -> float:
     return 1.36
 
 
-def _get_rate_from_dlr(client) -> float | None:
-    """
-    Derive USD/CAD exchange rate from DLR.TO and DLR.U.TO market quotes.
+@dataclass
+class DlrQuotes:
+    """Cached DLR quote data — used for both exchange rate and Norbert's Gambit."""
 
-    DLR.TO trades in CAD, DLR.U.TO trades in USD — both represent the same
-    underlying asset (Horizons US Dollar Currency ETF). The ratio of their
-    prices gives the real-time market exchange rate.
+    cad_price: float  # DLR.TO price (CAD-denominated)
+    usd_price: float  # DLR.U.TO price (USD-denominated)
+    exchange_rate: float | None  # Derived USD/CAD rate, or None if unavailable
+
+
+def fetch_dlr_quotes(client) -> DlrQuotes:
+    """
+    Fetch DLR.TO and DLR.U.TO quotes in one pass.
+
+    Returns both prices and the derived exchange rate. This avoids
+    redundant API calls — previously DLR.TO was looked up three times.
 
     Args:
         client: A QuestradeClient instance.
 
     Returns:
-        USD to CAD rate, or None if quotes unavailable.
+        DlrQuotes with prices and derived exchange rate.
     """
-    dlr_cad_price = None
-    dlr_usd_price = None
+    cad_price = 0.0
+    usd_price = 0.0
 
-    # Look up DLR.TO (CAD-denominated)
-    results = client.search_symbol("DLR.TO")
-    for r in results:
-        if r.get("symbol") == "DLR.TO":
-            quotes = client.get_quote([r["symbolId"]])
-            if quotes:
-                dlr_cad_price = quotes[0].get("lastTradePrice") or quotes[0].get("bidPrice")
-            break
-
-    # Look up DLR.U.TO (USD-denominated)
-    results = client.search_symbol("DLR.U.TO")
-    for r in results:
-        if r.get("symbol") == "DLR.U.TO":
-            quotes = client.get_quote([r["symbolId"]])
-            if quotes:
-                dlr_usd_price = quotes[0].get("lastTradePrice") or quotes[0].get("bidPrice")
-            break
-
-    if dlr_cad_price and dlr_usd_price and dlr_usd_price > 0:
-        rate = dlr_cad_price / dlr_usd_price
-        # Sanity check: rate should be between 1.0 and 2.0
-        if 1.0 < rate < 2.0:
-            return round(rate, 4)
-
-    return None
-
-
-def get_dlr_price(client) -> float:
-    """
-    Get the current price of DLR.TO using the Questrade API.
-
-    Args:
-        client: A QuestradeClient instance.
-
-    Returns:
-        Current price of DLR.TO, or 0.0 if unavailable.
-    """
     try:
+        # Look up DLR.TO (CAD-denominated)
         results = client.search_symbol("DLR.TO")
         for r in results:
             if r.get("symbol") == "DLR.TO":
-                symbol_id = r["symbolId"]
-                quotes = client.get_quote([symbol_id])
+                quotes = client.get_quote([r["symbolId"]])
                 if quotes:
-                    price = quotes[0].get("lastTradePrice") or quotes[0].get("bidPrice", 0)
-                    return float(price)
+                    cad_price = float(quotes[0].get("lastTradePrice") or quotes[0].get("bidPrice", 0))
+                break
+
+        # Look up DLR.U.TO (USD-denominated)
+        results = client.search_symbol("DLR.U.TO")
+        for r in results:
+            if r.get("symbol") == "DLR.U.TO":
+                quotes = client.get_quote([r["symbolId"]])
+                if quotes:
+                    usd_price = float(quotes[0].get("lastTradePrice") or quotes[0].get("bidPrice", 0))
+                break
     except Exception:
         pass
-    return 0.0
+
+    # Derive exchange rate from the DLR pair
+    exchange_rate = None
+    if cad_price > 0 and usd_price > 0:
+        rate = cad_price / usd_price
+        # Sanity check: rate should be between 1.0 and 2.0
+        if 1.0 < rate < 2.0:
+            exchange_rate = round(rate, 4)
+
+    return DlrQuotes(cad_price=cad_price, usd_price=usd_price, exchange_rate=exchange_rate)
+
+
+def _get_rate_from_dlr(client) -> float | None:
+    """Derive USD/CAD exchange rate from DLR quotes. Delegates to fetch_dlr_quotes()."""
+    return fetch_dlr_quotes(client).exchange_rate
 
 
 def calculate_currency_needs(
@@ -164,6 +154,7 @@ def calculate_currency_needs(
     accounts: list,
     usd_to_cad_rate: float,
     dlr_price: float = 0.0,
+    norberts_gambit_fee_cad: float = 10.49,
 ) -> list:
     """
     Analyze trades to determine per-account currency conversion needs.
@@ -172,7 +163,7 @@ def calculate_currency_needs(
     Only generates a conversion if an account has a shortfall in one currency
     AND a surplus in the other (or needs to convert from external cash).
 
-    For CAD->USD (buying DLR.TO): reserves $10.49 CAD for the trading fee,
+    For CAD->USD (buying DLR.TO): reserves the trading fee from CAD,
     reducing the DLR shares by enough to cover it.
 
     Args:
@@ -180,6 +171,7 @@ def calculate_currency_needs(
         accounts: List of AccountInfo objects.
         usd_to_cad_rate: Current exchange rate.
         dlr_price: Current price of DLR.TO (CAD). If 0, DLR share count won't be shown.
+        norberts_gambit_fee_cad: Trading fee in CAD for Norbert's Gambit.
 
     Returns:
         List of CurrencyConversion objects with per-account conversion details.
@@ -224,11 +216,11 @@ def calculate_currency_needs(
             cad_needed = usd_shortfall * usd_to_cad_rate
 
             # Reserve fee from CAD side
-            cad_for_dlr = cad_needed + NORBERTS_GAMBIT_FEE_CAD
+            cad_for_dlr = cad_needed + norberts_gambit_fee_cad
 
             # Make sure we don't try to convert more CAD than is available
             cad_for_dlr = min(cad_for_dlr, net_cad)
-            actual_cad_for_shares = cad_for_dlr - NORBERTS_GAMBIT_FEE_CAD
+            actual_cad_for_shares = cad_for_dlr - norberts_gambit_fee_cad
 
             if actual_cad_for_shares > 0 and dlr_price > 0:
                 dlr_shares = int(math.floor(actual_cad_for_shares / dlr_price))
@@ -249,7 +241,7 @@ def calculate_currency_needs(
                     dlr_symbol="DLR.TO",
                     dlr_shares=dlr_shares,
                     dlr_price=dlr_price,
-                    fee=NORBERTS_GAMBIT_FEE_CAD,
+                    fee=norberts_gambit_fee_cad,
                 ))
 
         elif net_cad < -0.01 and net_usd > 0.01:
@@ -261,7 +253,7 @@ def calculate_currency_needs(
 
             # Fee is always CAD-side, so we need enough USD to cover
             # the shortfall PLUS the fee after conversion
-            usd_needed = (cad_shortfall + NORBERTS_GAMBIT_FEE_CAD) / usd_to_cad_rate
+            usd_needed = (cad_shortfall + norberts_gambit_fee_cad) / usd_to_cad_rate
             usd_for_shares = min(usd_needed, net_usd)
 
             if usd_for_shares > 0 and dlr_u_price > 0:
@@ -285,7 +277,7 @@ def calculate_currency_needs(
                     dlr_symbol="DLR.U.TO",
                     dlr_shares=dlr_shares,
                     dlr_price=dlr_u_price,
-                    fee=NORBERTS_GAMBIT_FEE_CAD,
+                    fee=norberts_gambit_fee_cad,
                 ))
 
     return conversions

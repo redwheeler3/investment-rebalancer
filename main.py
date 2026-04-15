@@ -22,10 +22,10 @@ if sys.platform == "win32":
         sys.stderr.reconfigure(encoding="utf-8")
 
 from src.questrade_client import QuestradeClient, refresh_token_only
-from src.portfolio import build_portfolio, fetch_quotes_for_holdings, get_current_allocations, calculate_accuracy, get_drifts
+from src.portfolio import build_portfolio, freeze_symbols, fetch_quotes_for_holdings, get_current_allocations, calculate_accuracy, get_drifts
 from src.rebalancer import calculate_trades, simulate_rebalance
-from src.rules import check_transient_holdings
-from src.currency import get_usd_to_cad_rate, get_dlr_price, calculate_currency_needs
+from src.rules import get_transient_status
+from src.currency import get_usd_to_cad_rate, fetch_dlr_quotes, calculate_currency_needs
 from src.display import display_full_report, console
 
 
@@ -36,10 +36,10 @@ CONFIG_DIR = ROOT / "config"
 
 
 def load_config() -> tuple:
-    """Load targets and transient symbols from config/targets.yaml.
+    """Load target allocations, transient symbols, and fee from config/targets.yaml.
 
     Returns:
-        (targets, transient_symbols) tuple.
+        Tuple of (targets dict, transient_symbols list, norberts_gambit_fee_cad float).
     """
     targets_path = CONFIG_DIR / "targets.yaml"
     with open(targets_path, "r") as f:
@@ -47,13 +47,14 @@ def load_config() -> tuple:
 
     targets = data.get("targets", {})
     transient_symbols = data.get("transient_symbols", [])
+    norberts_gambit_fee_cad = data.get("norberts_gambit_fee_cad", 10.49)
 
     # Validate targets sum to ~100%
     total = sum(targets.values())
     if abs(total - 100.0) > 0.5:
         console.print(f"  [yellow]⚠ Warning: Target allocations sum to {total:.1f}% (expected 100%)[/yellow]")
 
-    return targets, transient_symbols
+    return targets, transient_symbols, norberts_gambit_fee_cad
 
 
 def refresh_tokens_only():
@@ -86,7 +87,7 @@ def run_rebalancer():
 
     # Load config
     console.print("  [dim]Loading configuration...[/dim]")
-    targets, transient_symbols = load_config()
+    targets, transient_symbols, norberts_gambit_fee_cad = load_config()
 
     # Connect to Questrade accounts
     console.print("  [dim]Connecting to Questrade...[/dim]")
@@ -112,34 +113,44 @@ def run_rebalancer():
 
     # Build portfolio
     console.print("  [dim]Building portfolio...[/dim]")
-    portfolio = build_portfolio(clients, transient_symbols, usd_to_cad_rate)
+    portfolio = build_portfolio(clients, usd_to_cad_rate)
 
     # Fetch bid/ask quotes for accurate pricing (bid for sells, ask for buys)
     console.print("  [dim]Fetching market quotes (bid/ask)...[/dim]")
     fetch_quotes_for_holdings(portfolio, clients)
 
-    # Calculate allocations and drift
+    # Calculate initial allocations and drift
     current_allocations = get_current_allocations(portfolio, usd_to_cad_rate)
     drifts = get_drifts(current_allocations, targets)
+
+    # Exclude transient symbols from rebalancing.
+    # Their value stays in total_value_cad so allocation math stays correct.
+    transient_status = get_transient_status(portfolio, transient_symbols)
+    if transient_status["symbols"]:
+        freeze_symbols(portfolio, transient_status["symbols"])
+        # Recompute after freezing (value stays in total, so other
+        # allocations shift slightly — this is correct)
+        current_allocations = get_current_allocations(portfolio, usd_to_cad_rate)
+        drifts = get_drifts(current_allocations, targets)
+
     accuracy = calculate_accuracy(current_allocations, targets)
+    transient_alerts = transient_status["alerts"]
 
-    # Check for transient holdings
-    transient_alerts = check_transient_holdings(portfolio.accounts, transient_symbols)
-
-    # Fetch DLR.TO price for Norbert's Gambit calculations
-    console.print("  [dim]Fetching DLR.TO price...[/dim]")
-    dlr_price = get_dlr_price(clients[0])
+    # Fetch DLR quotes for Norbert's Gambit calculations (single API call)
+    console.print("  [dim]Fetching DLR quotes...[/dim]")
+    dlr = fetch_dlr_quotes(clients[0])
+    dlr_price = dlr.cad_price
     if dlr_price > 0:
         console.print(f"  [dim]DLR.TO price: ${dlr_price:.2f}[/dim]")
     else:
         console.print("  [yellow]Could not fetch DLR.TO price — DLR share counts will be unavailable[/yellow]")
 
-    # Calculate trades
+    # Calculate trades (transient symbols are excluded)
     console.print("  [dim]Calculating trades...[/dim]")
-    trades = calculate_trades(portfolio, targets, usd_to_cad_rate, existing_only=True, transient_symbols=transient_symbols)
+    trades = calculate_trades(portfolio, targets, usd_to_cad_rate, norberts_gambit_fee_cad, existing_only=True, transient_symbols=transient_status["symbols"])
 
     # Calculate currency conversion needs (per-account with DLR share counts)
-    currency_conversions = calculate_currency_needs(trades, portfolio.accounts, usd_to_cad_rate, dlr_price)
+    currency_conversions = calculate_currency_needs(trades, portfolio.accounts, usd_to_cad_rate, dlr_price, norberts_gambit_fee_cad)
 
     # Simulate projected accuracy after trades
     projected_accuracy = None
@@ -191,7 +202,6 @@ def _push_tokens():
             ["git", "push"],
             cwd=str(ROOT), check=True, capture_output=True,
         )
-        pass  # Pushed silently
     except FileNotFoundError:
         console.print("\n  [yellow]⚠ git not found — remember to push token files manually[/yellow]")
     except subprocess.CalledProcessError:

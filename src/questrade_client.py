@@ -5,7 +5,6 @@ Handles OAuth token refresh, account listing, positions, balances, and market qu
 """
 
 import json
-import os
 import requests
 from pathlib import Path
 
@@ -148,20 +147,6 @@ class QuestradeClient:
         """
         data = self._get("v1/symbols/search", params={"prefix": symbol})
         return data.get("symbols", [])
-
-    def get_symbol_info(self, symbol_id: int) -> dict:
-        """
-        Get detailed information about a symbol.
-
-        Args:
-            symbol_id: Questrade internal symbol ID.
-
-        Returns:
-            Symbol information dictionary.
-        """
-        data = self._get(f"v1/symbols/{symbol_id}")
-        return data.get("symbols", [{}])[0]
-
 
 def refresh_token_only(token_path: str) -> bool:
     """

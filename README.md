@@ -8,7 +8,9 @@ A Python-based portfolio rebalancer for Questrade accounts. Replaces Passiv with
 - **Target Allocation Tracking** — Compares current holdings against configurable target percentages
 - **Accuracy Score** — Single percentage showing how close the portfolio is to the target (100% = perfectly balanced)
 - **Smart Trade Placement** — Only recommends trades in accounts that already hold the position (never introduces new tickers into an account)
-- **Currency Handling** — Detects USD/CAD conversion needs and flags Norbert's Gambit (DLR.TO/DLR.U.TO) status
+- **Currency Handling** — Detects USD/CAD conversion needs and flags Norbert's Gambit status
+- **Transient Symbols** — Temporarily exclude symbols from rebalancing (e.g., DLR.TO / DLR.U.TO mid-Norbert's Gambit). Value stays in the portfolio total so allocation math is correct
+- **Unknown Holdings** — Any symbol not in targets (and not transient) is treated as 0% target and sold automatically
 - **Projected Accuracy** — Shows what the accuracy would be after executing recommended trades
 - **Whole-Share Trading** — Recommends whole shares only, using bid price for sells and ask price for buys
 - **Iterative Algorithm** — Repeats Sell → Buy → Sweep rounds until all positions are within tolerance, handling same-currency, cross-currency, and displacement trades in a single unified pass
@@ -52,7 +54,7 @@ python main.py --refresh-only
 
 ## Configuration (`config/targets.yaml`)
 
-Edit target percentages (must sum to 100%) and transient symbols:
+Edit target percentages (must sum to 100%):
 
 ```yaml
 targets:
@@ -67,18 +69,23 @@ targets:
   XBB.TO: 6.0
   CASH.TO: 8.0
 
-# Excluded from portfolio valuation and rebalancing
+# List symbols to temporarily exclude from rebalancing.
+# e.g., DLR.TO or DLR.U.TO mid-Norbert's Gambit.
 transient_symbols:
   - DLR.TO
   - DLR.U.TO
 ```
+
+**Transient symbols:** List any symbol in `transient_symbols` that you're holding temporarily (e.g., DLR.TO / DLR.U.TO mid-Norbert's Gambit). Transient symbols are excluded from trading but their value stays in the portfolio total so allocation math remains correct. Remove them once you've sold manually.
+
+**Unknown holdings:** Any symbol you hold that isn't in `targets` (and isn't transient) gets an implicit 0% target — the rebalancer will recommend selling it.
 
 ## Project Structure
 
 ```
 investment-rebalancer/
 ├── config/
-│   └── targets.yaml              # Target allocations & transient symbols
+│   └── targets.yaml              # Target allocations
 ├── tokens/
 │   ├── jeff_token.json            # Jeff's Questrade refresh token
 │   └── eunee_token.json           # Eunee's Questrade refresh token

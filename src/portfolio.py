@@ -49,13 +49,15 @@ class PortfolioSummary:
     cash_usd_total: float = 0.0
 
 
-def build_portfolio(clients: list, transient_symbols: list, usd_to_cad_rate: float) -> PortfolioSummary:
+def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
     """
     Build a unified portfolio from multiple Questrade client connections.
 
+    All positions are included in holdings. Transient symbols are
+    handled post-build by freeze_symbols().
+
     Args:
         clients: List of QuestradeClient instances.
-        transient_symbols: Symbols to exclude from valuation (e.g., DLR.TO, DLR.U.TO).
         usd_to_cad_rate: Current USD/CAD exchange rate.
 
     Returns:
@@ -127,10 +129,6 @@ def build_portfolio(clients: list, transient_symbols: list, usd_to_cad_rate: flo
                 )
                 positions.append(position)
 
-                # Skip transient symbols for portfolio valuation
-                if symbol in transient_symbols:
-                    continue
-
                 # Convert to CAD for aggregation
                 value_cad = market_value
                 if currency == "USD":
@@ -185,6 +183,24 @@ def build_portfolio(clients: list, transient_symbols: list, usd_to_cad_rate: flo
         cash_cad_total=total_cash_cad,
         cash_usd_total=total_cash_usd,
     )
+
+
+def freeze_symbols(portfolio: PortfolioSummary, symbols: set):
+    """
+    Remove symbols from holdings while keeping their value in total_value_cad.
+
+    Used for transient symbols that shouldn't be traded. The value stays
+    in total_value_cad so allocation percentages remain accurate — the
+    excluded portion appears as a small "gap" where allocations sum to
+    slightly less than 100%.
+
+    Args:
+        portfolio: The portfolio to modify in place.
+        symbols: Set of symbol strings to freeze.
+    """
+    for symbol in symbols:
+        if symbol in portfolio.holdings:
+            del portfolio.holdings[symbol]
 
 
 def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):

@@ -158,35 +158,55 @@ def display_accuracy(current_accuracy: float, projected_accuracy: float = None):
     console.print()
 
 
-def display_allocations(current_allocations: dict, targets: dict, drifts: dict):
-    """Display current vs target allocation table, sorted by drift ascending."""
+def _display_allocation_table(
+    title: str,
+    header_style: str,
+    allocations: dict,
+    targets: dict,
+    value_column_name: str = "Current %",
+):
+    """Display an allocation vs target table — shared by current and projected views."""
+    # Calculate drifts inline
+    all_symbols = allocations.keys() | targets.keys()
+    drifts = {s: allocations.get(s, 0.0) - targets.get(s, 0.0) for s in all_symbols}
+
     table = Table(
-        title="Current vs Target Allocation",
+        title=title,
         box=box.ROUNDED,
         show_header=True,
-        header_style="bold magenta",
+        header_style=header_style,
     )
 
     table.add_column("Symbol", style="bold", min_width=10)
     table.add_column("Target %", justify="right", min_width=10)
-    table.add_column("Current %", justify="right", min_width=10)
+    table.add_column(value_column_name, justify="right", min_width=10)
     table.add_column("Drift", justify="right", min_width=10)
     table.add_column("Status", justify="center", min_width=8)
 
-    stock_symbols, cash_list = _partition_symbols(current_allocations, targets, drifts)
+    stock_symbols, cash_list = _partition_symbols(allocations, targets, drifts)
 
     for symbol in stock_symbols:
-        _add_drift_row(table, symbol, current_allocations.get(symbol, 0.0),
+        _add_drift_row(table, symbol, allocations.get(symbol, 0.0),
                        targets.get(symbol, 0.0), drifts.get(symbol, 0.0))
 
     if cash_list:
         table.add_section()
         for symbol in cash_list:
-            _add_drift_row(table, symbol, current_allocations.get(symbol, 0.0),
+            _add_drift_row(table, symbol, allocations.get(symbol, 0.0),
                            targets.get(symbol, 0.0), drifts.get(symbol, 0.0))
 
     console.print(table)
     console.print()
+
+
+def display_allocations(current_allocations: dict, targets: dict, drifts: dict):
+    """Display current vs target allocation table, sorted by drift ascending."""
+    _display_allocation_table(
+        title="Current vs Target Allocation",
+        header_style="bold magenta",
+        allocations=current_allocations,
+        targets=targets,
+    )
 
 
 def display_trades(trades: list):
@@ -302,24 +322,14 @@ def display_currency_conversions(conversions: list):
 
 
 def display_transient_alerts(transient_alerts: list):
-    """Display alerts for transient holdings (DLR.TO, DLR.U.TO)."""
+    """Display alerts for transient holdings excluded from rebalancing."""
     if not transient_alerts:
         return
 
     for alert in transient_alerts:
-        if alert.action == "SELL":
-            icon = "💰"
-            style = "green"
-        elif alert.action == "WAIT":
-            icon = "⏳"
-            style = "yellow"
-        else:
-            icon = "⚠"
-            style = "red"
-
         account_label = f"{alert.owner} {alert.account_type} ({alert.account_number})"
         console.print(
-            f"  [{style}]{icon} {alert.symbol}:[/{style}] "
+            f"  [yellow]⏳ {alert.symbol}:[/yellow] "
             f"{int(alert.quantity)} shares in {account_label} — {alert.note}"
         )
     console.print()
@@ -366,37 +376,13 @@ def display_projected_allocations(projected_allocations: dict, targets: dict):
     if not projected_allocations:
         return
 
-    # Calculate projected drifts
-    all_symbols = projected_allocations.keys() | targets.keys()
-    proj_drifts = {s: projected_allocations.get(s, 0.0) - targets.get(s, 0.0) for s in all_symbols}
-
-    table = Table(
+    _display_allocation_table(
         title="Projected Allocation (After Trades)",
-        box=box.ROUNDED,
-        show_header=True,
         header_style="bold cyan",
+        allocations=projected_allocations,
+        targets=targets,
+        value_column_name="Projected %",
     )
-
-    table.add_column("Symbol", style="bold", min_width=10)
-    table.add_column("Target %", justify="right", min_width=10)
-    table.add_column("Projected %", justify="right", min_width=10)
-    table.add_column("Drift", justify="right", min_width=10)
-    table.add_column("Status", justify="center", min_width=8)
-
-    stock_symbols, cash_list = _partition_symbols(projected_allocations, targets, proj_drifts)
-
-    for symbol in stock_symbols:
-        _add_drift_row(table, symbol, projected_allocations.get(symbol, 0.0),
-                       targets.get(symbol, 0.0), proj_drifts.get(symbol, 0.0))
-
-    if cash_list:
-        table.add_section()
-        for symbol in cash_list:
-            _add_drift_row(table, symbol, projected_allocations.get(symbol, 0.0),
-                           targets.get(symbol, 0.0), proj_drifts.get(symbol, 0.0))
-
-    console.print(table)
-    console.print()
 
 
 def display_full_report(

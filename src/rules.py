@@ -26,14 +26,13 @@ class TradeRecommendation:
 
 @dataclass
 class TransientAlert:
-    """Alert about transient holdings like DLR.TO / DLR.U.TO."""
+    """Alert about a transient holding in a specific account."""
 
     symbol: str
     quantity: float
     account_number: str
     account_type: str
     owner: str
-    action: str  # "SELL" or "WAIT"
     note: str
 
 
@@ -55,24 +54,6 @@ def find_accounts_for_symbol(symbol: str, accounts: list) -> list:
                 matching.append(acct)
                 break
     return matching
-
-
-def get_account_cash(account, currency: str) -> float:
-    """
-    Get available cash in an account for a specific currency.
-
-    Args:
-        account: AccountInfo object.
-        currency: "CAD" or "USD".
-
-    Returns:
-        Available cash amount.
-    """
-    if currency == "CAD":
-        return account.cash_cad
-    elif currency == "USD":
-        return account.cash_usd
-    return 0.0
 
 
 def get_position_quantity(account, symbol: str) -> float:
@@ -145,40 +126,42 @@ def allocate_sell(
     return trades
 
 
-def check_transient_holdings(accounts: list, transient_symbols: list) -> list:
+# ── Transient symbol handling ─────────────────────────────────────
+
+
+def get_transient_status(portfolio, transient_symbols: list = None) -> dict:
     """
-    Check for transient holdings (DLR.TO, DLR.U.TO) and generate alerts.
+    Identify which transient symbols are actually held and build alerts.
 
     Args:
-        accounts: List of AccountInfo objects.
-        transient_symbols: List of transient symbol strings.
+        portfolio: PortfolioSummary with current holdings.
+        transient_symbols: List of symbols from config to exclude.
 
     Returns:
-        List of TransientAlert objects.
+        dict with:
+            symbols:  set of transient symbols actually held
+            alerts:   list of TransientAlert objects for display
     """
+    if not transient_symbols:
+        return {"symbols": set(), "alerts": []}
+
+    held = set()
     alerts = []
 
-    for acct in accounts:
-        for pos in acct.positions:
-            if pos.symbol in transient_symbols and pos.quantity > 0:
-                if pos.symbol == "DLR.U.TO":
-                    action = "SELL"
-                    note = "DLR.U.TO detected (post-journal) — sell to complete Norbert's Gambit"
-                elif pos.symbol == "DLR.TO":
-                    action = "WAIT"
-                    note = "DLR.TO detected (pre-journal) — wait for journal to complete"
-                else:
-                    action = "REVIEW"
-                    note = f"Transient symbol {pos.symbol} detected"
+    for symbol in transient_symbols:
+        if symbol not in portfolio.holdings:
+            continue  # Not held — nothing to do
+        held.add(symbol)
+        for acct in portfolio.accounts:
+            for pos in acct.positions:
+                if pos.symbol == symbol and pos.quantity > 0:
+                    alerts.append(TransientAlert(
+                        symbol=symbol,
+                        quantity=pos.quantity,
+                        account_number=acct.number,
+                        account_type=acct.account_type,
+                        owner=acct.owner,
+                        note="Excluded from rebalancing",
+                    ))
 
-                alerts.append(TransientAlert(
-                    symbol=pos.symbol,
-                    quantity=pos.quantity,
-                    account_number=acct.number,
-                    account_type=acct.account_type,
-                    owner=acct.owner,
-                    action=action,
-                    note=note,
-                ))
-
-    return alerts
+    return {"symbols": held, "alerts": alerts}
