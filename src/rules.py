@@ -91,6 +91,14 @@ def _has_underweight_alternatives(
     return False
 
 
+def effective_qty(account, symbol: str, position_deltas: dict) -> int:
+    """Get the effective quantity of a symbol in an account,
+    accounting for trades already planned in earlier rounds."""
+    original = int(get_position_quantity(account, symbol))
+    delta = position_deltas.get((account.number, symbol), 0)
+    return max(0, original + delta)
+
+
 def allocate_sell(
     symbol: str,
     total_shares: int,
@@ -99,6 +107,7 @@ def allocate_sell(
     accounts: list,
     effective_drift: dict = None,
     transient_symbols: set = None,
+    position_deltas: dict = None,
 ) -> list:
     """
     Allocate a SELL order across accounts.
@@ -107,6 +116,8 @@ def allocate_sell(
     - Only sell from accounts that hold the symbol
     - Prefer accounts with underweight alternatives (cash can be redeployed)
     - Among equally ranked accounts, sell from the largest position first
+    - Uses effective quantities (adjusted for prior-round trades) to prevent
+      over-selling beyond what an account actually has available.
 
     Args:
         symbol: Ticker to sell.
@@ -117,6 +128,8 @@ def allocate_sell(
         effective_drift: Current drift per symbol (used to check for underweight
             alternatives).  When None, falls back to quantity-only sorting.
         transient_symbols: Symbols excluded from rebalancing (e.g. DLR.TO).
+        position_deltas: Cumulative quantity changes from earlier rounds.
+            Maps (acct_number, symbol) → int delta.
 
     Returns:
         List of TradeRecommendation objects.
@@ -128,6 +141,8 @@ def allocate_sell(
         effective_drift = {}
     if transient_symbols is None:
         transient_symbols = set()
+    if position_deltas is None:
+        position_deltas = {}
 
     # Find accounts holding this symbol
     holders = find_accounts_for_symbol(symbol, accounts)
@@ -135,11 +150,11 @@ def allocate_sell(
         return []
 
     # Sort by: (1) accounts with underweight alternatives first (cash can be
-    # redeployed productively), (2) largest position first within each tier.
+    # redeployed productively), (2) largest effective position first within each tier.
     holders.sort(
         key=lambda a: (
             1 if _has_underweight_alternatives(a, symbol, effective_drift, transient_symbols) else 0,
-            get_position_quantity(a, symbol),
+            effective_qty(a, symbol, position_deltas),
         ),
         reverse=True,
     )
@@ -151,7 +166,7 @@ def allocate_sell(
         if remaining <= 0:
             break
 
-        held = int(get_position_quantity(acct, symbol))
+        held = effective_qty(acct, symbol, position_deltas)
         shares_to_sell = min(remaining, held)
 
         if shares_to_sell > 0:

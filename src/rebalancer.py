@@ -19,8 +19,8 @@ from dataclasses import dataclass, field
 from src.portfolio import PortfolioSummary, get_current_allocations, get_drifts, calculate_accuracy
 from src.rules import (
     allocate_sell,
+    effective_qty,
     find_accounts_for_symbol,
-    get_position_quantity,
     TradeRecommendation,
 )
 
@@ -51,6 +51,7 @@ class RebalanceState:
     total_value: float
     available_cash: dict = field(default_factory=dict)   # acct_number -> {"CAD": float, "USD": float}
     effective_drift: dict = field(default_factory=dict)   # symbol -> drift %
+    position_deltas: dict = field(default_factory=dict)   # (acct_number, symbol) -> qty change
     all_trades: list = field(default_factory=list)
 
 
@@ -148,6 +149,23 @@ def _sweep_candidates(state: RebalanceState, acct, currency: str, max_price: flo
     return candidates
 
 
+def _record_trade(state: RebalanceState, trade: TradeRecommendation):
+    """Append a trade and update drift + position deltas.
+
+    Every trade generation site should call this instead of manually
+    calling all_trades.append / _apply_trade / delta bookkeeping.
+    Cash adjustments still happen at each call site because the
+    deduction logic varies (same-currency, cross-currency, sell credit).
+    """
+    state.all_trades.append(trade)
+    value_cad = _to_cad(trade.estimated_value, trade.currency, state.usd_to_cad_rate)
+    _apply_trade(state, trade.symbol, value_cad, trade.action)
+    # Update position delta
+    key = (trade.account_number, trade.symbol)
+    delta = -trade.quantity if trade.action == "SELL" else trade.quantity
+    state.position_deltas[key] = state.position_deltas.get(key, 0) + delta
+
+
 # ══════════════════════════════════════════════════════════════════
 # Step A: Sell overweight positions
 # ══════════════════════════════════════════════════════════════════
@@ -181,11 +199,11 @@ def _step_sell_overweight(state: RebalanceState) -> int:
             symbol, shares, bid, currency, state.portfolio.accounts,
             effective_drift=state.effective_drift,
             transient_symbols=state.transient_symbols,
+            position_deltas=state.position_deltas,
         )
         for trade in sell_trades:
-            state.all_trades.append(trade)
             state.available_cash[trade.account_number][currency] += trade.estimated_value
-            _apply_trade(state, symbol, _to_cad(trade.estimated_value, currency, state.usd_to_cad_rate), "SELL")
+            _record_trade(state, trade)
             count += 1
 
     return count
@@ -253,7 +271,7 @@ def _step_buy_underweight(state: RebalanceState, existing_only: bool) -> int:
                 if qty > 0:
                     cost = qty * ask
                     converted = _deduct_buy(state, acct.number, cost, currency)
-                    state.all_trades.append(TradeRecommendation(
+                    _record_trade(state, TradeRecommendation(
                         symbol=symbol,
                         action="BUY",
                         quantity=qty,
@@ -266,7 +284,6 @@ def _step_buy_underweight(state: RebalanceState, existing_only: bool) -> int:
                         note="Requires currency conversion" if converted else "",
                     ))
                     remaining -= qty
-                    _apply_trade(state, symbol, _to_cad(cost, currency, state.usd_to_cad_rate), "BUY")
                     count += qty
                 continue  # Move to next account
 
@@ -282,7 +299,7 @@ def _step_buy_underweight(state: RebalanceState, existing_only: bool) -> int:
                 if qty > 0:
                     cost = qty * ask
                     state.available_cash[acct.number][currency] -= cost
-                    state.all_trades.append(TradeRecommendation(
+                    _record_trade(state, TradeRecommendation(
                         symbol=symbol,
                         action="BUY",
                         quantity=qty,
@@ -294,7 +311,6 @@ def _step_buy_underweight(state: RebalanceState, existing_only: bool) -> int:
                         estimated_value=cost,
                     ))
                     remaining -= qty
-                    _apply_trade(state, symbol, _to_cad(cost, currency, state.usd_to_cad_rate), "BUY")
                     count += qty
 
     return count
@@ -354,7 +370,7 @@ def _try_displacement_sell(
             break  # Enough cash already
 
         sell_qty = int(math.ceil(shortfall / cand_bid))
-        held = int(get_position_quantity(acct, cand_sym))
+        held = effective_qty(acct, cand_sym, state.position_deltas)
         sell_qty = min(sell_qty, held)
         if sell_qty <= 0:
             continue
@@ -372,9 +388,8 @@ def _try_displacement_sell(
             estimated_value=cand_bid * sell_qty,
             note=note,
         )
-        state.all_trades.append(sell_trade)
         state.available_cash[acct.number][currency] += sell_trade.estimated_value
-        _apply_trade(state, cand_sym, _to_cad(sell_trade.estimated_value, currency, state.usd_to_cad_rate), "SELL")
+        _record_trade(state, sell_trade)
         count += 1
 
     return count
@@ -429,7 +444,8 @@ def _sweep_same_currency(state: RebalanceState, acct) -> int:
                 break
 
             cost = best_ask * shares
-            state.all_trades.append(TradeRecommendation(
+            state.available_cash[acct.number][currency] -= cost
+            _record_trade(state, TradeRecommendation(
                 symbol=best_symbol,
                 action="BUY",
                 quantity=shares,
@@ -440,8 +456,6 @@ def _sweep_same_currency(state: RebalanceState, acct) -> int:
                 currency=currency,
                 estimated_value=cost,
             ))
-            state.available_cash[acct.number][currency] -= cost
-            _apply_trade(state, best_symbol, _to_cad(cost, currency, state.usd_to_cad_rate), "BUY")
             count += shares
 
     return count
@@ -475,7 +489,16 @@ def _sweep_cross_currency(state: RebalanceState, acct) -> int:
             continue
 
         cost = shares * best_ask
-        state.all_trades.append(TradeRecommendation(
+        # Deduct from source currency (cost converted back + fee)
+        if source_currency == "CAD":
+            state.available_cash[acct.number]["CAD"] -= (
+                cost * state.usd_to_cad_rate + fee
+            )
+        else:
+            state.available_cash[acct.number]["USD"] -= (
+                cost + fee
+            ) / state.usd_to_cad_rate
+        _record_trade(state, TradeRecommendation(
             symbol=best_symbol,
             action="BUY",
             quantity=shares,
@@ -487,17 +510,6 @@ def _sweep_cross_currency(state: RebalanceState, acct) -> int:
             estimated_value=cost,
             note="Requires currency conversion",
         ))
-        # Deduct from source currency (cost converted back + fee)
-        if source_currency == "CAD":
-            state.available_cash[acct.number]["CAD"] -= (
-                cost * state.usd_to_cad_rate + fee
-            )
-        else:
-            state.available_cash[acct.number]["USD"] -= (
-                cost + fee
-            ) / state.usd_to_cad_rate
-
-        _apply_trade(state, best_symbol, _to_cad(cost, target_currency, state.usd_to_cad_rate), "BUY")
         count += shares
 
     return count
