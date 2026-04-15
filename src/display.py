@@ -252,7 +252,8 @@ def display_trades(trades: list):
 
 
 def display_currency_conversions(conversions: list):
-    """Display currency conversion instructions with DLR share details."""
+    """Display currency conversion instructions with DLR share details.
+    Fee is built into the Amount column (added to CAD spend, subtracted from CAD received)."""
     if not conversions:
         return
 
@@ -268,22 +269,24 @@ def display_currency_conversions(conversions: list):
     table.add_column("Buy", style="bold", min_width=12)
     table.add_column("Shares", justify="right", min_width=8)
     table.add_column("DLR Price", justify="right", min_width=10)
-    table.add_column("Amount", justify="right", min_width=14)
-    table.add_column("Fee", justify="right", min_width=8)
+    table.add_column("Amount (incl. fee)", justify="right", min_width=14)
 
     for conv in conversions:
         account_label = f"{conv.owner} {conv.account_type} ({conv.account_number})"
 
         if conv.direction == "CAD_TO_USD":
             direction = "CAD -> USD"
-            amount_str = f"~${conv.source_amount:,.2f} CAD -> ~US${conv.target_amount:,.2f}"
+            # Fee adds to the CAD you spend
+            total_cad = conv.source_amount + conv.fee
+            amount_str = f"${total_cad:,.2f} CAD -> ${conv.target_amount:,.2f} USD"
         else:
             direction = "USD -> CAD"
-            amount_str = f"~US${conv.source_amount:,.2f} -> ~${conv.target_amount:,.2f} CAD"
+            # Fee subtracts from the CAD you receive
+            net_cad = conv.target_amount - conv.fee
+            amount_str = f"${conv.source_amount:,.2f} USD -> ${net_cad:,.2f} CAD"
 
         shares_str = str(conv.dlr_shares) if conv.dlr_shares > 0 else "N/A"
         price_str = f"${conv.dlr_price:,.2f}" if conv.dlr_price > 0 else "N/A"
-        fee_str = f"${conv.fee:,.2f}" if conv.fee > 0 else "-"
 
         table.add_row(
             account_label,
@@ -292,7 +295,6 @@ def display_currency_conversions(conversions: list):
             shares_str,
             price_str,
             amount_str,
-            fee_str,
         )
 
     console.print(table)
@@ -412,9 +414,9 @@ def display_full_report(
 ):
     """Display the complete rebalancing report."""
     display_header()
+    display_accuracy(accuracy, projected_accuracy)
     display_holdings_summary(portfolio, usd_to_cad_rate)
     display_account_summary(portfolio.accounts)
-    display_accuracy(accuracy, projected_accuracy)
     display_allocations(current_allocations, targets, drifts)
     display_transient_alerts(transient_alerts)
     display_trades(trades)
