@@ -97,11 +97,6 @@ def run_rebalancer():
     transient_symbols = rules_config.get("transient_symbols", [])
     existing_only = rules.get("existing_positions_only", True)
 
-    # Get exchange rate
-    console.print("  [dim]Fetching USD/CAD exchange rate...[/dim]")
-    usd_to_cad_rate = get_usd_to_cad_rate()
-    console.print(f"  [dim]USD/CAD rate: {usd_to_cad_rate:.4f}[/dim]")
-
     # Connect to Questrade accounts
     console.print("  [dim]Connecting to Questrade...[/dim]")
     clients = []
@@ -118,6 +113,11 @@ def run_rebalancer():
     if not clients:
         console.print("[red]ERROR: No Questrade connections established. Check your tokens.[/red]")
         sys.exit(1)
+
+    # Get exchange rate (uses Questrade market data for real-time accuracy)
+    console.print("  [dim]Fetching USD/CAD exchange rate...[/dim]")
+    usd_to_cad_rate = get_usd_to_cad_rate(client=clients[0])
+    console.print(f"  [dim]USD/CAD rate: {usd_to_cad_rate:.4f}[/dim]")
 
     # Build portfolio
     console.print("  [dim]Building portfolio...[/dim]")

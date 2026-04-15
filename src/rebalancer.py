@@ -122,11 +122,23 @@ def calculate_trades(
         if drift_pct < -TOLERANCE_PCT:
             # Underweight → BUY (use ask price)
             shares = int(math.floor(abs(drift_value_native) / ask_price))
+            # For expensive stocks (e.g., IVV ~$700): floor may give 0 even
+            # though drift exceeds tolerance. Buy 1 share if it brings us
+            # closer to target than doing nothing (overshoot < undershoot).
+            if shares == 0:
+                one_share_cad = _to_cad(ask_price, currency)
+                if one_share_cad < 2 * abs(drift_value_cad):
+                    shares = 1
             if shares > 0:
                 buys_needed.append((symbol, shares, ask_price, currency))
         elif drift_pct > TOLERANCE_PCT:
             # Overweight → SELL (use bid price)
             shares = int(math.floor(abs(drift_value_native) / bid_price))
+            # Same logic for expensive stocks on the sell side
+            if shares == 0:
+                one_share_cad = _to_cad(bid_price, currency)
+                if one_share_cad < 2 * abs(drift_value_cad):
+                    shares = 1
             if shares > 0:
                 sells_needed.append((symbol, shares, bid_price, currency))
 

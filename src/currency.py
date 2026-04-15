@@ -35,15 +35,28 @@ def get_usd_to_cad_rate(client=None) -> float:
     """
     Get the current USD to CAD exchange rate.
 
-    Tries multiple sources in order.
+    Tries multiple sources in order of accuracy:
+    1. Questrade market data (DLR.TO / DLR.U.TO ratio) — real-time market rate
+    2. exchangerate-api.com — free, updated daily
+    3. Bank of Canada Valet API — official daily rate
+    4. Hardcoded 1.36 fallback
 
     Args:
-        client: Optional QuestradeClient instance.
+        client: Optional QuestradeClient instance for real-time market rate.
 
     Returns:
-        USD to CAD exchange rate (e.g., 1.36 means 1 USD = 1.36 CAD).
+        USD to CAD exchange rate (e.g., 1.37 means 1 USD = 1.37 CAD).
     """
-    # Try free API first
+    # Primary: derive rate from DLR.TO (CAD) / DLR.U.TO (USD) via Questrade
+    if client is not None:
+        try:
+            rate = _get_rate_from_dlr(client)
+            if rate:
+                return rate
+        except Exception:
+            pass
+
+    # Fallback 1: free exchange rate API (daily rates)
     try:
         resp = requests.get(
             "https://api.exchangerate-api.com/v4/latest/USD",
@@ -57,7 +70,7 @@ def get_usd_to_cad_rate(client=None) -> float:
     except Exception:
         pass
 
-    # Fallback: try Bank of Canada Valet API
+    # Fallback 2: Bank of Canada Valet API (official daily rate)
     try:
         resp = requests.get(
             "https://www.bankofcanada.ca/valet/observations/FXUSDCAD/json?recent=1",
@@ -76,6 +89,50 @@ def get_usd_to_cad_rate(client=None) -> float:
     # Last resort fallback
     print("WARNING: Could not fetch live exchange rate. Using fallback rate of 1.36")
     return 1.36
+
+
+def _get_rate_from_dlr(client) -> float | None:
+    """
+    Derive USD/CAD exchange rate from DLR.TO and DLR.U.TO market quotes.
+
+    DLR.TO trades in CAD, DLR.U.TO trades in USD — both represent the same
+    underlying asset (Horizons US Dollar Currency ETF). The ratio of their
+    prices gives the real-time market exchange rate.
+
+    Args:
+        client: A QuestradeClient instance.
+
+    Returns:
+        USD to CAD rate, or None if quotes unavailable.
+    """
+    dlr_cad_price = None
+    dlr_usd_price = None
+
+    # Look up DLR.TO (CAD-denominated)
+    results = client.search_symbol("DLR.TO")
+    for r in results:
+        if r.get("symbol") == "DLR.TO":
+            quotes = client.get_quote([r["symbolId"]])
+            if quotes:
+                dlr_cad_price = quotes[0].get("lastTradePrice") or quotes[0].get("bidPrice")
+            break
+
+    # Look up DLR.U.TO (USD-denominated)
+    results = client.search_symbol("DLR.U.TO")
+    for r in results:
+        if r.get("symbol") == "DLR.U.TO":
+            quotes = client.get_quote([r["symbolId"]])
+            if quotes:
+                dlr_usd_price = quotes[0].get("lastTradePrice") or quotes[0].get("bidPrice")
+            break
+
+    if dlr_cad_price and dlr_usd_price and dlr_usd_price > 0:
+        rate = dlr_cad_price / dlr_usd_price
+        # Sanity check: rate should be between 1.0 and 2.0
+        if 1.0 < rate < 2.0:
+            return round(rate, 4)
+
+    return None
 
 
 def get_dlr_price(client) -> float:
