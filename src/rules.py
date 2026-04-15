@@ -64,19 +64,49 @@ def get_position_quantity(account, symbol: str) -> float:
     return 0.0
 
 
+# Drift tolerance for sell-allocation decisions (mirrors rebalancer.TOLERANCE_PCT)
+_SELL_ALLOC_TOLERANCE = 0.1
+
+
+def _has_underweight_alternatives(
+    acct,
+    sell_symbol: str,
+    effective_drift: dict,
+    transient_symbols: set,
+) -> bool:
+    """Can the proceeds from selling be productively redeployed in this account?
+
+    Returns True if the account holds at least one other non-transient
+    position that is currently underweight (drift < -tolerance).  When True,
+    the cash freed by selling *sell_symbol* can flow into that underweight
+    position rather than boomeranging back into *sell_symbol* via the sweep.
+    """
+    for pos in acct.positions:
+        if pos.symbol == sell_symbol or pos.quantity <= 0:
+            continue
+        if pos.symbol in transient_symbols:
+            continue
+        if effective_drift.get(pos.symbol, 0) < -_SELL_ALLOC_TOLERANCE:
+            return True
+    return False
+
+
 def allocate_sell(
     symbol: str,
     total_shares: int,
     price: float,
     currency: str,
     accounts: list,
+    effective_drift: dict = None,
+    transient_symbols: set = None,
 ) -> list:
     """
     Allocate a SELL order across accounts.
 
     Strategy:
     - Only sell from accounts that hold the symbol
-    - Distribute proportionally based on current holdings
+    - Prefer accounts with underweight alternatives (cash can be redeployed)
+    - Among equally ranked accounts, sell from the largest position first
 
     Args:
         symbol: Ticker to sell.
@@ -84,6 +114,9 @@ def allocate_sell(
         price: Current price per share.
         currency: "CAD" or "USD".
         accounts: All AccountInfo objects.
+        effective_drift: Current drift per symbol (used to check for underweight
+            alternatives).  When None, falls back to quantity-only sorting.
+        transient_symbols: Symbols excluded from rebalancing (e.g. DLR.TO).
 
     Returns:
         List of TradeRecommendation objects.
@@ -91,13 +124,25 @@ def allocate_sell(
     if total_shares <= 0:
         return []
 
+    if effective_drift is None:
+        effective_drift = {}
+    if transient_symbols is None:
+        transient_symbols = set()
+
     # Find accounts holding this symbol
     holders = find_accounts_for_symbol(symbol, accounts)
     if not holders:
         return []
 
-    # Sort by quantity held (descending) — sell from largest positions first
-    holders.sort(key=lambda a: get_position_quantity(a, symbol), reverse=True)
+    # Sort by: (1) accounts with underweight alternatives first (cash can be
+    # redeployed productively), (2) largest position first within each tier.
+    holders.sort(
+        key=lambda a: (
+            1 if _has_underweight_alternatives(a, symbol, effective_drift, transient_symbols) else 0,
+            get_position_quantity(a, symbol),
+        ),
+        reverse=True,
+    )
 
     trades = []
     remaining = total_shares

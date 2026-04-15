@@ -178,7 +178,9 @@ def _step_sell_overweight(state: RebalanceState) -> int:
             continue
 
         sell_trades = allocate_sell(
-            symbol, shares, bid, currency, state.portfolio.accounts
+            symbol, shares, bid, currency, state.portfolio.accounts,
+            effective_drift=state.effective_drift,
+            transient_symbols=state.transient_symbols,
         )
         for trade in sell_trades:
             state.all_trades.append(trade)
