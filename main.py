@@ -204,18 +204,21 @@ def run_rebalancer():
 def _pull_latest():
     """Pull the latest tokens and data from remote before running locally.
     Uses --ff-only so it only applies clean fast-forwards; warns and continues on failure."""
+    console.print("  [dim]Syncing with remote...[/dim]")
     try:
         result = subprocess.run(
             ["git", "pull", "--ff-only"],
             cwd=str(ROOT), capture_output=True, text=True,
         )
         if result.returncode == 0:
-            if "Already up to date." not in result.stdout:
-                console.print("  [dim]✓ Pulled latest tokens from remote[/dim]")
+            if "Already up to date." in result.stdout:
+                console.print("  [dim]Remote is up to date — no changes pulled[/dim]")
+            else:
+                console.print("  [green]✓[/green] [dim]Pulled latest changes from remote[/dim]")
         else:
-            console.print("  [yellow]⚠ Could not pull latest — running with local tokens[/yellow]")
+            console.print("  [yellow]⚠ Could not sync with remote — running with local data[/yellow]")
     except FileNotFoundError:
-        pass  # git not available, silently continue
+        console.print("  [dim]git not found — skipping remote sync[/dim]")
 
 
 def _push_synced_files():
@@ -235,7 +238,8 @@ def _push_synced_files():
             cwd=str(ROOT), capture_output=True, text=True,
         )
         if result.returncode == 0 and not untracked.stdout.strip():
-            return  # No changes
+            console.print("\n  [dim]No local changes to push[/dim]")
+            return
 
         subprocess.run(
             ["git", "add", "tokens/", "data/"],
@@ -249,6 +253,7 @@ def _push_synced_files():
             ["git", "push"],
             cwd=str(ROOT), check=True, capture_output=True,
         )
+        console.print("\n  [green]✓[/green] [dim]Pushed updated tokens and portfolio history to remote[/dim]")
     except FileNotFoundError:
         console.print("\n  [yellow]⚠ git not found — remember to push files manually[/yellow]")
     except subprocess.CalledProcessError:
