@@ -992,19 +992,37 @@ def simulate_rebalance(
             price_cad = trade.price * usd_to_cad_rate
 
         value_change_cad = price_cad * trade.quantity
+        needs_conversion = "currency conversion" in (trade.note or "").lower()
 
         if trade.action == "BUY":
             projected_holdings[trade.symbol] = projected_holdings.get(trade.symbol, 0) + value_change_cad
-            if trade.currency == "CAD":
-                projected_cash_cad -= trade.estimated_value
+            if needs_conversion:
+                # Currency conversion: deduct from the SOURCE currency
+                if trade.currency == "USD":
+                    projected_cash_cad -= trade.estimated_value * usd_to_cad_rate
+                else:
+                    projected_cash_usd -= trade.estimated_value / usd_to_cad_rate
             else:
-                projected_cash_usd -= trade.estimated_value
+                if trade.currency == "CAD":
+                    projected_cash_cad -= trade.estimated_value
+                else:
+                    projected_cash_usd -= trade.estimated_value
         elif trade.action == "SELL":
             projected_holdings[trade.symbol] = projected_holdings.get(trade.symbol, 0) - value_change_cad
             if trade.currency == "CAD":
                 projected_cash_cad += trade.estimated_value
             else:
                 projected_cash_usd += trade.estimated_value
+
+    # Adjust for conversion rounding: when a trade partially uses native
+    # cash and partially needs conversion, the simulation may over-deduct
+    # from one currency. In practice the conversion handles the exact split.
+    if projected_cash_cad < 0:
+        projected_cash_usd += projected_cash_cad / usd_to_cad_rate
+        projected_cash_cad = 0
+    if projected_cash_usd < 0:
+        projected_cash_cad += projected_cash_usd * usd_to_cad_rate
+        projected_cash_usd = 0
 
     # Calculate projected total value
     projected_total = projected_cash_cad + (projected_cash_usd * usd_to_cad_rate)
