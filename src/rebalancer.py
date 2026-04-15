@@ -1,20 +1,17 @@
 """
-Core rebalancing logic — Multi-Pass Algorithm.
+Core rebalancing logic — Iterative Algorithm.
 
-Phase 1:  Calculate portfolio-wide needs (drifts, sells/buys lists)
-Phase 2:  Direct sells — sell overweight positions, credit cash per account
-Phase 3:  Direct buys — buy underweight positions using available cash (easy wins)
-Phase 4:  Cash-raising sells — for unfulfilled buys, sell something in the target
-          account to raise cash (prefer overweight, accept at-target with displacement)
-Phase 5:  Displacement buys — re-buy displaced at-target positions in other accounts
-Phase 6:  Cross-currency buys — fulfill remaining buys using convertible cash
-Phase 7a: Same-currency cash sweep — deploy excess cash into existing positions
-Phase 7b: Cross-currency cash sweep — deploy stranded cash via currency conversion
-Phase 8:  Compensating sells — sell positions over-bought by 7b in other accounts,
-          then deploy the freed cash into underweight positions
+Each round applies three steps:
+  Step A:  Sell overweight positions to bring them toward target
+  Step B:  Buy underweight positions using available cash (same-currency,
+           cross-currency via Norbert's Gambit, or displacement sells)
+  Step C:  Sweep any remaining cash into the best available positions
+
+Rounds repeat until all positions are within ±0.1% of target, no further
+improvement is possible, or the safety limit is reached.
 
 Uses bid price for sells, ask price for buys (least advantageous pricing).
-Tracks per-account cash throughout all phases.
+Tracks per-account cash throughout all steps.
 """
 
 import math
@@ -26,11 +23,14 @@ from src.rules import (
     TradeRecommendation,
 )
 
-# Drift tolerance — don't bother with drifts smaller than this
+# Drift tolerance — don't trade if drift is smaller than this
 TOLERANCE_PCT = 0.1
 
 # Norbert's Gambit fee: $9.99 + 5% GST = $10.49 CAD per conversion
 NORBERTS_GAMBIT_FEE_CAD = 10.49
+
+# Maximum optimisation rounds before stopping
+MAX_ROUNDS = 10
 
 
 def calculate_trades(
@@ -41,8 +41,10 @@ def calculate_trades(
     transient_symbols: list = None,
 ) -> list:
     """
-    Calculate the trades needed to rebalance the portfolio using a multi-pass
-    algorithm that raises cash within accounts when needed.
+    Calculate trades to rebalance the portfolio using an iterative algorithm.
+
+    Repeats Sell → Buy → Sweep rounds until all positions are within
+    tolerance or no further improvement is possible.
 
     Args:
         portfolio: Aggregated portfolio summary.
@@ -64,8 +66,7 @@ def calculate_trades(
     if total_value == 0:
         return []
 
-    # ── Build per-account available cash tracker ──
-    # Updated throughout all phases as sells credit and buys debit cash
+    # ── Per-account cash tracker (updated as trades are recorded) ──
     available_cash = {}
     for acct in portfolio.accounts:
         available_cash[acct.number] = {
@@ -73,1025 +74,418 @@ def calculate_trades(
             "USD": acct.cash_usd,
         }
 
-    # ── Track effective drift per symbol ──
-    # Starts as the calculated drift, then adjusted as trades are made
+    # ── Effective drift tracker (adjusted as trades change allocations) ──
     effective_drift = dict(drifts)
 
-    def _apply_trade_to_drift(symbol, value_cad, action):
-        """Adjust effective drift after a trade is recorded."""
-        drift_change_pct = (value_cad / total_value) * 100.0
+    # ── Helper functions ──
+
+    def _apply_trade(symbol, value_cad, action):
+        """Update effective drift after a trade."""
+        pct = (value_cad / total_value) * 100.0
         if action == "SELL":
-            effective_drift[symbol] = effective_drift.get(symbol, 0) - drift_change_pct
-        else:  # BUY
-            effective_drift[symbol] = effective_drift.get(symbol, 0) + drift_change_pct
+            effective_drift[symbol] = effective_drift.get(symbol, 0) - pct
+        else:
+            effective_drift[symbol] = effective_drift.get(symbol, 0) + pct
 
     def _to_cad(value, currency):
-        """Convert a native-currency value to CAD."""
         return value * usd_to_cad_rate if currency == "USD" else value
 
-    # ══════════════════════════════════════════════════════════════════
-    # PHASE 1: Compute needed sells and buys from portfolio-wide drifts
-    # ══════════════════════════════════════════════════════════════════
-    sells_needed = []  # (symbol, shares, bid_price, currency)
-    buys_needed = []   # (symbol, shares, ask_price, currency)
-
-    for symbol, drift_pct in drifts.items():
-        if symbol in ("CAD", "USD"):
-            continue
-        if abs(drift_pct) < TOLERANCE_PCT:
-            continue
-
-        holding = portfolio.holdings.get(symbol)
-        if not holding:
-            continue
-
-        bid_price = holding.get("bid_price", holding["current_price"])
-        ask_price = holding.get("ask_price", holding["current_price"])
-        currency = holding["currency"]
-
-        if bid_price <= 0 or ask_price <= 0:
-            continue
-
-        # Dollar amount of drift in native currency
-        drift_value_cad = (drift_pct / 100.0) * total_value
-        if currency == "USD":
-            drift_value_native = drift_value_cad / usd_to_cad_rate
+    def _effective_cash(acct_number, buy_currency):
+        """Total buying power: native cash + convertible from other currency.
+        Accounts for the $10.49 CAD Norbert's Gambit fee in both directions."""
+        native = max(0, available_cash.get(acct_number, {}).get(buy_currency, 0))
+        if buy_currency == "USD":
+            cad = max(0, available_cash.get(acct_number, {}).get("CAD", 0))
+            convertible = max(0, cad - NORBERTS_GAMBIT_FEE_CAD) / usd_to_cad_rate
         else:
-            drift_value_native = drift_value_cad
+            usd = max(0, available_cash.get(acct_number, {}).get("USD", 0))
+            convertible = max(0, usd * usd_to_cad_rate - NORBERTS_GAMBIT_FEE_CAD)
+        return native + convertible
 
-        if drift_pct < -TOLERANCE_PCT:
-            # Underweight → BUY (use ask price)
-            shares = int(math.floor(abs(drift_value_native) / ask_price))
-            # For expensive stocks (e.g., IVV ~$700): floor may give 0 even
-            # though drift exceeds tolerance. Buy 1 share if it brings us
-            # closer to target than doing nothing (overshoot < undershoot).
-            if shares == 0:
-                one_share_cad = _to_cad(ask_price, currency)
-                if one_share_cad < 2 * abs(drift_value_cad):
-                    shares = 1
-            if shares > 0:
-                buys_needed.append((symbol, shares, ask_price, currency))
-        elif drift_pct > TOLERANCE_PCT:
-            # Overweight → SELL (use bid price)
-            shares = int(math.floor(abs(drift_value_native) / bid_price))
-            # Same logic for expensive stocks on the sell side
-            if shares == 0:
-                one_share_cad = _to_cad(bid_price, currency)
-                if one_share_cad < 2 * abs(drift_value_cad):
-                    shares = 1
-            if shares > 0:
-                sells_needed.append((symbol, shares, bid_price, currency))
+    def _deduct_buy(acct_number, cost, currency):
+        """Deduct a buy cost: native currency first, then convert remainder.
+        Returns True if cross-currency conversion was needed."""
+        native = max(0, available_cash.get(acct_number, {}).get(currency, 0))
+        if native >= cost:
+            available_cash[acct_number][currency] -= cost
+            return False
+        # Use all native, convert the rest
+        remainder = cost - native
+        available_cash[acct_number][currency] = 0
+        if currency == "USD":
+            available_cash[acct_number]["CAD"] -= (
+                remainder * usd_to_cad_rate + NORBERTS_GAMBIT_FEE_CAD
+            )
+        else:
+            available_cash[acct_number]["USD"] -= (
+                remainder + NORBERTS_GAMBIT_FEE_CAD
+            ) / usd_to_cad_rate
+        return True
 
-    # Sort buys by drift magnitude (most underweight first = biggest priority)
-    buys_needed.sort(key=lambda x: drifts.get(x[0], 0))
-    # Sort sells by drift magnitude (most overweight first)
-    sells_needed.sort(key=lambda x: drifts.get(x[0], 0), reverse=True)
+    def _shares_for_drift(drift_pct, price, currency):
+        """Calculate whole shares needed to close a drift gap."""
+        gap_cad = abs(drift_pct / 100.0) * total_value
+        gap_native = gap_cad / usd_to_cad_rate if currency == "USD" else gap_cad
+        shares = int(math.floor(gap_native / price))
+        # Expensive-stock fix: buy/sell 1 if it improves accuracy
+        if shares == 0:
+            one_cad = _to_cad(price, currency)
+            if one_cad < 2 * gap_cad:
+                shares = 1
+        return shares
 
+    # ══════════════════════════════════════════════════════════════════
     all_trades = []
 
-    # ══════════════════════════════════════════════════════════════════
-    # PHASE 2: Direct sells — sell overweight positions
-    # ══════════════════════════════════════════════════════════════════
-    for symbol, shares, price, currency in sells_needed:
-        sell_trades = allocate_sell(
-            symbol=symbol,
-            total_shares=shares,
-            price=price,
-            currency=currency,
-            accounts=portfolio.accounts,
-        )
-        for trade in sell_trades:
-            all_trades.append(trade)
-            available_cash[trade.account_number][trade.currency] += trade.estimated_value
-            _apply_trade_to_drift(trade.symbol, _to_cad(trade.estimated_value, trade.currency), "SELL")
-
-    # ══════════════════════════════════════════════════════════════════
-    # PHASE 3: Direct buys — easy wins using available cash
-    # ══════════════════════════════════════════════════════════════════
-    unfulfilled_buys = []
-
-    for symbol, total_shares, price, currency in buys_needed:
-        if total_shares <= 0:
-            continue
-
-        if existing_only:
-            eligible = find_accounts_for_symbol(symbol, portfolio.accounts)
-        else:
-            eligible = list(portfolio.accounts)
-
-        if not eligible:
-            continue
-
-        # Prefer accounts with the most available cash
-        eligible.sort(
-            key=lambda a: available_cash.get(a.number, {}).get(currency, 0),
-            reverse=True,
-        )
-
-        remaining = total_shares
-
-        for acct in eligible:
-            if remaining <= 0:
-                break
-
-            acct_cash = available_cash.get(acct.number, {}).get(currency, 0)
-            if acct_cash <= 0:
-                continue
-
-            max_affordable = int(math.floor(acct_cash / price))
-            shares_to_buy = min(remaining, max_affordable)
-
-            if shares_to_buy > 0:
-                trade = TradeRecommendation(
-                    symbol=symbol,
-                    action="BUY",
-                    quantity=shares_to_buy,
-                    account_number=acct.number,
-                    account_type=acct.account_type,
-                    owner=acct.owner,
-                    price=price,
-                    currency=currency,
-                    estimated_value=price * shares_to_buy,
-                )
-                all_trades.append(trade)
-                available_cash[acct.number][currency] -= trade.estimated_value
-                remaining -= shares_to_buy
-                _apply_trade_to_drift(symbol, _to_cad(trade.estimated_value, currency), "BUY")
-
-        if remaining > 0:
-            unfulfilled_buys.append((symbol, remaining, price, currency))
-
-    # ══════════════════════════════════════════════════════════════════
-    # PHASE 4: Cash-raising sells for unfulfilled buys
-    # ══════════════════════════════════════════════════════════════════
-    # For each buy we couldn't complete, look at accounts that hold the
-    # symbol and sell something else in that account to raise cash.
-    # Prefer selling overweight positions (two birds, one stone).
-    # If nothing is overweight, sell an at-target position and track it
-    # as a displacement to repair in Phase 5.
-
-    displacements = []  # (symbol, shares_sold, bid_price, currency, source_account)
-    still_unfulfilled = []  # Buys remaining after Phase 4 (may need currency conversion)
-
-    for buy_symbol, shares_needed, buy_price, buy_currency in unfulfilled_buys:
-        if shares_needed <= 0:
-            continue
-
-        # Find accounts that already hold the symbol we need to buy
-        if existing_only:
-            target_accounts = find_accounts_for_symbol(buy_symbol, portfolio.accounts)
-        else:
-            target_accounts = list(portfolio.accounts)
-
-        if not target_accounts:
-            continue
-
-        # Try accounts with the most existing holdings of buy_symbol first
-        # (they're the most natural home for this position)
-        target_accounts.sort(
-            key=lambda a: get_position_quantity(a, buy_symbol),
-            reverse=True,
-        )
-
-        for acct in target_accounts:
-            if shares_needed <= 0:
-                break
-
-            # Check if this account already has enough cash (edge case)
-            acct_cash = available_cash.get(acct.number, {}).get(buy_currency, 0)
-            if acct_cash >= buy_price:
-                # Can buy at least one share — do it
-                max_affordable = int(math.floor(acct_cash / buy_price))
-                buy_qty = min(shares_needed, max_affordable)
-                if buy_qty > 0:
-                    trade = TradeRecommendation(
-                        symbol=buy_symbol,
-                        action="BUY",
-                        quantity=buy_qty,
-                        account_number=acct.number,
-                        account_type=acct.account_type,
-                        owner=acct.owner,
-                        price=buy_price,
-                        currency=buy_currency,
-                        estimated_value=buy_price * buy_qty,
-                    )
-                    all_trades.append(trade)
-                    available_cash[acct.number][buy_currency] -= trade.estimated_value
-                    shares_needed -= buy_qty
-                    _apply_trade_to_drift(buy_symbol, _to_cad(trade.estimated_value, buy_currency), "BUY")
-                if shares_needed <= 0:
-                    continue
-
-            # ── Find candidates to sell in this account to raise cash ──
-            # Must be: same currency, not the buy symbol, not transient, has shares
-            candidates = []
-            for pos in acct.positions:
-                if pos.symbol == buy_symbol:
-                    continue
-                if pos.symbol in transient_symbols:
-                    continue
-                if pos.currency != buy_currency:
-                    continue
-                if pos.quantity <= 0:
-                    continue
-
-                holding_data = portfolio.holdings.get(pos.symbol)
-                if not holding_data:
-                    continue
-
-                cand_bid = holding_data.get("bid_price", pos.current_price)
-                if cand_bid <= 0:
-                    continue
-
-                cand_drift = effective_drift.get(pos.symbol, 0)
-                candidates.append((pos, cand_drift, cand_bid))
-
-            if not candidates:
-                continue
-
-            # Sort: most overweight first (prefer selling what's already overweight)
-            candidates.sort(key=lambda x: x[1], reverse=True)
-
-            # Raise cash by selling candidates
-            for cand_pos, cand_drift, cand_bid in candidates:
-                if shares_needed <= 0:
-                    break
-
-                # Recalculate shortfall (previous fundraiser sells may have freed cash)
-                acct_cash = available_cash.get(acct.number, {}).get(buy_currency, 0)
-                cost_for_remaining = shares_needed * buy_price
-                cash_shortfall = cost_for_remaining - max(0, acct_cash)
-
-                if cash_shortfall <= 0:
-                    break  # Enough cash raised
-
-                # How many shares to sell to cover the shortfall?
-                shares_to_sell = math.ceil(cash_shortfall / cand_bid)
-                held = int(get_position_quantity(acct, cand_pos.symbol))
-                shares_to_sell = min(shares_to_sell, held)
-
-                if shares_to_sell <= 0:
-                    continue
-
-                is_overweight = cand_drift > TOLERANCE_PCT
-
-                # Don't displace single-account holdings — Phase 5
-                # can't repair them (no other account to re-buy in)
-                if not is_overweight:
-                    other_holders = find_accounts_for_symbol(
-                        cand_pos.symbol, portfolio.accounts
-                    )
-                    if len(other_holders) <= 1:
-                        continue
-
-                # Generate the fundraiser sell
-                sell_note = ""
-                if not is_overweight:
-                    sell_note = "Displacement sell"
-
-                sell_trade = TradeRecommendation(
-                    symbol=cand_pos.symbol,
-                    action="SELL",
-                    quantity=shares_to_sell,
-                    account_number=acct.number,
-                    account_type=acct.account_type,
-                    owner=acct.owner,
-                    price=cand_bid,
-                    currency=buy_currency,
-                    estimated_value=cand_bid * shares_to_sell,
-                    note=sell_note,
-                )
-                all_trades.append(sell_trade)
-                available_cash[acct.number][buy_currency] += sell_trade.estimated_value
-                _apply_trade_to_drift(
-                    cand_pos.symbol,
-                    _to_cad(sell_trade.estimated_value, buy_currency),
-                    "SELL",
-                )
-
-                # Track displacement for at-target positions
-                if not is_overweight:
-                    displacements.append((
-                        cand_pos.symbol,
-                        shares_to_sell,
-                        cand_bid,
-                        buy_currency,
-                        acct.number,
-                    ))
-
-            # Now buy the target symbol with freed cash
-            acct_cash = available_cash.get(acct.number, {}).get(buy_currency, 0)
-            if acct_cash > 0 and shares_needed > 0:
-                max_affordable = int(math.floor(acct_cash / buy_price))
-                buy_qty = min(shares_needed, max_affordable)
-
-                if buy_qty > 0:
-                    trade = TradeRecommendation(
-                        symbol=buy_symbol,
-                        action="BUY",
-                        quantity=buy_qty,
-                        account_number=acct.number,
-                        account_type=acct.account_type,
-                        owner=acct.owner,
-                        price=buy_price,
-                        currency=buy_currency,
-                        estimated_value=buy_price * buy_qty,
-                    )
-                    all_trades.append(trade)
-                    available_cash[acct.number][buy_currency] -= trade.estimated_value
-                    shares_needed -= buy_qty
-                    _apply_trade_to_drift(
-                        buy_symbol,
-                        _to_cad(trade.estimated_value, buy_currency),
-                        "BUY",
-                    )
-
-        # Track buys still unfulfilled after Phase 4 (may need currency conversion)
-        if shares_needed > 0:
-            still_unfulfilled.append((buy_symbol, shares_needed, buy_price, buy_currency))
-
-    # ══════════════════════════════════════════════════════════════════
-    # PHASE 5: Displacement buys — repair at-target sells
-    # ══════════════════════════════════════════════════════════════════
-    # When Phase 4 sold an at-target position to raise cash, we need
-    # to re-buy those shares in another account that already holds the
-    # symbol and has available cash. One level deep only.
-
-    for disp_symbol, disp_shares, _disp_bid, disp_currency, source_acct in displacements:
-        if disp_shares <= 0:
-            continue
-
-        holding_data = portfolio.holdings.get(disp_symbol)
-        if not holding_data:
-            continue
-
-        disp_ask = holding_data.get("ask_price", holding_data["current_price"])
-        if disp_ask <= 0:
-            continue
-
-        # Find accounts that hold this symbol (excluding the source account)
-        eligible = find_accounts_for_symbol(disp_symbol, portfolio.accounts)
-        eligible = [a for a in eligible if a.number != source_acct]
-
-        if not eligible:
-            # No other account holds it — accept the small drift
-            continue
-
-        # Prefer accounts with the most available cash
-        eligible.sort(
-            key=lambda a: available_cash.get(a.number, {}).get(disp_currency, 0),
-            reverse=True,
-        )
-
-        remaining = disp_shares
-
-        for acct in eligible:
-            if remaining <= 0:
-                break
-
-            acct_cash = available_cash.get(acct.number, {}).get(disp_currency, 0)
-            if acct_cash <= 0:
-                continue
-
-            max_affordable = int(math.floor(acct_cash / disp_ask))
-            buy_qty = min(remaining, max_affordable)
-
-            if buy_qty > 0:
-                trade = TradeRecommendation(
-                    symbol=disp_symbol,
-                    action="BUY",
-                    quantity=buy_qty,
-                    account_number=acct.number,
-                    account_type=acct.account_type,
-                    owner=acct.owner,
-                    price=disp_ask,
-                    currency=disp_currency,
-                    estimated_value=disp_ask * buy_qty,
-                    note="Displacement buy",
-                )
-                all_trades.append(trade)
-                available_cash[acct.number][disp_currency] -= trade.estimated_value
-                remaining -= buy_qty
-                _apply_trade_to_drift(
-                    disp_symbol,
-                    _to_cad(trade.estimated_value, disp_currency),
-                    "BUY",
-                )
-
-    # ══════════════════════════════════════════════════════════════════
-    # PHASE 6: Cross-currency buys for remaining unfulfilled positions
-    # ══════════════════════════════════════════════════════════════════
-    # If a buy couldn't be fulfilled because the account has cash in
-    # the wrong currency (e.g., need USD for IVV but only have CAD),
-    # generate the buy trade anyway. The currency conversion module
-    # will detect the mismatch and recommend Norbert's Gambit (DLR.TO).
-    # We consider total effective cash: native + convertible from the
-    # other currency.
-
-    for buy_symbol, shares_needed, buy_price, buy_currency in still_unfulfilled:
-        if shares_needed <= 0:
-            continue
-
-        if existing_only:
-            eligible = find_accounts_for_symbol(buy_symbol, portfolio.accounts)
-        else:
-            eligible = list(portfolio.accounts)
-
-        if not eligible:
-            continue
-
-        # Calculate effective cash per account (native + convertible)
-        def _effective_cash(acct):
-            native = max(0, available_cash.get(acct.number, {}).get(buy_currency, 0))
-            if buy_currency == "USD":
-                cad_avail = max(0, available_cash.get(acct.number, {}).get("CAD", 0))
-                convertible = max(0, cad_avail - NORBERTS_GAMBIT_FEE_CAD) / usd_to_cad_rate
-            else:
-                usd_avail = max(0, available_cash.get(acct.number, {}).get("USD", 0))
-                convertible = usd_avail * usd_to_cad_rate
-            return native + convertible
-
-        # Sort by total effective cash (most cash first)
-        eligible.sort(key=_effective_cash, reverse=True)
-
-        remaining = shares_needed
-
-        for acct in eligible:
-            if remaining <= 0:
-                break
-
-            eff_cash = _effective_cash(acct)
-            if eff_cash < buy_price:
-                continue
-
-            max_affordable = int(math.floor(eff_cash / buy_price))
-            buy_qty = min(remaining, max_affordable)
-
-            if buy_qty > 0:
-                cost = buy_qty * buy_price
-                native_cash = max(0, available_cash.get(acct.number, {}).get(buy_currency, 0))
-                needs_conversion = native_cash < cost
-
-                trade = TradeRecommendation(
-                    symbol=buy_symbol,
-                    action="BUY",
-                    quantity=buy_qty,
-                    account_number=acct.number,
-                    account_type=acct.account_type,
-                    owner=acct.owner,
-                    price=buy_price,
-                    currency=buy_currency,
-                    estimated_value=cost,
-                    note="Requires currency conversion" if needs_conversion else "",
-                )
-                all_trades.append(trade)
-
-                # Deduct: native currency first, then other currency for the remainder
-                if native_cash >= cost:
-                    available_cash[acct.number][buy_currency] -= cost
-                else:
-                    remainder = cost - native_cash
-                    available_cash[acct.number][buy_currency] = 0
-                    if buy_currency == "USD":
-                        cad_cost = remainder * usd_to_cad_rate + NORBERTS_GAMBIT_FEE_CAD
-                        available_cash[acct.number]["CAD"] -= cad_cost
-                    else:
-                        usd_cost = remainder / usd_to_cad_rate
-                        available_cash[acct.number]["USD"] -= usd_cost
-
-                remaining -= buy_qty
-                _apply_trade_to_drift(
-                    buy_symbol,
-                    _to_cad(cost, buy_currency),
-                    "BUY",
-                )
-
-    # ══════════════════════════════════════════════════════════════════
-    # PHASE 7a: Deploy remaining cash — same-currency sweep
-    # ══════════════════════════════════════════════════════════════════
-    # After all phases, some accounts may have excess cash from sells
-    # that couldn't be fully redeployed. Since cash target is 0%,
-    # buy the least-overweight (or most-underweight) existing position.
-    # Iterative: buy only enough to close each symbol's drift gap, then
-    # re-evaluate so cash is spread across multiple underweight positions.
-
-    for acct in portfolio.accounts:
-        for currency in ["CAD", "USD"]:
-            # Iterative sweep: buy the most underweight, re-evaluate, repeat
-            for _sweep in range(50):  # Safety limit
-                acct_cash = available_cash.get(acct.number, {}).get(currency, 0)
-                if acct_cash <= 0:
-                    break
-
-                # Find buyable positions in this account (same currency)
-                candidates = []
-                for pos in acct.positions:
-                    if pos.currency != currency or pos.quantity <= 0:
-                        continue
-                    if pos.symbol in transient_symbols:
-                        continue
-                    holding = portfolio.holdings.get(pos.symbol)
-                    if not holding:
-                        continue
-                    ask = holding.get("ask_price", pos.current_price)
-                    if ask <= 0 or ask > acct_cash:
-                        continue
-                    drift = effective_drift.get(pos.symbol, 0)
-                    candidates.append((pos.symbol, drift, ask))
-
-                if not candidates:
-                    break
-
-                # Buy the most underweight (or least overweight) position
-                candidates.sort(key=lambda x: x[1])
-                symbol, drift, ask = candidates[0]
-
-                max_affordable = int(math.floor(acct_cash / ask))
-                if max_affordable <= 0:
-                    break
-
-                # Limit buy to what's needed to close this symbol's drift gap
-                if drift < -TOLERANCE_PCT:
-                    gap_cad = abs(drift / 100.0) * total_value
-                    gap_native = gap_cad / usd_to_cad_rate if currency == "USD" else gap_cad
-                    gap_shares = int(math.ceil(gap_native / ask))
-                    shares = min(gap_shares, max_affordable)
-                else:
-                    # At or above target — dump remaining cash here
-                    shares = max_affordable
-
-                if shares <= 0:
-                    break
-
-                trade = TradeRecommendation(
-                    symbol=symbol,
-                    action="BUY",
-                    quantity=shares,
-                    account_number=acct.number,
-                    account_type=acct.account_type,
-                    owner=acct.owner,
-                    price=ask,
-                    currency=currency,
-                    estimated_value=ask * shares,
-                )
-                all_trades.append(trade)
-                available_cash[acct.number][currency] -= trade.estimated_value
-                _apply_trade_to_drift(symbol, _to_cad(trade.estimated_value, currency), "BUY")
-
-    # ══════════════════════════════════════════════════════════════════
-    # PHASE 7b: Deploy remaining cash — cross-currency sweep
-    # ══════════════════════════════════════════════════════════════════
-    # Accounts with cash in one currency but only positions in the other
-    # (e.g., CAD cash in an RRSP that only holds IVV/USD). Convert and
-    # buy the best available position. Tracks overflow for Phase 8.
-
-    overflow_buys = set()  # (symbol, account_number) — for Phase 8
-
-    for acct in portfolio.accounts:
-        for cash_currency in ["CAD", "USD"]:
-            acct_cash = available_cash.get(acct.number, {}).get(cash_currency, 0)
-            if acct_cash <= 0:
-                continue
-
-            buy_currency = "USD" if cash_currency == "CAD" else "CAD"
-
-            # Find buyable positions in the OTHER currency
-            candidates = []
-            for pos in acct.positions:
-                if pos.currency != buy_currency or pos.quantity <= 0:
-                    continue
-                if pos.symbol in transient_symbols:
-                    continue
-                holding = portfolio.holdings.get(pos.symbol)
-                if not holding:
-                    continue
-                ask = holding.get("ask_price", pos.current_price)
-                if ask <= 0:
-                    continue
-                drift = effective_drift.get(pos.symbol, 0)
-                candidates.append((pos.symbol, drift, ask))
-
-            if not candidates:
-                continue
-
-            # Buy the most underweight (or least overweight)
-            candidates.sort(key=lambda x: x[1])
-            symbol, _drift, ask = candidates[0]
-
-            # Calculate effective buying power after conversion
-            if cash_currency == "CAD":
-                effective_buy = max(0, acct_cash - NORBERTS_GAMBIT_FEE_CAD) / usd_to_cad_rate
-            else:
-                effective_buy = acct_cash * usd_to_cad_rate
-
-            shares = int(math.floor(effective_buy / ask))
-            if shares <= 0:
-                continue
-
-            cost = shares * ask
-            trade = TradeRecommendation(
-                symbol=symbol,
-                action="BUY",
-                quantity=shares,
-                account_number=acct.number,
-                account_type=acct.account_type,
-                owner=acct.owner,
-                price=ask,
-                currency=buy_currency,
-                estimated_value=cost,
-                note="Requires currency conversion",
-            )
-            all_trades.append(trade)
-            overflow_buys.add((symbol, acct.number))
-
-            # Deduct from source currency
-            if cash_currency == "CAD":
-                cad_cost = cost * usd_to_cad_rate + NORBERTS_GAMBIT_FEE_CAD
-                available_cash[acct.number]["CAD"] -= cad_cost
-            else:
-                usd_cost = cost / usd_to_cad_rate
-                available_cash[acct.number]["USD"] -= usd_cost
-
-            _apply_trade_to_drift(symbol, _to_cad(cost, buy_currency), "BUY")
-
-    # ══════════════════════════════════════════════════════════════════
-    # PHASE 8: Compensating sells for overflow buys
-    # ══════════════════════════════════════════════════════════════════
-    # Phase 7b may have over-bought a position to deploy stranded cash
-    # (e.g., bought extra IVV in an RRSP that only holds IVV). Sell
-    # the overage in OTHER accounts, then deploy the freed cash into
-    # underweight positions there.
-
-    if overflow_buys:
-        overflow_symbols = set(sym for sym, _ in overflow_buys)
-        overflow_accounts = set(acct_num for _, acct_num in overflow_buys)
-
-        # ── Phase 8a: Compensating sells ──
-        for symbol in overflow_symbols:
-            sym_drift = effective_drift.get(symbol, 0)
-            if sym_drift <= TOLERANCE_PCT:
-                continue  # Not overweight — no sell needed
-
+    for _round in range(MAX_ROUNDS):
+        round_count = 0
+
+        # ──────────────────────────────────────────────────────────────
+        # STEP A: Sell overweight positions
+        # ──────────────────────────────────────────────────────────────
+        overweight = [
+            (sym, d)
+            for sym, d in effective_drift.items()
+            if sym not in ("CAD", "USD") and d > TOLERANCE_PCT
+        ]
+        overweight.sort(key=lambda x: x[1], reverse=True)  # Most overweight first
+
+        for symbol, drift in overweight:
             holding = portfolio.holdings.get(symbol)
             if not holding:
                 continue
-
             bid = holding.get("bid_price", holding["current_price"])
             currency = holding["currency"]
             if bid <= 0:
                 continue
 
-            # How many shares to sell to bring drift back toward target
-            excess_cad = (sym_drift / 100.0) * total_value
-            excess_native = excess_cad / usd_to_cad_rate if currency == "USD" else excess_cad
-            shares_to_sell = int(math.floor(excess_native / bid))
-            if shares_to_sell <= 0:
+            shares = _shares_for_drift(drift, bid, currency)
+            if shares <= 0:
                 continue
 
-            # Sell from accounts that hold it (excluding overflow sources)
-            holders = find_accounts_for_symbol(symbol, portfolio.accounts)
-            holders = [a for a in holders if a.number not in overflow_accounts]
-            holders.sort(
-                key=lambda a: get_position_quantity(a, symbol), reverse=True
+            sell_trades = allocate_sell(
+                symbol, shares, bid, currency, portfolio.accounts
+            )
+            for trade in sell_trades:
+                all_trades.append(trade)
+                available_cash[trade.account_number][currency] += trade.estimated_value
+                _apply_trade(symbol, _to_cad(trade.estimated_value, currency), "SELL")
+                round_count += 1
+
+        # ──────────────────────────────────────────────────────────────
+        # STEP B: Buy underweight positions
+        # ──────────────────────────────────────────────────────────────
+        # Unified: considers same-currency cash, cross-currency conversion,
+        # and displacement sells — all in one pass.
+
+        underweight = [
+            (sym, d)
+            for sym, d in effective_drift.items()
+            if sym not in ("CAD", "USD") and d < -TOLERANCE_PCT
+        ]
+        underweight.sort(key=lambda x: x[1])  # Most underweight first
+
+        for symbol, _initial_drift in underweight:
+            # Re-check drift (earlier buys in this step may have changed it)
+            drift = effective_drift.get(symbol, 0)
+            if drift >= -TOLERANCE_PCT:
+                continue
+
+            holding = portfolio.holdings.get(symbol)
+            if not holding:
+                continue
+            ask = holding.get("ask_price", holding["current_price"])
+            currency = holding["currency"]
+            if ask <= 0:
+                continue
+
+            shares_needed = _shares_for_drift(drift, ask, currency)
+            if shares_needed <= 0:
+                continue
+
+            # Find eligible accounts
+            if existing_only:
+                eligible = find_accounts_for_symbol(symbol, portfolio.accounts)
+            else:
+                eligible = list(portfolio.accounts)
+            if not eligible:
+                continue
+
+            # Sort by total effective cash (highest first)
+            eligible.sort(
+                key=lambda a: _effective_cash(a.number, currency),
+                reverse=True,
             )
 
-            remaining = shares_to_sell
-            for acct in holders:
+            remaining = shares_needed
+
+            for acct in eligible:
                 if remaining <= 0:
                     break
-                held = int(get_position_quantity(acct, symbol))
-                sell_qty = min(remaining, held)
-                if sell_qty > 0:
-                    trade = TradeRecommendation(
-                        symbol=symbol,
+
+                # ── Try buying with available cash ──
+                eff = _effective_cash(acct.number, currency)
+                if eff >= ask:
+                    affordable = int(math.floor(eff / ask))
+                    qty = min(remaining, affordable)
+                    if qty > 0:
+                        cost = qty * ask
+                        converted = _deduct_buy(acct.number, cost, currency)
+                        all_trades.append(TradeRecommendation(
+                            symbol=symbol,
+                            action="BUY",
+                            quantity=qty,
+                            account_number=acct.number,
+                            account_type=acct.account_type,
+                            owner=acct.owner,
+                            price=ask,
+                            currency=currency,
+                            estimated_value=cost,
+                            note="Requires currency conversion" if converted else "",
+                        ))
+                        remaining -= qty
+                        _apply_trade(symbol, _to_cad(cost, currency), "BUY")
+                        round_count += qty
+                    continue  # Move to next account
+
+                # ── Not enough cash — try displacement sell ──
+                # Sell another position in this account to raise cash.
+                # Prefer overweight positions; accept at-target if held
+                # in multiple accounts (so next round can repair).
+                candidates = []
+                for pos in acct.positions:
+                    if pos.symbol == symbol or pos.symbol in transient_symbols:
+                        continue
+                    if pos.currency != currency or pos.quantity <= 0:
+                        continue
+                    h = portfolio.holdings.get(pos.symbol)
+                    if not h:
+                        continue
+                    cbid = h.get("bid_price", pos.current_price)
+                    if cbid <= 0:
+                        continue
+                    cdrift = effective_drift.get(pos.symbol, 0)
+                    candidates.append((pos.symbol, cdrift, cbid))
+
+                if not candidates:
+                    continue
+
+                # Most overweight first (best displacement targets)
+                candidates.sort(key=lambda x: x[1], reverse=True)
+
+                for cand_sym, cand_drift, cand_bid in candidates:
+                    if remaining <= 0:
+                        break
+
+                    is_overweight = cand_drift > TOLERANCE_PCT
+
+                    # Skip at-target positions held in only 1 account
+                    # (can't be repaired in next round)
+                    if not is_overweight:
+                        holders = find_accounts_for_symbol(
+                            cand_sym, portfolio.accounts
+                        )
+                        if len(holders) <= 1:
+                            continue
+
+                    # Calculate how many to sell
+                    acct_cash = max(0, available_cash.get(acct.number, {}).get(currency, 0))
+                    shortfall = remaining * ask - acct_cash
+                    if shortfall <= 0:
+                        break  # Enough cash already
+
+                    sell_qty = int(math.ceil(shortfall / cand_bid))
+                    held = int(get_position_quantity(acct, cand_sym))
+                    sell_qty = min(sell_qty, held)
+                    if sell_qty <= 0:
+                        continue
+
+                    note = "" if is_overweight else "Displacement sell"
+                    sell_trade = TradeRecommendation(
+                        symbol=cand_sym,
                         action="SELL",
                         quantity=sell_qty,
                         account_number=acct.number,
                         account_type=acct.account_type,
                         owner=acct.owner,
-                        price=bid,
+                        price=cand_bid,
                         currency=currency,
-                        estimated_value=bid * sell_qty,
+                        estimated_value=cand_bid * sell_qty,
+                        note=note,
                     )
-                    all_trades.append(trade)
-                    available_cash[acct.number][currency] += trade.estimated_value
-                    remaining -= sell_qty
-                    _apply_trade_to_drift(
-                        symbol, _to_cad(trade.estimated_value, currency), "SELL"
-                    )
+                    all_trades.append(sell_trade)
+                    available_cash[acct.number][currency] += sell_trade.estimated_value
+                    _apply_trade(cand_sym, _to_cad(sell_trade.estimated_value, currency), "SELL")
+                    round_count += 1
 
-        # ── Phase 8b: Deploy freed cash from compensating sells ──
+                # Now buy with the freed cash
+                acct_cash = max(0, available_cash.get(acct.number, {}).get(currency, 0))
+                if acct_cash >= ask and remaining > 0:
+                    affordable = int(math.floor(acct_cash / ask))
+                    qty = min(remaining, affordable)
+                    if qty > 0:
+                        cost = qty * ask
+                        available_cash[acct.number][currency] -= cost
+                        all_trades.append(TradeRecommendation(
+                            symbol=symbol,
+                            action="BUY",
+                            quantity=qty,
+                            account_number=acct.number,
+                            account_type=acct.account_type,
+                            owner=acct.owner,
+                            price=ask,
+                            currency=currency,
+                            estimated_value=cost,
+                        ))
+                        remaining -= qty
+                        _apply_trade(symbol, _to_cad(cost, currency), "BUY")
+                        round_count += qty
+
+        # ──────────────────────────────────────────────────────────────
+        # STEP C: Deploy remaining cash (sweep)
+        # ──────────────────────────────────────────────────────────────
+        # Since cash target is 0%, buy the most underweight (or least
+        # overweight) existing position in each account.
+
         for acct in portfolio.accounts:
-            if acct.number in overflow_accounts:
-                continue
-
-            # Same-currency deployment
+            # Same-currency sweep (iterative to spread across positions)
             for currency in ["CAD", "USD"]:
-                acct_cash = available_cash.get(acct.number, {}).get(currency, 0)
-                if acct_cash <= 0:
-                    continue
+                for _ in range(50):
+                    acct_cash = available_cash.get(acct.number, {}).get(currency, 0)
+                    if acct_cash <= 0:
+                        break
 
-                candidates = []
-                for pos in acct.positions:
-                    if pos.currency != currency or pos.quantity <= 0:
-                        continue
-                    if pos.symbol in transient_symbols:
-                        continue
-                    holding = portfolio.holdings.get(pos.symbol)
-                    if not holding:
-                        continue
-                    ask = holding.get("ask_price", pos.current_price)
-                    if ask <= 0 or ask > acct_cash:
-                        continue
-                    drift = effective_drift.get(pos.symbol, 0)
-                    candidates.append((pos.symbol, drift, ask))
+                    cands = []
+                    for pos in acct.positions:
+                        if pos.currency != currency or pos.quantity <= 0:
+                            continue
+                        if pos.symbol in transient_symbols:
+                            continue
+                        h = portfolio.holdings.get(pos.symbol)
+                        if not h:
+                            continue
+                        a = h.get("ask_price", pos.current_price)
+                        if a <= 0 or a > acct_cash:
+                            continue
+                        cands.append((pos.symbol, effective_drift.get(pos.symbol, 0), a))
 
-                if not candidates:
-                    continue
+                    if not cands:
+                        break
 
-                candidates.sort(key=lambda x: x[1])
-                sym, _, ask = candidates[0]
+                    cands.sort(key=lambda x: x[1])
+                    sym, d, a = cands[0]
 
-                shares = int(math.floor(acct_cash / ask))
-                if shares > 0:
-                    trade = TradeRecommendation(
+                    affordable = int(math.floor(acct_cash / a))
+                    if affordable <= 0:
+                        break
+
+                    # Cap at drift gap if underweight, else dump remaining
+                    if d < -TOLERANCE_PCT:
+                        gap_cad = abs(d / 100.0) * total_value
+                        gap_n = gap_cad / usd_to_cad_rate if currency == "USD" else gap_cad
+                        shares = min(int(math.ceil(gap_n / a)), affordable)
+                    else:
+                        shares = affordable
+
+                    if shares <= 0:
+                        break
+
+                    cost = a * shares
+                    all_trades.append(TradeRecommendation(
                         symbol=sym,
                         action="BUY",
                         quantity=shares,
                         account_number=acct.number,
                         account_type=acct.account_type,
                         owner=acct.owner,
-                        price=ask,
+                        price=a,
                         currency=currency,
-                        estimated_value=ask * shares,
-                    )
-                    all_trades.append(trade)
-                    available_cash[acct.number][currency] -= trade.estimated_value
-                    _apply_trade_to_drift(
-                        sym, _to_cad(trade.estimated_value, currency), "BUY"
-                    )
+                        estimated_value=cost,
+                    ))
+                    available_cash[acct.number][currency] -= cost
+                    _apply_trade(sym, _to_cad(cost, currency), "BUY")
+                    round_count += shares
 
-            # Cross-currency deployment (e.g., USD freed from selling IVV
-            # used to buy CAD positions via USD→CAD conversion)
-            for cash_currency in ["CAD", "USD"]:
-                acct_cash = available_cash.get(acct.number, {}).get(cash_currency, 0)
+            # Cross-currency sweep (stranded cash in the wrong currency)
+            for cash_cur in ["CAD", "USD"]:
+                acct_cash = available_cash.get(acct.number, {}).get(cash_cur, 0)
                 if acct_cash <= 0:
                     continue
 
-                buy_currency = "USD" if cash_currency == "CAD" else "CAD"
-
-                candidates = []
+                buy_cur = "USD" if cash_cur == "CAD" else "CAD"
+                cands = []
                 for pos in acct.positions:
-                    if pos.currency != buy_currency or pos.quantity <= 0:
+                    if pos.currency != buy_cur or pos.quantity <= 0:
                         continue
                     if pos.symbol in transient_symbols:
                         continue
-                    holding = portfolio.holdings.get(pos.symbol)
-                    if not holding:
+                    h = portfolio.holdings.get(pos.symbol)
+                    if not h:
                         continue
-                    ask = holding.get("ask_price", pos.current_price)
-                    if ask <= 0:
+                    a = h.get("ask_price", pos.current_price)
+                    if a <= 0:
                         continue
-                    drift = effective_drift.get(pos.symbol, 0)
-                    candidates.append((pos.symbol, drift, ask))
+                    cands.append((pos.symbol, effective_drift.get(pos.symbol, 0), a))
 
-                if not candidates:
+                if not cands:
                     continue
 
-                candidates.sort(key=lambda x: x[1])
-                sym, _, ask = candidates[0]
+                cands.sort(key=lambda x: x[1])
+                sym, _, a = cands[0]
 
-                if cash_currency == "CAD":
-                    effective_buy = max(0, acct_cash - NORBERTS_GAMBIT_FEE_CAD) / usd_to_cad_rate
+                if cash_cur == "CAD":
+                    eff_buy = max(0, acct_cash - NORBERTS_GAMBIT_FEE_CAD) / usd_to_cad_rate
                 else:
-                    effective_buy = acct_cash * usd_to_cad_rate
+                    eff_buy = max(0, acct_cash * usd_to_cad_rate - NORBERTS_GAMBIT_FEE_CAD)
 
-                shares = int(math.floor(effective_buy / ask))
+                shares = int(math.floor(eff_buy / a))
                 if shares <= 0:
                     continue
 
-                cost = shares * ask
-                trade = TradeRecommendation(
+                cost = shares * a
+                all_trades.append(TradeRecommendation(
                     symbol=sym,
                     action="BUY",
                     quantity=shares,
                     account_number=acct.number,
                     account_type=acct.account_type,
                     owner=acct.owner,
-                    price=ask,
-                    currency=buy_currency,
+                    price=a,
+                    currency=buy_cur,
                     estimated_value=cost,
                     note="Requires currency conversion",
-                )
-                all_trades.append(trade)
-
-                if cash_currency == "CAD":
-                    cad_cost = cost * usd_to_cad_rate + NORBERTS_GAMBIT_FEE_CAD
-                    available_cash[acct.number]["CAD"] -= cad_cost
+                ))
+                if cash_cur == "CAD":
+                    available_cash[acct.number]["CAD"] -= (
+                        cost * usd_to_cad_rate + NORBERTS_GAMBIT_FEE_CAD
+                    )
                 else:
-                    usd_cost = cost / usd_to_cad_rate
-                    available_cash[acct.number]["USD"] -= usd_cost
+                    available_cash[acct.number]["USD"] -= (
+                        cost + NORBERTS_GAMBIT_FEE_CAD
+                    ) / usd_to_cad_rate
 
-                _apply_trade_to_drift(
-                    sym, _to_cad(cost, buy_currency), "BUY"
-                )
+                _apply_trade(sym, _to_cad(cost, buy_cur), "BUY")
+                round_count += shares
 
-    # ══════════════════════════════════════════════════════════════════
-    # PHASE 9: Cross-currency drift optimization
-    # ══════════════════════════════════════════════════════════════════
-    # After all phases, some positions (especially expensive cross-currency
-    # ones like IVV) may still be beyond tolerance because same-currency
-    # buys consumed all the cash before cross-currency conversion could
-    # happen. Fix this by reducing same-currency buys (that brought their
-    # positions to/past target) to free cash for cross-currency conversion.
-
-    for _opt_round in range(20):  # Iterate — each round buys 1 share
-        # Find the worst remaining underweight symbol beyond tolerance
-        worst_symbol = None
-        worst_drift = 0
-        for sym, drift in effective_drift.items():
-            if sym in ("CAD", "USD"):
-                continue
-            if drift < -TOLERANCE_PCT and drift < worst_drift:
-                worst_symbol = sym
-                worst_drift = drift
-
-        if worst_symbol is None:
-            break  # All within tolerance
-
-        holding = portfolio.holdings.get(worst_symbol)
-        if not holding:
+        # ── Check: any more work to do? ──
+        if round_count == 0:
             break
-
-        buy_currency = holding["currency"]
-        ask = holding.get("ask_price", holding["current_price"])
-        if ask <= 0:
-            break
-
-        source_currency = "CAD" if buy_currency == "USD" else "USD"
-
-        # Cost in source currency for 1 share (including conversion fee)
-        if source_currency == "CAD":
-            one_share_source_cost = ask * usd_to_cad_rate + NORBERTS_GAMBIT_FEE_CAD
-        else:
-            one_share_source_cost = ask / usd_to_cad_rate
-
-        # Would buying 1 more share improve drift (not overshoot)?
-        one_share_drift_impact = (_to_cad(ask, buy_currency) / total_value) * 100
-        if worst_drift + one_share_drift_impact > TOLERANCE_PCT:
-            break  # Would overshoot past tolerance in the other direction
-
-        # Find an account that holds worst_symbol and has a donor position
-        eligible = find_accounts_for_symbol(worst_symbol, portfolio.accounts)
-        bought_one = False
-
-        for acct in eligible:
-            if bought_one:
-                break
-
-            # First: check if account already has enough source cash
-            source_cash = available_cash.get(acct.number, {}).get(source_currency, 0)
-            if source_cash >= one_share_source_cost:
-                # Buy directly with existing cash
-                trade = TradeRecommendation(
-                    symbol=worst_symbol,
-                    action="BUY",
-                    quantity=1,
-                    account_number=acct.number,
-                    account_type=acct.account_type,
-                    owner=acct.owner,
-                    price=ask,
-                    currency=buy_currency,
-                    estimated_value=ask,
-                    note="Requires currency conversion",
-                )
-                all_trades.append(trade)
-                available_cash[acct.number][source_currency] -= one_share_source_cost
-                _apply_trade_to_drift(worst_symbol, _to_cad(ask, buy_currency), "BUY")
-                bought_one = True
-                continue
-
-            # Not enough cash — look for donor positions to reduce
-            donors = []
-            for pos in acct.positions:
-                if pos.currency != source_currency:
-                    continue
-                if pos.symbol in transient_symbols or pos.quantity <= 0:
-                    continue
-
-                donor_drift = effective_drift.get(pos.symbol, 0)
-                if donor_drift <= -TOLERANCE_PCT:
-                    continue  # Already underweight
-
-                donor_holding = portfolio.holdings.get(pos.symbol)
-                if not donor_holding:
-                    continue
-                donor_bid = donor_holding.get("bid_price", pos.current_price)
-                if donor_bid <= 0:
-                    continue
-
-                donors.append((pos.symbol, donor_drift, donor_bid))
-
-            if not donors:
-                continue
-
-            # Prefer donors closest to target (least overweight first —
-            # reduce the ones that have the least impact)
-            donors.sort(key=lambda x: x[1])
-
-            # Calculate total cash needed from donors (minus existing source cash)
-            cash_still_needed = one_share_source_cost - max(0, source_cash)
-            cash_raised = 0
-            donor_trades = []
-
-            for donor_sym, donor_drift, donor_bid in donors:
-                if cash_raised >= cash_still_needed:
-                    break
-
-                # How many shares to sell?
-                shortfall = cash_still_needed - cash_raised
-                shares_to_sell = int(math.ceil(shortfall / donor_bid))
-
-                # Cap: don't push donor beyond tolerance
-                max_sell_cad = ((donor_drift + TOLERANCE_PCT) / 100.0) * total_value
-                max_sell_native = max_sell_cad / usd_to_cad_rate if source_currency == "USD" else max_sell_cad
-                max_shares = int(math.floor(max_sell_native / donor_bid))
-
-                if max_shares <= 0:
-                    continue
-
-                shares_to_sell = min(shares_to_sell, max_shares)
-
-                # Also cap by held quantity in this account
-                held = int(get_position_quantity(acct, donor_sym))
-                shares_to_sell = min(shares_to_sell, held)
-
-                if shares_to_sell <= 0:
-                    continue
-
-                donor_trades.append((donor_sym, shares_to_sell, donor_bid))
-                cash_raised += shares_to_sell * donor_bid
-
-            if cash_raised + max(0, source_cash) < one_share_source_cost:
-                continue  # Can't raise enough
-
-            # Execute: sell donor positions, then buy target
-            for donor_sym, sell_qty, donor_bid in donor_trades:
-                sell_trade = TradeRecommendation(
-                    symbol=donor_sym,
-                    action="SELL",
-                    quantity=sell_qty,
-                    account_number=acct.number,
-                    account_type=acct.account_type,
-                    owner=acct.owner,
-                    price=donor_bid,
-                    currency=source_currency,
-                    estimated_value=donor_bid * sell_qty,
-                )
-                all_trades.append(sell_trade)
-                available_cash[acct.number][source_currency] += sell_trade.estimated_value
-                _apply_trade_to_drift(
-                    donor_sym, _to_cad(sell_trade.estimated_value, source_currency), "SELL"
-                )
-
-            buy_trade = TradeRecommendation(
-                symbol=worst_symbol,
-                action="BUY",
-                quantity=1,
-                account_number=acct.number,
-                account_type=acct.account_type,
-                owner=acct.owner,
-                price=ask,
-                currency=buy_currency,
-                estimated_value=ask,
-                note="Requires currency conversion",
-            )
-            all_trades.append(buy_trade)
-            available_cash[acct.number][source_currency] -= one_share_source_cost
-            _apply_trade_to_drift(worst_symbol, _to_cad(ask, buy_currency), "BUY")
-            bought_one = True
-
-        if not bought_one:
-            break  # No account could fund another share
 
     # ══════════════════════════════════════════════════════════════════
     # POST-PROCESSING: Net and consolidate trades
     # ══════════════════════════════════════════════════════════════════
-    # Trades for the same symbol + account may have been generated as
-    # both buys and sells across phases (e.g., sell 47 ENB + buy 60 ENB).
-    # Net them into a single trade per (symbol, account).
+    # Multiple rounds may generate buys and sells for the same
+    # (symbol, account). Net them into a single trade.
 
     position_map = {}  # (symbol, account_number) -> list of trades
     for trade in all_trades:
         key = (trade.symbol, trade.account_number)
-        if key not in position_map:
-            position_map[key] = []
-        position_map[key].append(trade)
+        position_map.setdefault(key, []).append(trade)
 
     final_trades = []
     for (symbol, acct_num), trades_list in position_map.items():
-        total_buy_qty = 0
-        total_sell_qty = 0
+        total_buy = 0
+        total_sell = 0
         buy_price = 0
         sell_price = 0
         template = trades_list[0]
@@ -1100,47 +494,47 @@ def calculate_trades(
 
         for t in trades_list:
             if t.action == "BUY":
-                total_buy_qty += t.quantity
+                total_buy += t.quantity
                 buy_price = t.price
                 if t.note and not buy_note:
                     buy_note = t.note
             else:
-                total_sell_qty += t.quantity
+                total_sell += t.quantity
                 sell_price = t.price
                 if t.note and not sell_note:
                     sell_note = t.note
 
-        net_qty = total_buy_qty - total_sell_qty
+        net = total_buy - total_sell
 
-        if net_qty > 0:
+        if net > 0:
             price = buy_price if buy_price > 0 else template.price
             final_trades.append(TradeRecommendation(
                 symbol=symbol,
                 action="BUY",
-                quantity=net_qty,
+                quantity=net,
                 account_number=acct_num,
                 account_type=template.account_type,
                 owner=template.owner,
                 price=price,
                 currency=template.currency,
-                estimated_value=price * net_qty,
+                estimated_value=price * net,
                 note=buy_note,
             ))
-        elif net_qty < 0:
+        elif net < 0:
             price = sell_price if sell_price > 0 else template.price
             final_trades.append(TradeRecommendation(
                 symbol=symbol,
                 action="SELL",
-                quantity=abs(net_qty),
+                quantity=abs(net),
                 account_number=acct_num,
                 account_type=template.account_type,
                 owner=template.owner,
                 price=price,
                 currency=template.currency,
-                estimated_value=price * abs(net_qty),
+                estimated_value=price * abs(net),
                 note=sell_note,
             ))
-        # If net_qty == 0: trades cancel out — omit entirely
+        # net == 0: trades cancel out — omit
 
     return final_trades
 
@@ -1204,9 +598,7 @@ def simulate_rebalance(
             else:
                 projected_cash_usd += trade.estimated_value
 
-    # Adjust for conversion rounding: when a trade partially uses native
-    # cash and partially needs conversion, the simulation may over-deduct
-    # from one currency. In practice the conversion handles the exact split.
+    # Adjust for conversion rounding
     if projected_cash_cad < 0:
         projected_cash_usd += projected_cash_cad / usd_to_cad_rate
         projected_cash_cad = 0
