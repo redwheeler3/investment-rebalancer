@@ -355,7 +355,7 @@ def display_transient_alerts(transient_alerts: list):
     console.print()
 
 
-def display_account_summary(accounts: list):
+def display_account_summary(accounts: list, usd_to_cad_rate: float):
     """Display a summary of all accounts."""
     table = Table(
         title="Account Summary",
@@ -364,12 +364,18 @@ def display_account_summary(accounts: list):
         header_style="bold magenta",
     )
 
-    table.add_column("Owner", style="bold", min_width=8)
+    table.add_column("Owner", min_width=8)
     table.add_column("Type", min_width=15)
     table.add_column("Number", min_width=10)
+    table.add_column("Total Value (CAD)", justify="right", min_width=16)
     table.add_column("Cash CAD", justify="right", min_width=12)
     table.add_column("Cash USD", justify="right", min_width=12)
     table.add_column("Positions", justify="center", min_width=10)
+
+    # Track totals for the summary row
+    total_value_sum = 0.0
+    total_cash_cad_sum = 0.0
+    total_cash_usd_sum = 0.0
 
     for acct in accounts:
         # Count non-zero positions
@@ -378,14 +384,43 @@ def display_account_summary(accounts: list):
             sorted(set(p.symbol for p in acct.positions if p.quantity > 0))
         )
 
+        # Calculate total account value in CAD
+        total_value_cad = acct.cash_cad + (acct.cash_usd * usd_to_cad_rate)
+        
+        # Add position values, converting USD to CAD
+        for pos in acct.positions:
+            if pos.quantity > 0:
+                if pos.currency == "USD":
+                    total_value_cad += pos.market_value * usd_to_cad_rate
+                else:
+                    total_value_cad += pos.market_value
+
+        # Accumulate totals
+        total_value_sum += total_value_cad
+        total_cash_cad_sum += acct.cash_cad
+        total_cash_usd_sum += acct.cash_usd
+
         table.add_row(
             acct.owner,
             acct.account_type,
             acct.number,
+            f"${total_value_cad:,.2f}",
             f"${acct.cash_cad:,.2f}",
             f"${acct.cash_usd:,.2f}",
             f"{pos_count} ({pos_symbols})" if pos_count <= 5 else str(pos_count),
         )
+
+    # Add total row
+    table.add_section()
+    table.add_row(
+        "[bold]Total[/bold]",
+        "",
+        "",
+        f"[bold green]${total_value_sum:,.2f}[/bold green]",
+        f"[bold]${total_cash_cad_sum:,.2f}[/bold]",
+        f"[bold]${total_cash_usd_sum:,.2f}[/bold]",
+        "",
+    )
 
     console.print(table)
     console.print()
@@ -424,7 +459,7 @@ def display_full_report(
     display_accuracy(accuracy, projected_accuracy)
     display_all_time_high(all_time_high)
     display_holdings_summary(portfolio, usd_to_cad_rate)
-    display_account_summary(portfolio.accounts)
+    display_account_summary(portfolio.accounts, usd_to_cad_rate)
     display_allocations(current_allocations, targets, drifts)
     display_transient_alerts(transient_alerts)
     display_trades(trades)
