@@ -149,6 +149,20 @@ def _sweep_candidates(state: RebalanceState, acct, currency: str, max_price: flo
     return candidates
 
 
+def _is_effectively_single_currency_account(state: RebalanceState, acct) -> bool:
+    """Whether an account effectively holds only one position currency.
+
+    Transient symbols are ignored so temporary holdings like DLR do not make an
+    otherwise single-currency account look multi-currency.
+    """
+    currencies = {
+        pos.currency
+        for pos in acct.positions
+        if pos.quantity > 0 and pos.symbol not in state.transient_symbols
+    }
+    return len(currencies) == 1
+
+
 def _record_trade(state: RebalanceState, trade: TradeRecommendation):
     """Append a trade and update drift + position deltas.
 
@@ -462,9 +476,15 @@ def _sweep_same_currency(state: RebalanceState, acct) -> int:
 
 
 def _sweep_cross_currency(state: RebalanceState, acct) -> int:
-    """Convert stranded cash in the wrong currency and buy the best position."""
+    """Convert stranded cash in the wrong currency and buy the best position.
+
+    Cross-currency sweep buys are more conservative than same-currency sweeps:
+    only allow them when the destination symbol is still meaningfully
+    underweight, or when the account is effectively single-currency.
+    """
     count = 0
     fee = state.norberts_gambit_fee_cad
+    is_single_currency = _is_effectively_single_currency_account(state, acct)
 
     for source_currency in ["CAD", "USD"]:
         source_cash = state.available_cash.get(acct.number, {}).get(source_currency, 0)
@@ -476,7 +496,10 @@ def _sweep_cross_currency(state: RebalanceState, acct) -> int:
         if not candidates:
             continue
 
-        best_symbol, _, best_ask = candidates[0]
+        best_symbol, best_drift, best_ask = candidates[0]
+
+        if not is_single_currency and best_drift >= -TOLERANCE_PCT:
+            continue
 
         # Convert source cash to target currency, less Norbert's Gambit fee
         if source_currency == "CAD":
