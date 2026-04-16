@@ -407,7 +407,7 @@ def display_account_summary(accounts: list, usd_to_cad_rate: float):
             f"${total_value_cad:,.2f}",
             f"${acct.cash_cad:,.2f}",
             f"${acct.cash_usd:,.2f}",
-            f"{pos_count} ({pos_symbols})" if pos_count <= 5 else str(pos_count),
+            f"{pos_count} ({pos_symbols})" if pos_count > 0 else "0",
         )
 
     # Add total row
