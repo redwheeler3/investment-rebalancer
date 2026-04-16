@@ -5,7 +5,6 @@ Collects positions and balances from all accounts across all Questrade logins
 and builds a unified portfolio view.
 """
 
-from copy import deepcopy
 from dataclasses import dataclass, field
 
 
@@ -43,7 +42,6 @@ class PortfolioSummary:
     """Aggregated portfolio across all accounts."""
 
     accounts: list  # List of AccountInfo
-    full_holdings: dict = field(default_factory=dict)  # Unfiltered holdings for display
     # Keyed by symbol -> total market value in CAD
     holdings: dict = field(default_factory=dict)
     total_value_cad: float = 0.0
@@ -180,7 +178,6 @@ def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
 
     return PortfolioSummary(
         accounts=all_accounts,
-        full_holdings=deepcopy(holdings),
         holdings=holdings,
         total_value_cad=total_value_cad,
         cash_cad_total=total_cash_cad,
@@ -188,22 +185,20 @@ def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
     )
 
 
-def freeze_symbols(portfolio: PortfolioSummary, symbols: set):
-    """
-    Remove symbols from holdings while keeping their value in total_value_cad.
+def get_holdings_view(portfolio: PortfolioSummary, excluded_symbols: set = None) -> dict:
+    """Return a holdings view, optionally excluding specific symbols.
 
-    Used for transient symbols that shouldn't be traded. The value stays
-    in total_value_cad so allocation percentages remain accurate — the
-    excluded portion appears as a small "gap" where allocations sum to
-    slightly less than 100%.
-
-    Args:
-        portfolio: The portfolio to modify in place.
-        symbols: Set of symbol strings to freeze.
+    The portfolio keeps one canonical holdings map. Callers that need a
+    filtered view for rebalancing or allocation tables should request it
+    explicitly instead of mutating portfolio state.
     """
-    for symbol in symbols:
-        if symbol in portfolio.holdings:
-            del portfolio.holdings[symbol]
+    if not excluded_symbols:
+        return portfolio.holdings
+    return {
+        symbol: data
+        for symbol, data in portfolio.holdings.items()
+        if symbol not in excluded_symbols
+    }
 
 
 def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
@@ -247,19 +242,11 @@ def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
                 portfolio.holdings[symbol]["bid_price"] = bid if bid and bid > 0 else last
                 portfolio.holdings[symbol]["ask_price"] = ask if ask and ask > 0 else last
                 portfolio.holdings[symbol]["current_price"] = last if last and last > 0 else portfolio.holdings[symbol]["current_price"]
-            if symbol in portfolio.full_holdings:
-                bid = quote.get("bidPrice") or quote.get("lastTradePrice", 0)
-                ask = quote.get("askPrice") or quote.get("lastTradePrice", 0)
-                last = quote.get("lastTradePrice", 0)
-
-                portfolio.full_holdings[symbol]["bid_price"] = bid if bid and bid > 0 else last
-                portfolio.full_holdings[symbol]["ask_price"] = ask if ask and ask > 0 else last
-                portfolio.full_holdings[symbol]["current_price"] = last if last and last > 0 else portfolio.full_holdings[symbol]["current_price"]
     except Exception as e:
         print(f"  Warning: Could not fetch quotes: {e}")
 
 
-def get_current_allocations(portfolio: PortfolioSummary, usd_to_cad_rate: float) -> dict:
+def get_current_allocations(portfolio: PortfolioSummary, usd_to_cad_rate: float, excluded_symbols: set = None) -> dict:
     """
     Calculate current allocation percentages for each holding.
 
@@ -285,7 +272,7 @@ def get_current_allocations(portfolio: PortfolioSummary, usd_to_cad_rate: float)
     allocations["USD"] = usd_cash_pct
 
     # Holdings allocations
-    for symbol, data in portfolio.holdings.items():
+    for symbol, data in get_holdings_view(portfolio, excluded_symbols).items():
         allocations[symbol] = (data["value_cad"] / portfolio.total_value_cad) * 100
 
     return allocations

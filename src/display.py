@@ -77,9 +77,8 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
 
     # Collect holdings sorted alphabetically
     rows = []
-    holdings_for_display = getattr(portfolio, "full_holdings", portfolio.holdings)
-    for symbol in sorted(holdings_for_display.keys()):
-        data = holdings_for_display[symbol]
+    for symbol in sorted(portfolio.holdings.keys()):
+        data = portfolio.holdings[symbol]
         qty = data["total_quantity"]
         price = data["current_price"]
         currency = data["currency"]
@@ -374,6 +373,7 @@ def display_account_summary(accounts: list, usd_to_cad_rate: float):
     table.add_column("Positions", justify="center")
 
     # Track totals for the summary row
+    total_positions_value_sum = 0.0
     total_value_sum = 0.0
     total_cash_cad_sum = 0.0
     total_cash_usd_sum = 0.0
@@ -385,18 +385,22 @@ def display_account_summary(accounts: list, usd_to_cad_rate: float):
             sorted(set(p.symbol for p in acct.positions if p.quantity > 0))
         )
 
-        # Calculate total account value in CAD
+        # Calculate account values in CAD
+        positions_value_cad = 0.0
         total_value_cad = acct.cash_cad + (acct.cash_usd * usd_to_cad_rate)
         
         # Add position values, converting USD to CAD
         for pos in acct.positions:
             if pos.quantity > 0:
                 if pos.currency == "USD":
-                    total_value_cad += pos.market_value * usd_to_cad_rate
+                    position_value_cad = pos.market_value * usd_to_cad_rate
                 else:
-                    total_value_cad += pos.market_value
+                    position_value_cad = pos.market_value
+                positions_value_cad += position_value_cad
+                total_value_cad += position_value_cad
 
         # Accumulate totals
+        total_positions_value_sum += positions_value_cad
         total_value_sum += total_value_cad
         total_cash_cad_sum += acct.cash_cad
         total_cash_usd_sum += acct.cash_usd
@@ -407,7 +411,7 @@ def display_account_summary(accounts: list, usd_to_cad_rate: float):
             acct.number,
             f"${total_value_cad:,.2f}",
             f"${acct.cash_cad:,.2f}",
-            f"${acct.cash_usd:,.2f}",
+            f"US${acct.cash_usd:,.2f}",
             f"{pos_count} ({pos_symbols})" if pos_count > 0 else "0",
         )
 
@@ -417,10 +421,10 @@ def display_account_summary(accounts: list, usd_to_cad_rate: float):
         "[bold]Total[/bold]",
         "",
         "",
-        f"[bold green]${total_value_sum:,.2f}[/bold green]",
+        f"[bold]${total_positions_value_sum:,.2f}[/bold]",
         f"[bold]${total_cash_cad_sum:,.2f}[/bold]",
-        f"[bold]${total_cash_usd_sum:,.2f}[/bold]",
-        "",
+        f"[bold]US${total_cash_usd_sum:,.2f}[/bold]",
+        f"[bold green]${total_value_sum:,.2f}[/bold green]",
     )
 
     console.print(table)

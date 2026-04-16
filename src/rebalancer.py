@@ -16,7 +16,13 @@ Tracks per-account cash throughout all steps.
 
 import math
 from dataclasses import dataclass, field
-from src.portfolio import PortfolioSummary, get_current_allocations, get_drifts, calculate_accuracy
+from src.portfolio import (
+    PortfolioSummary,
+    get_current_allocations,
+    get_drifts,
+    calculate_accuracy,
+    get_holdings_view,
+)
 from src.rules import (
     allocate_sell,
     effective_qty,
@@ -49,6 +55,7 @@ class RebalanceState:
     norberts_gambit_fee_cad: float
     transient_symbols: set
     total_value: float
+    holdings_view: dict = field(default_factory=dict)     # symbol -> holding data (tradeable view)
     available_cash: dict = field(default_factory=dict)   # acct_number -> {"CAD": float, "USD": float}
     effective_drift: dict = field(default_factory=dict)   # symbol -> drift %
     position_deltas: dict = field(default_factory=dict)   # (acct_number, symbol) -> qty change
@@ -135,7 +142,7 @@ def _sweep_candidates(state: RebalanceState, acct, currency: str, max_price: flo
         # Never sweep cash into 0%-target symbols (unknowns being sold off).
         if state.targets.get(pos.symbol, 0) <= 0 and pos.symbol not in ("CAD", "USD"):
             continue
-        holding = state.portfolio.holdings.get(pos.symbol)
+        holding = state.holdings_view.get(pos.symbol)
         if not holding:
             continue
         ask_price = holding.get("ask_price", pos.current_price)
@@ -197,7 +204,7 @@ def _step_sell_overweight(state: RebalanceState) -> int:
     overweight.sort(key=lambda x: x[1], reverse=True)  # Most overweight first
 
     for symbol, drift in overweight:
-        holding = state.portfolio.holdings.get(symbol)
+        holding = state.holdings_view.get(symbol)
         if not holding:
             continue
         bid = holding.get("bid_price", holding["current_price"])
@@ -245,7 +252,7 @@ def _step_buy_underweight(state: RebalanceState, existing_only: bool) -> int:
         if drift >= -TOLERANCE_PCT:
             continue
 
-        holding = state.portfolio.holdings.get(symbol)
+        holding = state.holdings_view.get(symbol)
         if not holding:
             continue
         ask = holding.get("ask_price", holding["current_price"])
@@ -349,7 +356,7 @@ def _try_displacement_sell(
             continue
         if pos.currency != currency or pos.quantity <= 0:
             continue
-        pos_holding = state.portfolio.holdings.get(pos.symbol)
+        pos_holding = state.holdings_view.get(pos.symbol)
         if not pos_holding:
             continue
         pos_bid = pos_holding.get("bid_price", pos.current_price)
@@ -647,7 +654,11 @@ def calculate_trades(
         return []
 
     # Build shared state
-    current_alloc = get_current_allocations(portfolio, usd_to_cad_rate)
+    current_alloc = get_current_allocations(
+        portfolio,
+        usd_to_cad_rate,
+        excluded_symbols=transient_symbols,
+    )
     drifts = get_drifts(current_alloc, targets)
 
     state = RebalanceState(
@@ -657,6 +668,7 @@ def calculate_trades(
         norberts_gambit_fee_cad=norberts_gambit_fee_cad,
         transient_symbols=transient_symbols,
         total_value=total_value,
+        holdings_view=get_holdings_view(portfolio, transient_symbols),
         effective_drift=dict(drifts),
     )
 
@@ -685,6 +697,7 @@ def simulate_rebalance(
     trades: list,
     targets: dict,
     usd_to_cad_rate: float,
+    hidden_symbols: set = None,
 ) -> dict:
     """
     Simulate what the portfolio would look like after executing the trades.
@@ -700,15 +713,15 @@ def simulate_rebalance(
     Returns:
         Dictionary with 'projected_allocations' and 'projected_accuracy'.
     """
-    # Start with current holdings values.
-    # Use the full holdings set for total-value math so transient/frozen symbols
-    # still contribute to the projected denominator, but keep track of which
-    # symbols are hidden from allocation display.
-    source_holdings = getattr(portfolio, "full_holdings", portfolio.holdings)
+    # Start with current holdings values from the canonical holdings map.
+    # Hidden symbols still contribute to total-value math, but can be omitted
+    # from the displayed projected allocation rows.
+    source_holdings = portfolio.holdings
     projected_holdings = {}
     for symbol, data in source_holdings.items():
         projected_holdings[symbol] = data["value_cad"]
-    hidden_symbols = set(source_holdings.keys()) - set(portfolio.holdings.keys())
+    if hidden_symbols is None:
+        hidden_symbols = set()
 
     projected_cash_cad = portfolio.cash_cad_total
     projected_cash_usd = portfolio.cash_usd_total

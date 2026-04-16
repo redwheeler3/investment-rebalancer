@@ -22,7 +22,7 @@ if sys.platform == "win32":
         sys.stderr.reconfigure(encoding="utf-8")
 
 from src.questrade_client import QuestradeClient
-from src.portfolio import build_portfolio, freeze_symbols, fetch_quotes_for_holdings, get_current_allocations, calculate_accuracy, get_drifts
+from src.portfolio import build_portfolio, fetch_quotes_for_holdings, get_current_allocations, calculate_accuracy, get_drifts
 from src.rebalancer import calculate_trades, simulate_rebalance
 from src.rules import get_transient_status
 from src.currency import get_usd_to_cad_rate, fetch_dlr_quotes, calculate_currency_needs
@@ -139,19 +139,14 @@ def run_rebalancer():
     console.print("  [dim]Fetching market quotes (bid/ask)...[/dim]")
     fetch_quotes_for_holdings(portfolio, clients)
 
-    # Calculate initial allocations and drift
-    current_allocations = get_current_allocations(portfolio, usd_to_cad_rate)
-    drifts = get_drifts(current_allocations, targets)
-
-    # Exclude transient symbols from rebalancing.
-    # Their value stays in total_value_cad so allocation math stays correct.
+    # Identify transient symbols once, then derive filtered views explicitly.
     transient_status = get_transient_status(portfolio, transient_symbols)
-    if transient_status["symbols"]:
-        freeze_symbols(portfolio, transient_status["symbols"])
-        # Recompute after freezing (value stays in total, so other
-        # allocations shift slightly — this is correct)
-        current_allocations = get_current_allocations(portfolio, usd_to_cad_rate)
-        drifts = get_drifts(current_allocations, targets)
+    current_allocations = get_current_allocations(
+        portfolio,
+        usd_to_cad_rate,
+        excluded_symbols=transient_status["symbols"],
+    )
+    drifts = get_drifts(current_allocations, targets)
 
     accuracy = calculate_accuracy(current_allocations, targets)
     transient_alerts = transient_status["alerts"]
@@ -176,7 +171,13 @@ def run_rebalancer():
     projected_accuracy = None
     projected_allocations = None
     if trades:
-        simulation = simulate_rebalance(portfolio, trades, targets, usd_to_cad_rate)
+        simulation = simulate_rebalance(
+            portfolio,
+            trades,
+            targets,
+            usd_to_cad_rate,
+            hidden_symbols=transient_status["symbols"],
+        )
         projected_accuracy = simulation["projected_accuracy"]
         projected_allocations = simulation["projected_allocations"]
 
