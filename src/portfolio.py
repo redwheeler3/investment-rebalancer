@@ -39,12 +39,36 @@ class AccountInfo:
 
 
 @dataclass
+class HoldingAccountDetail:
+    """How a holding is distributed within a specific account."""
+
+    account_number: str
+    account_type: str
+    owner: str
+    quantity: float
+    market_value: float
+
+
+@dataclass
+class HoldingSummary:
+    """Aggregated holding data across all accounts for one symbol."""
+
+    value_cad: float = 0.0
+    total_quantity: float = 0.0
+    current_price: float = 0.0
+    currency: str = "CAD"
+    bid_price: float = 0.0
+    ask_price: float = 0.0
+    accounts: list = field(default_factory=list)
+
+
+@dataclass
 class PortfolioSummary:
     """Aggregated portfolio across all accounts."""
 
     accounts: list  # List of AccountInfo
     # Keyed by symbol -> total market value in CAD
-    holdings: dict = field(default_factory=dict)
+    holdings: dict = field(default_factory=dict)  # symbol -> HoldingSummary
     total_value_cad: float = 0.0
     cash_cad_total: float = 0.0
     cash_usd_total: float = 0.0
@@ -66,7 +90,7 @@ def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
         PortfolioSummary with all accounts, positions, and aggregated values.
     """
     all_accounts = []
-    holdings = {}  # symbol -> {"value_cad": float, "quantity": float, "price": float, "currency": str}
+    holdings = {}  # symbol -> HoldingSummary
     total_value_cad = 0.0
     total_cash_cad = 0.0
     total_cash_usd = 0.0
@@ -137,26 +161,26 @@ def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
                     value_cad = market_value * usd_to_cad_rate
 
                 if symbol not in holdings:
-                    holdings[symbol] = {
-                        "value_cad": 0.0,
-                        "total_quantity": 0.0,
-                        "current_price": current_price,
-                        "currency": currency,
-                        "accounts": [],  # Which accounts hold this
-                    }
+                    holdings[symbol] = HoldingSummary(
+                        current_price=current_price,
+                        currency=currency,
+                        bid_price=current_price,
+                        ask_price=current_price,
+                    )
 
-                holdings[symbol]["value_cad"] += value_cad
-                holdings[symbol]["total_quantity"] += quantity
-                holdings[symbol]["current_price"] = current_price
-                holdings[symbol]["bid_price"] = current_price  # Will be updated with quote data
-                holdings[symbol]["ask_price"] = current_price  # Will be updated with quote data
-                holdings[symbol]["accounts"].append({
-                    "account_number": acct_number,
-                    "account_type": acct_type,
-                    "owner": display_owner,
-                    "quantity": quantity,
-                    "market_value": market_value,
-                })
+                holding = holdings[symbol]
+                holding.value_cad += value_cad
+                holding.total_quantity += quantity
+                holding.current_price = current_price
+                holding.bid_price = current_price  # Will be updated with quote data
+                holding.ask_price = current_price  # Will be updated with quote data
+                holding.accounts.append(HoldingAccountDetail(
+                    account_number=acct_number,
+                    account_type=acct_type,
+                    owner=display_owner,
+                    quantity=quantity,
+                    market_value=market_value,
+                ))
 
             account_info = AccountInfo(
                 number=acct_number,
@@ -175,8 +199,8 @@ def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
 
     # Calculate total portfolio value in CAD
     total_value_cad = total_cash_cad + (total_cash_usd * usd_to_cad_rate)
-    for symbol, data in holdings.items():
-        total_value_cad += data["value_cad"]
+    for holding in holdings.values():
+        total_value_cad += holding.value_cad
 
     return PortfolioSummary(
         accounts=all_accounts,
@@ -289,9 +313,10 @@ def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
                 last = quote.get("lastTradePrice", 0)
 
                 # Use last trade price as fallback if bid/ask is 0 or None
-                portfolio.holdings[symbol]["bid_price"] = bid if bid and bid > 0 else last
-                portfolio.holdings[symbol]["ask_price"] = ask if ask and ask > 0 else last
-                portfolio.holdings[symbol]["current_price"] = last if last and last > 0 else portfolio.holdings[symbol]["current_price"]
+                holding = portfolio.holdings[symbol]
+                holding.bid_price = bid if bid and bid > 0 else last
+                holding.ask_price = ask if ask and ask > 0 else last
+                holding.current_price = last if last and last > 0 else holding.current_price
     except Exception as e:
         print(f"  Warning: Could not fetch quotes: {e}")
 
@@ -309,8 +334,9 @@ def get_current_allocations(portfolio: PortfolioSummary, usd_to_cad_rate: float,
         Includes "CAD" and "USD" entries for cash positions.
     """
     holdings_value_cad = {
-        symbol: data["value_cad"]
+        symbol: holding.value_cad
         for symbol, data in portfolio.holdings.items()
+        for holding in [data]
     }
     return calculate_allocations_for_values(
         holdings_value_cad=holdings_value_cad,
@@ -399,8 +425,9 @@ def build_allocation_snapshot(
 ) -> AllocationSnapshot:
     """Build allocations, drifts, and accuracy from a portfolio."""
     holdings_value_cad = {
-        symbol: data["value_cad"]
+        symbol: holding.value_cad
         for symbol, data in portfolio.holdings.items()
+        for holding in [data]
     }
     return build_allocation_snapshot_from_values(
         holdings_value_cad=holdings_value_cad,

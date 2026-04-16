@@ -37,7 +37,7 @@ def sweep_candidates(state: RebalanceState, acct, currency: str, max_price: floa
         if not holding:
             continue
 
-        ask_price_native = holding.get("ask_price", pos.current_price)
+        ask_price_native = holding.ask_price or pos.current_price
         if ask_price_native <= 0:
             continue
         if max_price is not None and ask_price_native > max_price:
@@ -75,8 +75,8 @@ def step_sell_overweight(state: RebalanceState) -> int:
         if not holding:
             continue
 
-        bid_price_native = holding.get("bid_price", holding["current_price"])
-        currency = holding["currency"]
+        bid_price_native = holding.bid_price or holding.current_price
+        currency = holding.currency
         if bid_price_native <= 0:
             continue
 
@@ -121,8 +121,8 @@ def step_buy_underweight(state: RebalanceState, existing_only: bool) -> int:
         if not holding:
             continue
 
-        ask_price_native = holding.get("ask_price", holding["current_price"])
-        currency = holding["currency"]
+        ask_price_native = holding.ask_price or holding.current_price
+        currency = holding.currency
         if ask_price_native <= 0:
             continue
 
@@ -225,7 +225,7 @@ def try_displacement_sell(
         if not holding:
             continue
 
-        bid_price_native = holding.get("bid_price", pos.current_price)
+        bid_price_native = holding.bid_price or pos.current_price
         if bid_price_native <= 0:
             continue
 

@@ -17,8 +17,8 @@ def simulate_rebalance(
 ):
     """Return the projected allocation snapshot after applying the trades."""
     projected_holdings_value_cad = {
-        symbol: data["value_cad"]
-        for symbol, data in portfolio.holdings.items()
+        symbol: holding.value_cad
+        for symbol, holding in portfolio.holdings.items()
     }
     projected_cash_cad = portfolio.cash_cad_total
     projected_cash_usd = portfolio.cash_usd_total

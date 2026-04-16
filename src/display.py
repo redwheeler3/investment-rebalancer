@@ -106,11 +106,11 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
     # Collect holdings sorted alphabetically
     rows = []
     for symbol in sorted(portfolio.holdings.keys()):
-        data = portfolio.holdings[symbol]
-        qty = data["total_quantity"]
-        price = data["current_price"]
-        currency = data["currency"]
-        value_cad = data["value_cad"]
+        holding = portfolio.holdings[symbol]
+        qty = holding.total_quantity
+        price = holding.current_price
+        currency = holding.currency
+        value_cad = holding.value_cad
 
         price_str = _format_price(price, currency)
         qty_str = _format_shares(qty)
