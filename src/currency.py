@@ -227,8 +227,12 @@ def calculate_currency_needs(
             else:
                 dlr_shares = 0
 
+            # Skip conversion if we can't buy even 1 DLR share (fee exceeds amount)
+            if dlr_shares <= 0:
+                continue
+
             # Recalculate actual USD we'd get
-            actual_usd = (dlr_shares * dlr_price) / usd_to_cad_rate if dlr_shares > 0 else usd_shortfall
+            actual_usd = (dlr_shares * dlr_price) / usd_to_cad_rate
 
             if cad_needed > 0.01:
                 conversions.append(CurrencyConversion(
@@ -265,6 +269,10 @@ def calculate_currency_needs(
                 dlr_shares = 0
 
             actual_cad = (dlr_shares * dlr_u_price * usd_to_cad_rate) if dlr_shares > 0 else cad_shortfall
+
+            # Skip conversion if we can't buy even 1 DLR.U share (fee exceeds amount)
+            if dlr_shares <= 0:
+                continue
 
             if usd_needed > 0.01:
                 conversions.append(CurrencyConversion(
