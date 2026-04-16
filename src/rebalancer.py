@@ -700,10 +700,15 @@ def simulate_rebalance(
     Returns:
         Dictionary with 'projected_allocations' and 'projected_accuracy'.
     """
-    # Start with current holdings values
+    # Start with current holdings values.
+    # Use the full holdings set for total-value math so transient/frozen symbols
+    # still contribute to the projected denominator, but keep track of which
+    # symbols are hidden from allocation display.
+    source_holdings = getattr(portfolio, "full_holdings", portfolio.holdings)
     projected_holdings = {}
-    for symbol, data in portfolio.holdings.items():
+    for symbol, data in source_holdings.items():
         projected_holdings[symbol] = data["value_cad"]
+    hidden_symbols = set(source_holdings.keys()) - set(portfolio.holdings.keys())
 
     projected_cash_cad = portfolio.cash_cad_total
     projected_cash_usd = portfolio.cash_usd_total
@@ -756,6 +761,8 @@ def simulate_rebalance(
         projected_alloc["CAD"] = (projected_cash_cad / projected_total) * 100
         projected_alloc["USD"] = ((projected_cash_usd * usd_to_cad_rate) / projected_total) * 100
         for symbol, val in projected_holdings.items():
+            if symbol in hidden_symbols:
+                continue
             projected_alloc[symbol] = (val / projected_total) * 100
 
     projected_accuracy = calculate_accuracy(projected_alloc, targets)
