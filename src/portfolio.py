@@ -5,6 +5,7 @@ Collects positions and balances from all accounts across all Questrade logins
 and builds a unified portfolio view.
 """
 
+from copy import deepcopy
 from dataclasses import dataclass, field
 
 
@@ -42,6 +43,7 @@ class PortfolioSummary:
     """Aggregated portfolio across all accounts."""
 
     accounts: list  # List of AccountInfo
+    full_holdings: dict = field(default_factory=dict)  # Unfiltered holdings for display
     # Keyed by symbol -> total market value in CAD
     holdings: dict = field(default_factory=dict)
     total_value_cad: float = 0.0
@@ -178,6 +180,7 @@ def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
 
     return PortfolioSummary(
         accounts=all_accounts,
+        full_holdings=deepcopy(holdings),
         holdings=holdings,
         total_value_cad=total_value_cad,
         cash_cad_total=total_cash_cad,
@@ -243,6 +246,15 @@ def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
                 # Use last trade price as fallback if bid/ask is 0 or None
                 portfolio.holdings[symbol]["bid_price"] = bid if bid and bid > 0 else last
                 portfolio.holdings[symbol]["ask_price"] = ask if ask and ask > 0 else last
+                portfolio.holdings[symbol]["current_price"] = last if last and last > 0 else portfolio.holdings[symbol]["current_price"]
+            if symbol in portfolio.full_holdings:
+                bid = quote.get("bidPrice") or quote.get("lastTradePrice", 0)
+                ask = quote.get("askPrice") or quote.get("lastTradePrice", 0)
+                last = quote.get("lastTradePrice", 0)
+
+                portfolio.full_holdings[symbol]["bid_price"] = bid if bid and bid > 0 else last
+                portfolio.full_holdings[symbol]["ask_price"] = ask if ask and ask > 0 else last
+                portfolio.full_holdings[symbol]["current_price"] = last if last and last > 0 else portfolio.full_holdings[symbol]["current_price"]
     except Exception as e:
         print(f"  Warning: Could not fetch quotes: {e}")
 

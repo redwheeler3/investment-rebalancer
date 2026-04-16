@@ -77,8 +77,9 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
 
     # Collect holdings sorted alphabetically
     rows = []
-    for symbol in sorted(portfolio.holdings.keys()):
-        data = portfolio.holdings[symbol]
+    holdings_for_display = getattr(portfolio, "full_holdings", portfolio.holdings)
+    for symbol in sorted(holdings_for_display.keys()):
+        data = holdings_for_display[symbol]
         qty = data["total_quantity"]
         price = data["current_price"]
         currency = data["currency"]
