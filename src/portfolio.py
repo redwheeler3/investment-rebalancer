@@ -53,8 +53,9 @@ def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
     """
     Build a unified portfolio from multiple Questrade client connections.
 
-    All positions are included in holdings. Transient symbols are
-    handled post-build by freeze_symbols().
+    All positions are included in the canonical holdings map. Callers that
+    need a filtered view (for example, excluding transient symbols from
+    rebalancing) should derive that view explicitly with get_holdings_view().
 
     Args:
         clients: List of QuestradeClient instances.
@@ -182,6 +183,29 @@ def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
         total_value_cad=total_value_cad,
         cash_cad_total=total_cash_cad,
         cash_usd_total=total_cash_usd,
+    )
+
+
+def get_position_value_cad(position: Position, usd_to_cad_rate: float) -> float:
+    """Return a position's market value converted to CAD."""
+    return position.market_value * usd_to_cad_rate if position.currency == "USD" else position.market_value
+
+
+def get_account_positions_value_cad(account: AccountInfo, usd_to_cad_rate: float) -> float:
+    """Return the total CAD value of all non-zero positions in an account."""
+    return sum(
+        get_position_value_cad(pos, usd_to_cad_rate)
+        for pos in account.positions
+        if pos.quantity > 0
+    )
+
+
+def get_account_total_value_cad(account: AccountInfo, usd_to_cad_rate: float) -> float:
+    """Return the full CAD value of an account including cash and positions."""
+    return (
+        account.cash_cad
+        + (account.cash_usd * usd_to_cad_rate)
+        + get_account_positions_value_cad(account, usd_to_cad_rate)
     )
 
 

@@ -11,6 +11,7 @@ from rich.table import Table
 from rich.panel import Panel
 from rich.text import Text
 from rich import box
+from src.portfolio import get_account_positions_value_cad, get_account_total_value_cad
 
 
 console = Console()
@@ -386,18 +387,8 @@ def display_account_summary(accounts: list, usd_to_cad_rate: float):
         )
 
         # Calculate account values in CAD
-        positions_value_cad = 0.0
-        total_value_cad = acct.cash_cad + (acct.cash_usd * usd_to_cad_rate)
-        
-        # Add position values, converting USD to CAD
-        for pos in acct.positions:
-            if pos.quantity > 0:
-                if pos.currency == "USD":
-                    position_value_cad = pos.market_value * usd_to_cad_rate
-                else:
-                    position_value_cad = pos.market_value
-                positions_value_cad += position_value_cad
-                total_value_cad += position_value_cad
+        positions_value_cad = get_account_positions_value_cad(acct, usd_to_cad_rate)
+        total_value_cad = get_account_total_value_cad(acct, usd_to_cad_rate)
 
         # Accumulate totals
         total_positions_value_sum += positions_value_cad
