@@ -4,6 +4,10 @@ on:
     - cron: '0 0 1 * *' # Monthly on the 1st
   workflow_dispatch: # Manual trigger
 
+permissions:
+  actions: write
+  contents: read
+
 jobs:
   cleanup:
     runs-on: ubuntu-latest
