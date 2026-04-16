@@ -12,7 +12,6 @@ Usage:
 import subprocess
 import sys
 import yaml
-from dataclasses import dataclass
 from pathlib import Path
 
 # Ensure UTF-8 output on Windows (prevents UnicodeEncodeError with Rich)
@@ -23,33 +22,17 @@ if sys.platform == "win32":
         sys.stderr.reconfigure(encoding="utf-8")
 
 from src.questrade_client import QuestradeClient
-from src.portfolio import build_portfolio, fetch_quotes_for_holdings, get_current_allocations, calculate_accuracy, get_drifts
-from src.rebalancer import calculate_trades, simulate_rebalance
-from src.rules import get_transient_status
-from src.currency import get_usd_to_cad_rate, fetch_dlr_quotes, calculate_currency_needs
-from src.history import record_value, get_all_time_high
+from src.portfolio import build_portfolio, fetch_quotes_for_holdings
+from src.report_builder import build_report_data
 from src.display import display_full_report, console
+from src.currency import get_usd_to_cad_rate, fetch_dlr_quotes
+from src.history import record_value
 
 
 # Paths
 ROOT = Path(__file__).parent
 TOKENS_DIR = ROOT / "tokens"
 CONFIG_DIR = ROOT / "config"
-
-
-@dataclass
-class RebalanceReportData:
-    """All calculated data needed to render the rebalancing report."""
-
-    current_allocations: dict
-    drifts: dict
-    accuracy: float
-    transient_alerts: list
-    trades: list
-    currency_conversions: list
-    projected_accuracy: float | None = None
-    projected_allocations: dict | None = None
-    all_time_high: object | None = None
 
 
 def load_config() -> tuple:
@@ -169,109 +152,47 @@ def _fetch_dlr_price(client) -> float:
     return dlr_price
 
 
-def _build_report_data(
-    portfolio,
-    clients: list,
-    targets: dict,
-    transient_symbols: list,
-    norberts_gambit_fee_cad: float,
-    usd_to_cad_rate: float,
-) -> RebalanceReportData:
-    """Calculate all report inputs from the current portfolio state."""
-    transient_status = get_transient_status(portfolio, transient_symbols)
-    hidden_symbols = transient_status["symbols"]
+def _render_report(portfolio, targets: dict, usd_to_cad_rate: float, report) -> None:
+    """Render the completed report data to the terminal."""
+    projected_snapshot = report.projected
 
-    current_allocations = get_current_allocations(
-        portfolio,
-        usd_to_cad_rate,
-        excluded_symbols=hidden_symbols,
-    )
-    drifts = get_drifts(current_allocations, targets)
-    accuracy = calculate_accuracy(current_allocations, targets)
-
-    dlr_price = _fetch_dlr_price(clients[0])
-
-    console.print("  [dim]Calculating trades...[/dim]")
-    trades = calculate_trades(
-        portfolio,
-        targets,
-        usd_to_cad_rate,
-        norberts_gambit_fee_cad,
-        existing_only=True,
-        transient_symbols=hidden_symbols,
-    )
-
-    currency_conversions = calculate_currency_needs(
-        trades,
-        portfolio.accounts,
-        usd_to_cad_rate,
-        dlr_price,
-        norberts_gambit_fee_cad,
-    )
-
-    projected_accuracy = None
-    projected_allocations = None
-    if trades:
-        simulation = simulate_rebalance(
-            portfolio,
-            trades,
-            targets,
-            usd_to_cad_rate,
-            hidden_symbols=hidden_symbols,
-        )
-        projected_accuracy = simulation["projected_accuracy"]
-        projected_allocations = simulation["projected_allocations"]
-
-    record_value(portfolio.total_value_cad)
-    all_time_high = get_all_time_high(current_value=portfolio.total_value_cad)
-
-    return RebalanceReportData(
-        current_allocations=current_allocations,
-        drifts=drifts,
-        accuracy=accuracy,
-        transient_alerts=transient_status["alerts"],
-        trades=trades,
-        currency_conversions=currency_conversions,
-        projected_accuracy=projected_accuracy,
-        projected_allocations=projected_allocations,
-        all_time_high=all_time_high,
+    display_full_report(
+        portfolio=portfolio,
+        current_allocations=report.current.allocations,
+        targets=targets,
+        drifts=report.current.drifts,
+        accuracy=report.current.accuracy,
+        trades=report.trades,
+        currency_conversions=report.currency_conversions,
+        transient_alerts=report.transient_alerts,
+        usd_to_cad_rate=usd_to_cad_rate,
+        projected_accuracy=projected_snapshot.accuracy if projected_snapshot else None,
+        projected_allocations=projected_snapshot.allocations if projected_snapshot else None,
+        all_time_high=report.all_time_high,
     )
 
 
 def run_rebalancer():
     """Main rebalancer logic."""
 
-    # Load config
     console.print("  [dim]Loading configuration...[/dim]")
     targets, transient_symbols, norberts_gambit_fee_cad = load_config()
 
     clients = _connect_clients()
     usd_to_cad_rate = _fetch_exchange_rate(clients[0])
     portfolio = _build_priced_portfolio(clients, usd_to_cad_rate)
-    report = _build_report_data(
+    dlr_price = _fetch_dlr_price(clients[0])
+
+    console.print("  [dim]Calculating trades...[/dim]")
+    report = build_report_data(
         portfolio,
-        clients,
         targets,
         transient_symbols,
         norberts_gambit_fee_cad,
         usd_to_cad_rate,
+        dlr_price,
     )
-
-    # Display the report
-    display_full_report(
-        portfolio=portfolio,
-        current_allocations=report.current_allocations,
-        targets=targets,
-        drifts=report.drifts,
-        accuracy=report.accuracy,
-        trades=report.trades,
-        currency_conversions=report.currency_conversions,
-        transient_alerts=report.transient_alerts,
-        usd_to_cad_rate=usd_to_cad_rate,
-        projected_accuracy=report.projected_accuracy,
-        projected_allocations=report.projected_allocations,
-        all_time_high=report.all_time_high,
-    )
+    _render_report(portfolio, targets, usd_to_cad_rate, report)
 
 
 def _pull_latest():

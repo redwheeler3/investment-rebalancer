@@ -20,6 +20,33 @@ console = Console()
 _CASH_SYMBOLS = {"CAD", "USD"}
 
 
+def _normalize_amount(amount: float) -> float:
+    """Avoid distracting negative zero values in terminal output."""
+    return 0.0 if abs(amount) < 0.005 else amount
+
+
+def _format_money(amount: float, currency: str = "CAD") -> str:
+    """Format a money amount with an explicit currency prefix."""
+    amount = _normalize_amount(amount)
+    prefix = "US$" if currency == "USD" else "$"
+    return f"{prefix}{amount:,.2f}"
+
+
+def _format_price(price: float, currency: str) -> str:
+    """Format a quoted price in its native currency."""
+    return _format_money(price, currency)
+
+
+def _format_shares(quantity: float) -> str:
+    """Format a share quantity for display."""
+    return f"{int(quantity):,}" if quantity == int(quantity) else f"{quantity:,.2f}"
+
+
+def _format_account_label(owner: str, account_type: str, account_number: str) -> str:
+    """Format a standard account label used across multiple tables."""
+    return f"{owner} {account_type} ({account_number})"
+
+
 def _partition_symbols(allocations: dict, targets: dict, drifts: dict):
     """Split symbols into stocks (sorted by drift) and cash (sorted alphabetically)."""
     all_symbols = allocations.keys() | targets.keys()
@@ -85,12 +112,8 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
         currency = data["currency"]
         value_cad = data["value_cad"]
 
-        if currency == "USD":
-            price_str = f"US${price:,.2f}"
-        else:
-            price_str = f"${price:,.2f}"
-
-        qty_str = f"{int(qty):,}" if qty == int(qty) else f"{qty:,.2f}"
+        price_str = _format_price(price, currency)
+        qty_str = _format_shares(qty)
         rows.append((symbol, qty_str, price_str, value_cad))
 
     for symbol, qty_str, price_str, value_cad in rows:
@@ -98,7 +121,7 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
             symbol,
             qty_str,
             price_str,
-            f"${value_cad:,.2f}",
+            _format_money(value_cad),
         )
 
     # Add cash rows
@@ -108,15 +131,15 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
             "Cash CAD",
             "",
             "",
-            f"${portfolio.cash_cad_total:,.2f}",
+            _format_money(portfolio.cash_cad_total),
         )
     if portfolio.cash_usd_total != 0:
         cash_usd_cad = portfolio.cash_usd_total * usd_to_cad_rate
         table.add_row(
             "Cash USD",
             "",
-            f"US${portfolio.cash_usd_total:,.2f}",
-            f"${cash_usd_cad:,.2f}",
+            _format_money(portfolio.cash_usd_total, "USD"),
+            _format_money(cash_usd_cad),
         )
 
     # Total row
@@ -125,7 +148,7 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
         "[bold]Total[/bold]",
         "",
         f"[dim]USD/CAD {usd_to_cad_rate:.4f}[/dim]",
-        f"[bold green]${portfolio.total_value_cad:,.2f}[/bold green]",
+        f"[bold green]{_format_money(portfolio.total_value_cad)}[/bold green]",
     )
 
     console.print(table)
@@ -274,16 +297,14 @@ def display_trades(trades: list):
         prev_account = account_key
 
         action_style = "green bold" if trade.action == "BUY" else "red bold"
-        account_label = f"{trade.owner} {trade.account_type} ({trade.account_number})"
-
-        currency_symbol = "$" if trade.currency == "CAD" else "US$"
+        account_label = _format_account_label(trade.owner, trade.account_type, trade.account_number)
 
         table.add_row(
             trade.symbol,
             Text(trade.action, style=action_style),
             str(trade.quantity),
-            f"{currency_symbol}{trade.price:,.2f}",
-            f"{currency_symbol}{trade.estimated_value:,.2f}",
+            _format_price(trade.price, trade.currency),
+            _format_money(trade.estimated_value, trade.currency),
             account_label,
             trade.note,
         )
@@ -313,21 +334,21 @@ def display_currency_conversions(conversions: list):
     table.add_column("Amount (incl. fee)", justify="right")
 
     for conv in conversions:
-        account_label = f"{conv.owner} {conv.account_type} ({conv.account_number})"
+        account_label = _format_account_label(conv.owner, conv.account_type, conv.account_number)
 
         if conv.direction == "CAD_TO_USD":
             direction = "CAD -> USD"
             # Fee adds to the CAD you spend
             total_cad = conv.source_amount + conv.fee
-            amount_str = f"${total_cad:,.2f} CAD -> ${conv.target_amount:,.2f} USD"
+            amount_str = f"{_format_money(total_cad)} CAD -> {_format_money(conv.target_amount, 'USD')} USD"
         else:
             direction = "USD -> CAD"
             # Fee subtracts from the CAD you receive
             net_cad = conv.target_amount - conv.fee
-            amount_str = f"${conv.source_amount:,.2f} USD -> ${net_cad:,.2f} CAD"
+            amount_str = f"{_format_money(conv.source_amount, 'USD')} USD -> {_format_money(net_cad)} CAD"
 
         shares_str = str(conv.dlr_shares) if conv.dlr_shares > 0 else "N/A"
-        price_str = f"${conv.dlr_price:,.2f}" if conv.dlr_price > 0 else "N/A"
+        price_str = _format_money(conv.dlr_price) if conv.dlr_price > 0 else "N/A"
 
         table.add_row(
             account_label,
@@ -348,7 +369,7 @@ def display_transient_alerts(transient_alerts: list):
         return
 
     for alert in transient_alerts:
-        account_label = f"{alert.owner} {alert.account_type} ({alert.account_number})"
+        account_label = _format_account_label(alert.owner, alert.account_type, alert.account_number)
         console.print(
             f"  [yellow]⏳ {alert.symbol}:[/yellow] "
             f"{int(alert.quantity)} shares in {account_label} — {alert.note}"
@@ -400,9 +421,9 @@ def display_account_summary(accounts: list, usd_to_cad_rate: float):
             acct.owner,
             acct.account_type,
             acct.number,
-            f"${total_value_cad:,.2f}",
-            f"${acct.cash_cad:,.2f}",
-            f"US${acct.cash_usd:,.2f}",
+            _format_money(total_value_cad),
+            _format_money(acct.cash_cad),
+            _format_money(acct.cash_usd, "USD"),
             f"{pos_count} ({pos_symbols})" if pos_count > 0 else "0",
         )
 
@@ -412,10 +433,10 @@ def display_account_summary(accounts: list, usd_to_cad_rate: float):
         "[bold]Total[/bold]",
         "",
         "",
-        f"[bold]${total_positions_value_sum:,.2f}[/bold]",
-        f"[bold]${total_cash_cad_sum:,.2f}[/bold]",
-        f"[bold]US${total_cash_usd_sum:,.2f}[/bold]",
-        f"[bold green]${total_value_sum:,.2f}[/bold green]",
+        f"[bold]{_format_money(total_positions_value_sum)}[/bold]",
+        f"[bold]{_format_money(total_cash_cad_sum)}[/bold]",
+        f"[bold]{_format_money(total_cash_usd_sum, 'USD')}[/bold]",
+        f"[bold green]{_format_money(total_value_sum)}[/bold green]",
     )
 
     console.print(table)

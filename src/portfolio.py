@@ -6,6 +6,7 @@ and builds a unified portfolio view.
 """
 
 from dataclasses import dataclass, field
+from src.report_models import AllocationSnapshot
 
 
 @dataclass
@@ -225,6 +226,31 @@ def get_holdings_view(portfolio: PortfolioSummary, excluded_symbols: set = None)
     }
 
 
+def calculate_allocations_for_values(
+    holdings_value_cad: dict,
+    total_value_cad: float,
+    cash_cad_total: float,
+    cash_usd_total: float,
+    usd_to_cad_rate: float,
+    excluded_symbols: set = None,
+) -> dict:
+    """Build allocation percentages from already-computed holding values."""
+    if total_value_cad == 0:
+        return {}
+
+    allocations = {
+        "CAD": (cash_cad_total / total_value_cad) * 100,
+        "USD": ((cash_usd_total * usd_to_cad_rate) / total_value_cad) * 100,
+    }
+
+    for symbol, value_cad in holdings_value_cad.items():
+        if excluded_symbols and symbol in excluded_symbols:
+            continue
+        allocations[symbol] = (value_cad / total_value_cad) * 100
+
+    return allocations
+
+
 def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
     """
     Fetch bid/ask quotes for all holdings and update the portfolio.
@@ -282,24 +308,18 @@ def get_current_allocations(portfolio: PortfolioSummary, usd_to_cad_rate: float,
         Dictionary mapping symbol -> current percentage of total portfolio.
         Includes "CAD" and "USD" entries for cash positions.
     """
-    if portfolio.total_value_cad == 0:
-        return {}
-
-    allocations = {}
-
-    # Cash allocations
-    cad_cash_pct = (portfolio.cash_cad_total / portfolio.total_value_cad) * 100
-    usd_cash_value_cad = portfolio.cash_usd_total * usd_to_cad_rate
-    usd_cash_pct = (usd_cash_value_cad / portfolio.total_value_cad) * 100
-
-    allocations["CAD"] = cad_cash_pct
-    allocations["USD"] = usd_cash_pct
-
-    # Holdings allocations
-    for symbol, data in get_holdings_view(portfolio, excluded_symbols).items():
-        allocations[symbol] = (data["value_cad"] / portfolio.total_value_cad) * 100
-
-    return allocations
+    holdings_value_cad = {
+        symbol: data["value_cad"]
+        for symbol, data in portfolio.holdings.items()
+    }
+    return calculate_allocations_for_values(
+        holdings_value_cad=holdings_value_cad,
+        total_value_cad=portfolio.total_value_cad,
+        cash_cad_total=portfolio.cash_cad_total,
+        cash_usd_total=portfolio.cash_usd_total,
+        usd_to_cad_rate=usd_to_cad_rate,
+        excluded_symbols=excluded_symbols,
+    )
 
 
 def calculate_accuracy(current_allocations: dict, targets: dict) -> float:
@@ -344,3 +364,50 @@ def get_drifts(current_allocations: dict, targets: dict) -> dict:
         s: current_allocations.get(s, 0.0) - targets.get(s, 0.0)
         for s in all_symbols
     }
+
+
+def build_allocation_snapshot_from_values(
+    holdings_value_cad: dict,
+    cash_cad_total: float,
+    cash_usd_total: float,
+    total_value_cad: float,
+    targets: dict,
+    usd_to_cad_rate: float,
+    excluded_symbols: set = None,
+) -> AllocationSnapshot:
+    """Build allocations, drifts, and accuracy from raw value inputs."""
+    allocations = calculate_allocations_for_values(
+        holdings_value_cad=holdings_value_cad,
+        total_value_cad=total_value_cad,
+        cash_cad_total=cash_cad_total,
+        cash_usd_total=cash_usd_total,
+        usd_to_cad_rate=usd_to_cad_rate,
+        excluded_symbols=excluded_symbols,
+    )
+    return AllocationSnapshot(
+        allocations=allocations,
+        drifts=get_drifts(allocations, targets),
+        accuracy=calculate_accuracy(allocations, targets),
+    )
+
+
+def build_allocation_snapshot(
+    portfolio: PortfolioSummary,
+    targets: dict,
+    usd_to_cad_rate: float,
+    excluded_symbols: set = None,
+) -> AllocationSnapshot:
+    """Build allocations, drifts, and accuracy from a portfolio."""
+    holdings_value_cad = {
+        symbol: data["value_cad"]
+        for symbol, data in portfolio.holdings.items()
+    }
+    return build_allocation_snapshot_from_values(
+        holdings_value_cad=holdings_value_cad,
+        cash_cad_total=portfolio.cash_cad_total,
+        cash_usd_total=portfolio.cash_usd_total,
+        total_value_cad=portfolio.total_value_cad,
+        targets=targets,
+        usd_to_cad_rate=usd_to_cad_rate,
+        excluded_symbols=excluded_symbols,
+    )

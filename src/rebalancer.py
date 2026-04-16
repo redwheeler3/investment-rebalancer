@@ -699,88 +699,17 @@ def simulate_rebalance(
     usd_to_cad_rate: float,
     hidden_symbols: set = None,
 ) -> dict:
-    """
-    Simulate what the portfolio would look like after executing the trades.
+    """Compatibility wrapper for the dedicated simulation module."""
+    from src.rebalancer_simulation import simulate_rebalance as _simulate_rebalance
 
-    Useful for showing the projected accuracy improvement.
-
-    Args:
-        portfolio: Current portfolio state.
-        trades: List of TradeRecommendation objects.
-        targets: Target allocation percentages.
-        usd_to_cad_rate: Current exchange rate.
-
-    Returns:
-        Dictionary with 'projected_allocations' and 'projected_accuracy'.
-    """
-    # Start with current holdings values from the canonical holdings map.
-    # Hidden symbols still contribute to total-value math, but can be omitted
-    # from the displayed projected allocation rows.
-    source_holdings = portfolio.holdings
-    projected_holdings = {}
-    for symbol, data in source_holdings.items():
-        projected_holdings[symbol] = data["value_cad"]
-    if hidden_symbols is None:
-        hidden_symbols = set()
-
-    projected_cash_cad = portfolio.cash_cad_total
-    projected_cash_usd = portfolio.cash_usd_total
-
-    # Apply trades
-    for trade in trades:
-        price_cad = trade.price
-        if trade.currency == "USD":
-            price_cad = trade.price * usd_to_cad_rate
-
-        value_change_cad = price_cad * trade.quantity
-        needs_conversion = "currency conversion" in (trade.note or "").lower()
-
-        if trade.action == "BUY":
-            projected_holdings[trade.symbol] = projected_holdings.get(trade.symbol, 0) + value_change_cad
-            if needs_conversion:
-                # Currency conversion: deduct from the SOURCE currency
-                if trade.currency == "USD":
-                    projected_cash_cad -= trade.estimated_value * usd_to_cad_rate
-                else:
-                    projected_cash_usd -= trade.estimated_value / usd_to_cad_rate
-            else:
-                if trade.currency == "CAD":
-                    projected_cash_cad -= trade.estimated_value
-                else:
-                    projected_cash_usd -= trade.estimated_value
-        elif trade.action == "SELL":
-            projected_holdings[trade.symbol] = projected_holdings.get(trade.symbol, 0) - value_change_cad
-            if trade.currency == "CAD":
-                projected_cash_cad += trade.estimated_value
-            else:
-                projected_cash_usd += trade.estimated_value
-
-    # Adjust for conversion rounding
-    if projected_cash_cad < 0:
-        projected_cash_usd += projected_cash_cad / usd_to_cad_rate
-        projected_cash_cad = 0
-    if projected_cash_usd < 0:
-        projected_cash_cad += projected_cash_usd * usd_to_cad_rate
-        projected_cash_usd = 0
-
-    # Calculate projected total value
-    projected_total = projected_cash_cad + (projected_cash_usd * usd_to_cad_rate)
-    for val in projected_holdings.values():
-        projected_total += val
-
-    # Calculate projected allocations
-    projected_alloc = {}
-    if projected_total > 0:
-        projected_alloc["CAD"] = (projected_cash_cad / projected_total) * 100
-        projected_alloc["USD"] = ((projected_cash_usd * usd_to_cad_rate) / projected_total) * 100
-        for symbol, val in projected_holdings.items():
-            if symbol in hidden_symbols:
-                continue
-            projected_alloc[symbol] = (val / projected_total) * 100
-
-    projected_accuracy = calculate_accuracy(projected_alloc, targets)
-
+    snapshot = _simulate_rebalance(
+        portfolio,
+        trades,
+        targets,
+        usd_to_cad_rate,
+        hidden_symbols=hidden_symbols,
+    )
     return {
-        "projected_allocations": projected_alloc,
-        "projected_accuracy": projected_accuracy,
+        "projected_allocations": snapshot.allocations,
+        "projected_accuracy": snapshot.accuracy,
     }
