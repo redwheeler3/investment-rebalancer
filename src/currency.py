@@ -288,4 +288,83 @@ def calculate_currency_needs(
                     fee=norberts_gambit_fee_cad,
                 ))
 
+    # ── Sweep: convert stranded foreign cash in single-currency accounts ──
+    # If all positions in an account are one currency, convert leftover cash
+    # in the other currency.  Keep one fee in the account for the journal.
+    for acct in accounts:
+        pos_currencies = {p.currency for p in acct.positions if p.quantity > 0}
+        if not pos_currencies or len(pos_currencies) > 1:
+            continue  # Skip multi-currency or empty accounts
+
+        position_currency = next(iter(pos_currencies))
+
+        # Remaining cash after trades
+        impact = account_impact.get(acct.number, {"CAD": 0.0, "USD": 0.0})
+        remaining_cad = acct.cash_cad - impact["CAD"]
+        remaining_usd = acct.cash_usd - impact["USD"]
+
+        # Subtract cash already allocated to first-pass conversions
+        existing_conv = None
+        for conv in conversions:
+            if conv.account_number != acct.number:
+                continue
+            if conv.direction == "CAD_TO_USD":
+                remaining_cad -= (conv.source_amount + conv.fee)
+                if position_currency == "USD":
+                    existing_conv = conv
+            elif conv.direction == "USD_TO_CAD":
+                remaining_usd -= conv.source_amount
+                if position_currency == "CAD":
+                    existing_conv = conv
+
+        if position_currency == "USD" and remaining_cad > norberts_gambit_fee_cad and dlr_price > 0:
+            # Sweep remaining CAD → USD, keep fee in account for journal
+            cad_for_shares = remaining_cad - norberts_gambit_fee_cad
+            sweep_shares = int(math.floor(cad_for_shares / dlr_price))
+            if sweep_shares > 0:
+                if existing_conv:
+                    # Augment existing conversion (same journal, no extra fee)
+                    existing_conv.dlr_shares += sweep_shares
+                    existing_conv.source_amount = existing_conv.dlr_shares * existing_conv.dlr_price
+                    existing_conv.target_amount = existing_conv.source_amount / usd_to_cad_rate
+                else:
+                    conversions.append(CurrencyConversion(
+                        account_number=acct.number,
+                        account_type=acct.account_type,
+                        owner=acct.owner,
+                        direction="CAD_TO_USD",
+                        source_amount=sweep_shares * dlr_price,
+                        target_amount=(sweep_shares * dlr_price) / usd_to_cad_rate,
+                        dlr_symbol="DLR.TO",
+                        dlr_shares=sweep_shares,
+                        dlr_price=dlr_price,
+                        fee=norberts_gambit_fee_cad,
+                    ))
+
+        elif position_currency == "CAD" and dlr_price > 0:
+            dlr_u_price = dlr_price / usd_to_cad_rate
+            fee_in_usd = norberts_gambit_fee_cad / usd_to_cad_rate
+            if remaining_usd > fee_in_usd and dlr_u_price > 0:
+                # Sweep remaining USD → CAD, keep fee-equivalent in account
+                usd_for_shares = remaining_usd - fee_in_usd
+                sweep_shares = int(math.floor(usd_for_shares / dlr_u_price))
+                if sweep_shares > 0:
+                    if existing_conv:
+                        existing_conv.dlr_shares += sweep_shares
+                        existing_conv.source_amount = existing_conv.dlr_shares * existing_conv.dlr_price
+                        existing_conv.target_amount = existing_conv.source_amount * usd_to_cad_rate
+                    else:
+                        conversions.append(CurrencyConversion(
+                            account_number=acct.number,
+                            account_type=acct.account_type,
+                            owner=acct.owner,
+                            direction="USD_TO_CAD",
+                            source_amount=sweep_shares * dlr_u_price,
+                            target_amount=sweep_shares * dlr_u_price * usd_to_cad_rate,
+                            dlr_symbol="DLR.U.TO",
+                            dlr_shares=sweep_shares,
+                            dlr_price=dlr_u_price,
+                            fee=norberts_gambit_fee_cad,
+                        ))
+
     return conversions
