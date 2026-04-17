@@ -15,7 +15,6 @@ from src.portfolio import (
 )
 from src.rebalancer_core import (
     MAX_ROUNDS,
-    TOLERANCE_PCT,
     RebalanceState,
 )
 from src.rebalancer_netting import net_trades
