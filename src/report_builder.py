@@ -19,7 +19,7 @@ def build_report_data(
     transient_symbols: list,
     norberts_gambit_fee_cad: float,
     usd_to_cad_rate: float,
-    dlr_price: float,
+    dlr_quotes,
 ) -> RebalanceReportData:
     """Calculate all report inputs from the current portfolio state."""
     transient_status = get_transient_status(portfolio, transient_symbols)
@@ -45,7 +45,7 @@ def build_report_data(
         trades,
         portfolio.accounts,
         usd_to_cad_rate,
-        dlr_price,
+        dlr_quotes,
         norberts_gambit_fee_cad,
     )
 

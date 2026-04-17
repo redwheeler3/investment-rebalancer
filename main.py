@@ -140,16 +140,20 @@ def _build_priced_portfolio(clients: list, usd_to_cad_rate: float):
     return portfolio
 
 
-def _fetch_dlr_price(client) -> float:
-    """Fetch and display the DLR.TO price used for Norbert's Gambit calculations."""
+def _fetch_dlr_quotes(client):
+    """Fetch and display the DLR quotes used for Norbert's Gambit calculations."""
     console.print("  [dim]Fetching DLR quotes...[/dim]")
-    dlr = fetch_dlr_quotes(client)
-    dlr_price = dlr.cad_price
-    if dlr_price > 0:
-        console.print(f"  [dim]DLR.TO price: ${dlr_price:.2f}[/dim]")
+    dlr_quotes = fetch_dlr_quotes(client)
+    if dlr_quotes.cad_buy_price > 0 or dlr_quotes.usd_buy_price > 0:
+        console.print(
+            "  [dim]DLR.TO bid/ask: "
+            f"${dlr_quotes.cad_sell_price:.2f} / ${dlr_quotes.cad_buy_price:.2f}"
+            " | DLR.U.TO bid/ask: "
+            f"${dlr_quotes.usd_sell_price:.2f} / ${dlr_quotes.usd_buy_price:.2f}[/dim]"
+        )
     else:
-        console.print("  [yellow]Could not fetch DLR.TO price — DLR share counts will be unavailable[/yellow]")
-    return dlr_price
+        console.print("  [yellow]Could not fetch DLR quotes — DLR share counts will be unavailable[/yellow]")
+    return dlr_quotes
 
 
 def _render_report(portfolio, targets: dict, usd_to_cad_rate: float, report) -> None:
@@ -181,7 +185,7 @@ def run_rebalancer():
     clients = _connect_clients()
     usd_to_cad_rate = _fetch_exchange_rate(clients[0])
     portfolio = _build_priced_portfolio(clients, usd_to_cad_rate)
-    dlr_price = _fetch_dlr_price(clients[0])
+    dlr_quotes = _fetch_dlr_quotes(clients[0])
 
     console.print("  [dim]Calculating trades...[/dim]")
     report = build_report_data(
@@ -190,7 +194,7 @@ def run_rebalancer():
         transient_symbols,
         norberts_gambit_fee_cad,
         usd_to_cad_rate,
-        dlr_price,
+        dlr_quotes,
     )
     _render_report(portfolio, targets, usd_to_cad_rate, report)
 
