@@ -89,6 +89,7 @@ norberts_gambit_fee_cad: 10.49
 
 ```
 investment-rebalancer/
+├── .gitignore                      # Ignore local / generated files
 ├── config/
 │   └── targets.yaml              # Target allocations
 ├── data/
@@ -111,14 +112,16 @@ investment-rebalancer/
 │   ├── history.py                 # Portfolio history / all-time high tracking
 │   └── display.py                 # Rich terminal output
 ├── .github/workflows/
-│   └── portfolio_sync.yml         # Twice-daily portfolio sync (token refresh + history snapshot)
+│   ├── portfolio_sync.yml         # Twice-daily portfolio sync (token refresh + history snapshot)
+│   └── cleanup-runs.yml           # Monthly cleanup of old GitHub Actions runs
 ├── main.py                        # Entry point
 └── requirements.txt
 ```
 
-## GitHub Actions Portfolio Sync
+## GitHub Actions
 
-The workflow in `.github/workflows/portfolio_sync.yml` runs twice daily (3:00 AM and 3:00 PM PDT) to keep Questrade OAuth tokens fresh and snapshot the portfolio value for ATH tracking. The Questrade API goes offline periodically, so an alert issue is only created if syncs fail for more than 48 consecutive hours.
+- **`portfolio_sync.yml`** runs twice daily (3:00 AM and 3:00 PM PDT) to keep Questrade OAuth tokens fresh and snapshot the portfolio value for ATH tracking. The Questrade API goes offline periodically, so an alert issue is only created if syncs fail for more than 48 consecutive hours.
+- **`cleanup-runs.yml`** runs monthly to delete older GitHub Actions workflow runs, keeping the most recent history while reducing Actions clutter.
 
 When running locally, `python main.py` automatically pulls the latest tokens from the remote before connecting to Questrade, and pushes the refreshed tokens and updated portfolio history back when done.
 
