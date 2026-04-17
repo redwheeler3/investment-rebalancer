@@ -62,9 +62,9 @@ targets:
   USD: 0.0      # Cash USD
   VCN.TO: 2.0
   VUN.TO: 2.0
-  IVV: 17.0
+  IVV: 19.0
   XEF.TO: 2.0
-  VSP.TO: 57.0
+  VSP.TO: 55.0
   XEC.TO: 6.0
   XBB.TO: 6.0
   CASH.TO: 8.0
@@ -74,11 +74,16 @@ targets:
 transient_symbols:
   - DLR.TO
   - DLR.U.TO
+
+# Trading fee used for Norbert's Gambit conversion suggestions
+norberts_gambit_fee_cad: 10.49
 ```
 
 **Transient symbols:** List any symbol in `transient_symbols` that you're holding temporarily (e.g., DLR.TO / DLR.U.TO mid-Norbert's Gambit). Transient symbols are excluded from trading but their value stays in the portfolio total so allocation math remains correct. Remove them once you've sold manually.
 
 **Unknown holdings:** Any symbol you hold that isn't in `targets` (and isn't transient) gets an implicit 0% target — the rebalancer will recommend selling it.
+
+**Norbert's Gambit fee:** `norberts_gambit_fee_cad` controls the estimated trading cost used when reporting currency conversion needs.
 
 ## Project Structure
 
@@ -86,15 +91,24 @@ transient_symbols:
 investment-rebalancer/
 ├── config/
 │   └── targets.yaml              # Target allocations
+├── data/
+│   └── portfolio_history.json    # Portfolio value history for ATH tracking
 ├── tokens/
 │   ├── jeff_token.json            # Jeff's Questrade refresh token
 │   └── eunee_token.json           # Eunee's Questrade refresh token
 ├── src/
 │   ├── questrade_client.py        # Questrade API wrapper
 │   ├── portfolio.py               # Portfolio aggregation & accuracy
-│   ├── rebalancer.py              # Core rebalancing logic
+│   ├── rebalancer.py              # Public rebalancer API
+│   ├── rebalancer_core.py         # Shared rebalance state & helpers
+│   ├── rebalancer_steps.py        # Sell / buy / sweep phases
+│   ├── rebalancer_netting.py      # Final trade netting
+│   ├── rebalancer_simulation.py   # Projected post-trade allocations
 │   ├── rules.py                   # Trade placement rules engine
 │   ├── currency.py                # USD/CAD exchange rate & Norbert's Gambit
+│   ├── report_builder.py          # Assembles report data for the CLI
+│   ├── report_models.py           # Report data models
+│   ├── history.py                 # Portfolio history / all-time high tracking
 │   └── display.py                 # Rich terminal output
 ├── .github/workflows/
 │   └── portfolio_sync.yml         # Twice-daily portfolio sync (token refresh + history snapshot)
