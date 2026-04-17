@@ -27,6 +27,7 @@ from src.report_builder import build_report_data
 from src.display import display_full_report, console
 from src.currency import get_usd_to_cad_rate, fetch_dlr_quotes
 from src.history import record_value
+from src.target_resolver import resolve_targets
 
 
 # Paths
@@ -36,10 +37,15 @@ CONFIG_DIR = ROOT / "config"
 
 
 def load_config() -> tuple:
-    """Load target allocations, transient symbols, and fee from config/targets.yaml.
+    """Load config data from config/targets.yaml.
 
     Returns:
-        Tuple of (targets dict, transient_symbols list, norberts_gambit_fee_cad float).
+        Tuple of (
+            targets dict,
+            transient_symbols list,
+            norberts_gambit_fee_cad float,
+            fx_target_rules dict,
+        ).
     """
     targets_path = CONFIG_DIR / "targets.yaml"
     with open(targets_path, "r") as f:
@@ -48,13 +54,19 @@ def load_config() -> tuple:
     targets = data.get("targets", {})
     transient_symbols = data.get("transient_symbols", [])
     norberts_gambit_fee_cad = data.get("norberts_gambit_fee_cad", 10.49)
+    fx_target_rules = data.get("fx_target_rules", {})
 
-    # Validate targets sum to ~100%
+    return targets, transient_symbols, norberts_gambit_fee_cad, fx_target_rules
+
+
+def _validate_resolved_targets(targets: dict):
+    """Fail fast if the final resolved target map is materially off 100%."""
     total = sum(targets.values())
     if abs(total - 100.0) > 0.5:
-        console.print(f"  [yellow]⚠ Warning: Target allocations sum to {total:.1f}% (expected 100%)[/yellow]")
-
-    return targets, transient_symbols, norberts_gambit_fee_cad
+        raise ValueError(
+            f"Resolved target allocations sum to {total:.2f}% (expected 100%). "
+            "Check config/targets.yaml static targets plus any enabled fx_target_rules."
+        )
 
 
 def run_scheduled_sync():
@@ -173,6 +185,7 @@ def _render_report(portfolio, targets: dict, usd_to_cad_rate: float, report) -> 
         projected_accuracy=projected_snapshot.accuracy if projected_snapshot else None,
         projected_allocations=projected_snapshot.allocations if projected_snapshot else None,
         all_time_high=report.all_time_high,
+        fx_target_rule_resolutions=report.fx_target_rule_resolutions,
     )
 
 
@@ -180,23 +193,26 @@ def run_rebalancer():
     """Main rebalancer logic."""
 
     console.print("  [dim]Loading configuration...[/dim]")
-    targets, transient_symbols, norberts_gambit_fee_cad = load_config()
+    targets, transient_symbols, norberts_gambit_fee_cad, fx_target_rules = load_config()
 
     clients = _connect_clients()
     usd_to_cad_rate = _fetch_exchange_rate(clients[0])
+    resolved_targets = resolve_targets(targets, fx_target_rules, usd_to_cad_rate)
+    _validate_resolved_targets(resolved_targets.targets)
     portfolio = _build_priced_portfolio(clients, usd_to_cad_rate)
     dlr_quotes = _fetch_dlr_quotes(clients[0])
 
     console.print("  [dim]Calculating trades...[/dim]")
     report = build_report_data(
         portfolio,
-        targets,
+        resolved_targets.targets,
         transient_symbols,
         norberts_gambit_fee_cad,
         usd_to_cad_rate,
         dlr_quotes,
+        fx_target_rule_resolutions=resolved_targets.fx_target_rule_resolutions,
     )
-    _render_report(portfolio, targets, usd_to_cad_rate, report)
+    _render_report(portfolio, resolved_targets.targets, usd_to_cad_rate, report)
 
 
 def _pull_latest():

@@ -37,6 +37,11 @@ def _format_price(price: float, currency: str) -> str:
     return _format_money(price, currency)
 
 
+def _format_pct(value: float, decimals: int = 1) -> str:
+    """Format a percentage with configurable decimal places."""
+    return f"{value:.{decimals}f}%"
+
+
 def _format_shares(quantity: float) -> str:
     """Format a share quantity for display."""
     return f"{int(quantity):,}" if quantity == int(quantity) else f"{quantity:,.2f}"
@@ -470,6 +475,7 @@ def display_full_report(
     projected_accuracy: float = None,
     projected_allocations: dict = None,
     all_time_high=None,
+    fx_target_rule_resolutions: list = None,
 ):
     """Display the complete rebalancing report."""
     display_header()

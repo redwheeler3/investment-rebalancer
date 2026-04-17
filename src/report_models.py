@@ -1,5 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
+
+from src.target_resolver import FxTargetRuleResolution
 
 
 @dataclass
@@ -21,3 +23,4 @@ class RebalanceReportData:
     currency_conversions: list
     projected: AllocationSnapshot | None = None
     all_time_high: Any | None = None
+    fx_target_rule_resolutions: list[FxTargetRuleResolution] = field(default_factory=list)

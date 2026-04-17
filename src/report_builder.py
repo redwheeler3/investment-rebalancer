@@ -20,6 +20,7 @@ def build_report_data(
     norberts_gambit_fee_cad: float,
     usd_to_cad_rate: float,
     dlr_quotes,
+    fx_target_rule_resolutions: list | None = None,
 ) -> RebalanceReportData:
     """Calculate all report inputs from the current portfolio state."""
     transient_status = get_transient_status(portfolio, transient_symbols)
@@ -69,4 +70,5 @@ def build_report_data(
         currency_conversions=currency_conversions,
         projected=projected_snapshot,
         all_time_high=all_time_high,
+        fx_target_rule_resolutions=fx_target_rule_resolutions or [],
     )

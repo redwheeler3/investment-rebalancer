@@ -21,5 +21,8 @@ env/
 .DS_Store
 Thumbs.db
 
+# Local temporary working files
+temp/
+
 # NOTE: tokens/ is NOT ignored — it must be in the repo for GitHub Actions.
 # Keep this repo PRIVATE!

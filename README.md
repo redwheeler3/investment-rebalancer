@@ -54,7 +54,9 @@ python main.py --sync
 
 ## Configuration (`config/targets.yaml`)
 
-Edit target percentages (must sum to 100%):
+Edit the static target percentages, then optionally add FX-driven target rules.
+The static targets plus any enabled FX-derived targets should sum to 100%
+after resolution:
 
 ```yaml
 targets:
@@ -62,12 +64,20 @@ targets:
   USD: 0.0      # Cash USD
   VCN.TO: 2.0
   VUN.TO: 2.0
-  IVV: 19.0
   XEF.TO: 2.0
-  VSP.TO: 55.0
   XEC.TO: 6.0
   XBB.TO: 6.0
   CASH.TO: 8.0
+
+fx_target_rules:
+  ivv_vsp:
+    enabled: true
+    usd_symbol: IVV
+    cad_symbol: VSP.TO
+    total_target_pct: 74.0
+    min_usd_to_cad_rate: 1.0
+    max_usd_to_cad_rate: 1.5
+    target_rounding_decimals: 0
 
 # List symbols to temporarily exclude from rebalancing.
 # e.g., DLR.TO or DLR.U.TO mid-Norbert's Gambit.
@@ -80,6 +90,8 @@ norberts_gambit_fee_cad: 10.49
 ```
 
 **Transient symbols:** List any symbol in `transient_symbols` that you're holding temporarily (e.g., DLR.TO / DLR.U.TO mid-Norbert's Gambit). Transient symbols are excluded from trading but their value stays in the portfolio total so allocation math remains correct. Remove them once you've sold manually.
+
+**FX target rules:** `fx_target_rules` lets you derive part of the portfolio target automatically from the live USD/CAD exchange rate. In the example above, IVV and VSP.TO share a combined 74% target, with more allocated to VSP.TO as USD becomes more expensive relative to CAD.
 
 **Unknown holdings:** Any symbol you hold that isn't in `targets` (and isn't transient) gets an implicit 0% target — the rebalancer will recommend selling it.
 
