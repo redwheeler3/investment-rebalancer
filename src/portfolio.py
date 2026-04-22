@@ -6,7 +6,6 @@ and builds a unified portfolio view.
 """
 
 from dataclasses import dataclass, field
-from src.report_models import AllocationSnapshot
 
 
 def _coerce_numeric(value, default: float = 0.0) -> float:
@@ -83,6 +82,15 @@ class PortfolioSummary:
     total_value_cad: float = 0.0
     cash_cad_total: float = 0.0
     cash_usd_total: float = 0.0
+
+
+@dataclass
+class AllocationSnapshot:
+    """A complete allocation view with derived drift and accuracy metrics."""
+
+    allocations: dict
+    drifts: dict
+    accuracy: float
 
 
 def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:

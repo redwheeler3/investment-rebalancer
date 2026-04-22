@@ -15,6 +15,9 @@ A Python-based portfolio rebalancer for Questrade accounts. Replaces Passiv with
 - **Whole-Share Trading** — Recommends whole shares only, using bid price for sells and ask price for buys
 - **Iterative Algorithm** — Repeats Sell → Buy → Sweep rounds until all positions are within tolerance, handling same-currency, cross-currency, and displacement trades in a single unified pass
 - **Configurable Drift Trade Threshold** — Only recommends trades when a position's absolute drift meets your configured minimum threshold
+- **Tolerance-Aware Status Display** — The allocation tables mark symbols as `OK`, `OVER`, or `UNDER` using your configured drift tolerance
+- **Conservative FX Funding** — Currency conversion suggestions use conservative DLR bid/ask math so Norbert's Gambit sizing does not underfund buys
+- **Sell Trimming Reconciliation** — After baseline trade generation, oversized sells are trimmed when possible so they do not raise materially more cash than the planned buys require
 - **Automatic Portfolio Sync** — GitHub Actions cron job refreshes Questrade OAuth tokens and snapshots portfolio value twice daily
 
 ## Quick Start
@@ -89,7 +92,7 @@ transient_symbols:
 norberts_gambit_fee_cad: 10.49
 
 # Only trade symbols whose absolute drift is at least this %
-drift_trade_threshold_pct: 1.0
+drift_trade_threshold_pct: 0.5
 ```
 
 **Transient symbols:** List any symbol in `transient_symbols` that you're holding temporarily (e.g., DLR.TO / DLR.U.TO mid-Norbert's Gambit). Transient symbols are excluded from trading but their value stays in the portfolio total so allocation math remains correct. Remove them once you've sold manually.
@@ -100,7 +103,7 @@ drift_trade_threshold_pct: 1.0
 
 **Norbert's Gambit fee:** `norberts_gambit_fee_cad` controls the estimated trading cost used when reporting currency conversion needs.
 
-**Drift trade threshold:** `drift_trade_threshold_pct` controls how far a symbol must drift from target before the rebalancer will act on it. For example, `1.0` means a symbol at `+0.9%` or `-0.9%` drift is left alone.
+**Drift trade threshold:** `drift_trade_threshold_pct` controls how far a symbol must drift from target before the rebalancer will act on it. The allocation tables also use this same threshold when showing `OK`, `OVER`, and `UNDER`. For example, `0.5` means a symbol at `+0.4%` or `-0.4%` drift is treated as within tolerance.
 
 ## Project Structure
 
@@ -121,11 +124,12 @@ investment-rebalancer/
 │   ├── rebalancer_core.py         # Shared rebalance state & helpers
 │   ├── rebalancer_steps.py        # Sell / buy / sweep phases
 │   ├── rebalancer_netting.py      # Final trade netting
+│   ├── rebalancer_reconcile.py    # Post-processing trim of excess sell funding
 │   ├── rebalancer_simulation.py   # Projected post-trade allocations
 │   ├── rules.py                   # Trade placement rules engine
 │   ├── currency.py                # USD/CAD exchange rate & Norbert's Gambit
+│   ├── funding.py                 # Shared fee-aware funding / conversion helpers
 │   ├── report_builder.py          # Assembles report data for the CLI
-│   ├── report_models.py           # Report data models
 │   ├── history.py                 # Portfolio history / all-time high tracking
 │   └── display.py                 # Rich terminal output
 ├── .github/workflows/

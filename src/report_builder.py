@@ -4,13 +4,29 @@ Builds the high-level report data structure from an already-priced portfolio,
 without mixing that logic into the CLI entrypoint.
 """
 
+from dataclasses import dataclass, field
+from typing import Any
+
 from src.currency import calculate_currency_needs
 from src.history import get_all_time_high, record_value
-from src.portfolio import build_allocation_snapshot
+from src.portfolio import AllocationSnapshot
 from src.rebalancer import calculate_trades
 from src.rebalancer_simulation import simulate_rebalance
-from src.report_models import RebalanceReportData
 from src.rules import get_transient_status
+from src.target_resolver import FxTargetRuleResolution
+
+
+@dataclass
+class RebalanceReportData:
+    """All calculated data needed to render the rebalancing report."""
+
+    current: AllocationSnapshot
+    transient_alerts: list
+    trades: list
+    currency_conversions: list
+    projected: AllocationSnapshot | None = None
+    all_time_high: Any | None = None
+    fx_target_rule_resolutions: list[FxTargetRuleResolution] = field(default_factory=list)
 
 
 def build_report_data(
@@ -24,6 +40,8 @@ def build_report_data(
     fx_target_rule_resolutions: list | None = None,
 ) -> RebalanceReportData:
     """Calculate all report inputs from the current portfolio state."""
+    from src.portfolio import build_allocation_snapshot
+
     transient_status = get_transient_status(portfolio, transient_symbols)
     hidden_symbols = transient_status["symbols"]
 
