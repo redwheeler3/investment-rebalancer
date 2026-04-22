@@ -18,6 +18,7 @@ def build_report_data(
     targets: dict,
     transient_symbols: list,
     norberts_gambit_fee_cad: float,
+    drift_trade_threshold_pct: float,
     usd_to_cad_rate: float,
     dlr_quotes,
     fx_target_rule_resolutions: list | None = None,
@@ -38,6 +39,7 @@ def build_report_data(
         targets,
         usd_to_cad_rate,
         norberts_gambit_fee_cad,
+        drift_trade_threshold_pct,
         existing_only=True,
         transient_symbols=hidden_symbols,
     )

@@ -7,7 +7,6 @@ rebalancing algorithm.
 import math
 
 from src.rebalancer_core import (
-    TOLERANCE_PCT,
     RebalanceState,
     deduct_buy,
     effective_cash,
@@ -23,8 +22,9 @@ from src.rules import (
 
 
 def sweep_candidates(state: RebalanceState, acct, currency: str, max_price: float = None) -> list:
-    """Find buyable positions in an account for the given currency."""
+    """Find buyable underweight positions in an account for the given currency."""
     candidates = []
+    tolerance_pct = state.drift_trade_threshold_pct
     for pos in acct.positions:
         if pos.currency != currency or pos.quantity <= 0:
             continue
@@ -44,6 +44,8 @@ def sweep_candidates(state: RebalanceState, acct, currency: str, max_price: floa
             continue
 
         drift_pct = state.effective_drift.get(pos.symbol, 0)
+        if drift_pct >= -tolerance_pct:
+            continue
         candidates.append((pos.symbol, drift_pct, ask_price_native))
 
     candidates.sort(key=lambda item: item[1])
@@ -63,10 +65,11 @@ def is_effectively_single_currency_account(state: RebalanceState, acct) -> bool:
 def step_sell_overweight(state: RebalanceState) -> int:
     """Sell overweight positions to bring them toward target."""
     trade_count = 0
+    tolerance_pct = state.drift_trade_threshold_pct
     overweight_symbols = [
         (symbol, drift_pct)
         for symbol, drift_pct in state.effective_drift.items()
-        if symbol not in ("CAD", "USD") and drift_pct > TOLERANCE_PCT
+        if symbol not in ("CAD", "USD") and drift_pct > tolerance_pct
     ]
     overweight_symbols.sort(key=lambda item: item[1], reverse=True)
 
@@ -92,6 +95,7 @@ def step_sell_overweight(state: RebalanceState) -> int:
             state.portfolio.accounts,
             effective_drift=state.effective_drift,
             transient_symbols=state.transient_symbols,
+            drift_trade_threshold_pct=tolerance_pct,
             position_deltas=state.position_deltas,
         )
         for trade in sell_trades:
@@ -105,16 +109,17 @@ def step_sell_overweight(state: RebalanceState) -> int:
 def step_buy_underweight(state: RebalanceState, existing_only: bool) -> int:
     """Buy underweight positions using available cash or displacement sells."""
     trade_count = 0
+    tolerance_pct = state.drift_trade_threshold_pct
     underweight_symbols = [
         (symbol, drift_pct)
         for symbol, drift_pct in state.effective_drift.items()
-        if symbol not in ("CAD", "USD") and drift_pct < -TOLERANCE_PCT
+        if symbol not in ("CAD", "USD") and drift_pct < -tolerance_pct
     ]
     underweight_symbols.sort(key=lambda item: item[1])
 
     for symbol, _initial_drift in underweight_symbols:
         drift_pct = state.effective_drift.get(symbol, 0)
-        if drift_pct >= -TOLERANCE_PCT:
+        if drift_pct >= -tolerance_pct:
             continue
 
         holding = state.holdings_view.get(symbol)
@@ -240,7 +245,8 @@ def try_displacement_sell(
         if remaining_shares <= 0:
             break
 
-        is_overweight = candidate_drift_pct > TOLERANCE_PCT
+        tolerance_pct = state.drift_trade_threshold_pct
+        is_overweight = candidate_drift_pct > tolerance_pct
         if not is_overweight:
             holders = find_accounts_for_symbol(candidate_symbol, state.portfolio.accounts)
             if len(holders) <= 1:
@@ -305,12 +311,9 @@ def sweep_same_currency(state: RebalanceState, acct) -> int:
             if affordable_shares <= 0:
                 break
 
-            if best_drift_pct < -TOLERANCE_PCT:
-                gap_cad = abs(best_drift_pct / 100.0) * state.total_value
-                gap_native = gap_cad / state.usd_to_cad_rate if currency == "USD" else gap_cad
-                shares = min(int(math.ceil(gap_native / best_ask_native)), affordable_shares)
-            else:
-                shares = affordable_shares
+            gap_cad = abs(best_drift_pct / 100.0) * state.total_value
+            gap_native = gap_cad / state.usd_to_cad_rate if currency == "USD" else gap_cad
+            shares = min(int(math.ceil(gap_native / best_ask_native)), affordable_shares)
 
             if shares <= 0:
                 break
@@ -337,6 +340,7 @@ def sweep_cross_currency(state: RebalanceState, acct) -> int:
     """Convert stranded cash in the wrong currency and buy the best position."""
     trade_count = 0
     fee_cad = state.norberts_gambit_fee_cad
+    tolerance_pct = state.drift_trade_threshold_pct
     single_currency_account = is_effectively_single_currency_account(state, acct)
 
     for source_currency in ["CAD", "USD"]:
@@ -350,7 +354,7 @@ def sweep_cross_currency(state: RebalanceState, acct) -> int:
             continue
 
         best_symbol, best_drift_pct, best_ask_native = candidates[0]
-        if not single_currency_account and best_drift_pct >= -TOLERANCE_PCT:
+        if not single_currency_account and best_drift_pct >= -tolerance_pct:
             continue
 
         if source_currency == "CAD":

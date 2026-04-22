@@ -45,6 +45,7 @@ def load_config() -> tuple:
             transient_symbols list,
             norberts_gambit_fee_cad float,
             fx_target_rules dict,
+            drift_trade_threshold_pct float,
         ).
     """
     targets_path = CONFIG_DIR / "targets.yaml"
@@ -55,8 +56,15 @@ def load_config() -> tuple:
     transient_symbols = data.get("transient_symbols", [])
     norberts_gambit_fee_cad = data.get("norberts_gambit_fee_cad", 10.49)
     fx_target_rules = data.get("fx_target_rules", {})
+    drift_trade_threshold_pct = float(data.get("drift_trade_threshold_pct", 0.1))
 
-    return targets, transient_symbols, norberts_gambit_fee_cad, fx_target_rules
+    return (
+        targets,
+        transient_symbols,
+        norberts_gambit_fee_cad,
+        fx_target_rules,
+        drift_trade_threshold_pct,
+    )
 
 
 def _validate_resolved_targets(targets: dict):
@@ -193,7 +201,13 @@ def run_rebalancer():
     """Main rebalancer logic."""
 
     console.print("  [dim]Loading configuration...[/dim]")
-    targets, transient_symbols, norberts_gambit_fee_cad, fx_target_rules = load_config()
+    (
+        targets,
+        transient_symbols,
+        norberts_gambit_fee_cad,
+        fx_target_rules,
+        drift_trade_threshold_pct,
+    ) = load_config()
 
     clients = _connect_clients()
     usd_to_cad_rate = _fetch_exchange_rate(clients[0])
@@ -208,6 +222,7 @@ def run_rebalancer():
         resolved_targets.targets,
         transient_symbols,
         norberts_gambit_fee_cad,
+        drift_trade_threshold_pct,
         usd_to_cad_rate,
         dlr_quotes,
         fx_target_rule_resolutions=resolved_targets.fx_target_rule_resolutions,

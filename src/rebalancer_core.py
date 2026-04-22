@@ -8,8 +8,8 @@ import math
 from dataclasses import dataclass, field
 
 
-# Drift tolerance — don't trade if drift is smaller than this
-TOLERANCE_PCT = 0.1
+# Default minimum absolute drift before a symbol is eligible for trading
+DEFAULT_DRIFT_TRADE_THRESHOLD_PCT = 0.1
 
 # Maximum optimisation rounds before stopping
 MAX_ROUNDS = 10
@@ -23,6 +23,7 @@ class RebalanceState:
     targets: dict
     usd_to_cad_rate: float
     norberts_gambit_fee_cad: float
+    drift_trade_threshold_pct: float
     transient_symbols: set
     total_value: float
     holdings_view: dict = field(default_factory=dict)   # symbol -> holding data

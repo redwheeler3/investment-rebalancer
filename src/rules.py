@@ -7,6 +7,8 @@ like "only trade existing positions" and currency conversion handling.
 
 from dataclasses import dataclass
 
+from src.rebalancer_core import DEFAULT_DRIFT_TRADE_THRESHOLD_PCT
+
 
 @dataclass
 class TradeRecommendation:
@@ -64,15 +66,12 @@ def get_position_quantity(account, symbol: str) -> float:
     return 0.0
 
 
-# Drift tolerance for sell-allocation decisions (mirrors rebalancer.TOLERANCE_PCT)
-_SELL_ALLOC_TOLERANCE = 0.1
-
-
 def _has_underweight_alternatives(
     acct,
     sell_symbol: str,
     effective_drift: dict,
     transient_symbols: set,
+    drift_trade_threshold_pct: float,
 ) -> bool:
     """Can the proceeds from selling be productively redeployed in this account?
 
@@ -86,7 +85,7 @@ def _has_underweight_alternatives(
             continue
         if pos.symbol in transient_symbols:
             continue
-        if effective_drift.get(pos.symbol, 0) < -_SELL_ALLOC_TOLERANCE:
+        if effective_drift.get(pos.symbol, 0) < -drift_trade_threshold_pct:
             return True
     return False
 
@@ -107,6 +106,7 @@ def allocate_sell(
     accounts: list,
     effective_drift: dict = None,
     transient_symbols: set = None,
+    drift_trade_threshold_pct: float = DEFAULT_DRIFT_TRADE_THRESHOLD_PCT,
     position_deltas: dict = None,
 ) -> list:
     """
@@ -128,6 +128,8 @@ def allocate_sell(
         effective_drift: Current drift per symbol (used to check for underweight
             alternatives).  When None, falls back to quantity-only sorting.
         transient_symbols: Symbols excluded from rebalancing (e.g. DLR.TO).
+        drift_trade_threshold_pct: Minimum absolute drift required before a
+            symbol is treated as underweight for cash redeployment purposes.
         position_deltas: Cumulative quantity changes from earlier rounds.
             Maps (acct_number, symbol) → int delta.
 
@@ -153,7 +155,13 @@ def allocate_sell(
     # redeployed productively), (2) largest effective position first within each tier.
     holders.sort(
         key=lambda a: (
-            1 if _has_underweight_alternatives(a, symbol, effective_drift, transient_symbols) else 0,
+            1 if _has_underweight_alternatives(
+                a,
+                symbol,
+                effective_drift,
+                transient_symbols,
+                drift_trade_threshold_pct,
+            ) else 0,
             effective_qty(a, symbol, position_deltas),
         ),
         reverse=True,

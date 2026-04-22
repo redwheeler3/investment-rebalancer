@@ -14,6 +14,7 @@ from src.portfolio import (
     get_holdings_view,
 )
 from src.rebalancer_core import (
+    DEFAULT_DRIFT_TRADE_THRESHOLD_PCT,
     MAX_ROUNDS,
     RebalanceState,
 )
@@ -34,6 +35,7 @@ def calculate_trades(
     targets: dict,
     usd_to_cad_rate: float,
     norberts_gambit_fee_cad: float = 10.49,
+    drift_trade_threshold_pct: float = DEFAULT_DRIFT_TRADE_THRESHOLD_PCT,
     existing_only: bool = True,
     transient_symbols: set = None,
 ) -> list:
@@ -48,6 +50,8 @@ def calculate_trades(
         targets: Target allocation percentages by symbol.
         usd_to_cad_rate: Current USD/CAD exchange rate.
         norberts_gambit_fee_cad: Trading fee in CAD for Norbert's Gambit.
+        drift_trade_threshold_pct: Minimum absolute drift percent required
+            before the rebalancer will generate trades for a symbol.
         existing_only: If True, only trade in accounts that already hold the position.
         transient_symbols: Symbols to skip (listed in config as transient).
 
@@ -74,6 +78,7 @@ def calculate_trades(
         targets=targets,
         usd_to_cad_rate=usd_to_cad_rate,
         norberts_gambit_fee_cad=norberts_gambit_fee_cad,
+        drift_trade_threshold_pct=drift_trade_threshold_pct,
         transient_symbols=transient_symbols,
         total_value=total_value,
         holdings_view=get_holdings_view(portfolio, transient_symbols),
