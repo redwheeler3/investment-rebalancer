@@ -290,17 +290,15 @@ def calculate_currency_needs(
         if net_usd < -0.01 and net_cad > 0.01:
             # Need USD but have CAD surplus -> Convert CAD to USD
             usd_shortfall = abs(net_usd)
-            cad_needed = usd_shortfall * usd_to_cad_rate
-
-            # Reserve fee from CAD side
-            cad_for_dlr = cad_needed + norberts_gambit_fee_cad
-
-            # Make sure we don't try to convert more CAD than is available
-            cad_for_dlr = min(cad_for_dlr, net_cad)
-            actual_cad_for_shares = cad_for_dlr - norberts_gambit_fee_cad
-
-            if actual_cad_for_shares > 0 and cad_buy_price > 0:
-                dlr_shares = int(math.floor(actual_cad_for_shares / cad_buy_price))
+            # Size the gambit from the USD proceeds side, not the CAD spend side.
+            # Otherwise the bid/ask spread between DLR.TO and DLR.U.TO can leave
+            # us a little short of the USD needed for the buy.
+            if cad_buy_price > 0 and usd_sell_price > 0:
+                dlr_shares_needed = int(math.ceil(usd_shortfall / usd_sell_price))
+                dlr_shares_affordable = int(
+                    math.floor(max(0.0, net_cad - norberts_gambit_fee_cad) / cad_buy_price)
+                )
+                dlr_shares = min(dlr_shares_needed, dlr_shares_affordable)
             else:
                 dlr_shares = 0
 
@@ -315,13 +313,17 @@ def calculate_currency_needs(
                 else (dlr_shares * cad_buy_price) / usd_to_cad_rate if dlr_shares > 0 and usd_to_cad_rate > 0 else 0.0
             )
 
-            if cad_needed > 0.01:
+            if usd_shortfall > 0.01:
                 conversions.append(CurrencyConversion(
                     account_number=acct_num,
                     account_type=acct.account_type,
                     owner=acct.owner,
                     direction="CAD_TO_USD",
-                    source_amount=dlr_shares * cad_buy_price if dlr_shares > 0 else cad_needed,
+                    source_amount=(
+                        dlr_shares * cad_buy_price
+                        if dlr_shares > 0
+                        else usd_shortfall * usd_to_cad_rate
+                    ),
                     target_amount=actual_usd,
                     dlr_symbol="DLR.TO",
                     dlr_shares=dlr_shares,
