@@ -10,6 +10,8 @@ import math
 import requests
 from dataclasses import dataclass
 
+from src.funding import build_account_trade_impacts, net_account_cash
+
 
 @dataclass
 class CurrencyConversion:
@@ -212,6 +214,110 @@ def _get_rate_from_dlr(client) -> float | None:
     return fetch_dlr_quotes(client).exchange_rate
 
 
+def _empty_dlr_quotes() -> DlrQuotes:
+    """Return an empty DLR quote bundle for offline/fallback scenarios."""
+    return DlrQuotes(
+        cad_bid_price=0.0,
+        cad_ask_price=0.0,
+        usd_bid_price=0.0,
+        usd_ask_price=0.0,
+        exchange_rate=None,
+    )
+
+
+def _build_account_map(accounts: list) -> dict:
+    """Return accounts keyed by account number."""
+    return {acct.number: acct for acct in accounts}
+
+
+def _build_cad_to_usd_conversion(
+    acct_num: str,
+    acct,
+    net_cash,
+    usd_to_cad_rate: float,
+    cad_buy_price: float,
+    usd_sell_price: float,
+    fee_cad: float,
+) -> CurrencyConversion | None:
+    """Build a CAD->USD conversion instruction when USD is short."""
+    if net_cash.usd >= -0.01 or net_cash.cad <= 0.01:
+        return None
+
+    usd_shortfall = abs(net_cash.usd)
+    if cad_buy_price > 0 and usd_sell_price > 0:
+        shares_needed = int(math.ceil(usd_shortfall / usd_sell_price))
+        shares_affordable = int(math.floor(max(0.0, net_cash.cad - fee_cad) / cad_buy_price))
+        dlr_shares = min(shares_needed, shares_affordable)
+    else:
+        dlr_shares = 0
+
+    if dlr_shares <= 0:
+        return None
+
+    actual_usd = (
+        dlr_shares * usd_sell_price
+        if usd_sell_price > 0
+        else (dlr_shares * cad_buy_price) / usd_to_cad_rate if usd_to_cad_rate > 0 else 0.0
+    )
+
+    return CurrencyConversion(
+        account_number=acct_num,
+        account_type=acct.account_type,
+        owner=acct.owner,
+        direction="CAD_TO_USD",
+        source_amount=dlr_shares * cad_buy_price,
+        target_amount=actual_usd,
+        dlr_symbol="DLR.TO",
+        dlr_shares=dlr_shares,
+        dlr_price=cad_buy_price,
+        fee=fee_cad,
+    )
+
+
+def _build_usd_to_cad_conversion(
+    acct_num: str,
+    acct,
+    net_cash,
+    usd_to_cad_rate: float,
+    usd_buy_price: float,
+    cad_sell_price: float,
+    fee_cad: float,
+) -> CurrencyConversion | None:
+    """Build a USD->CAD conversion instruction when CAD is short."""
+    if net_cash.cad >= -0.01 or net_cash.usd <= 0.01:
+        return None
+
+    cad_shortfall = abs(net_cash.cad)
+    if usd_buy_price > 0 and cad_sell_price > 0:
+        shares_needed = int(math.ceil((cad_shortfall + fee_cad) / cad_sell_price))
+        shares_affordable = int(math.floor(net_cash.usd / usd_buy_price))
+        dlr_shares = min(shares_needed, shares_affordable)
+    else:
+        dlr_shares = 0
+
+    if dlr_shares <= 0:
+        return None
+
+    actual_cad = (
+        dlr_shares * cad_sell_price
+        if cad_sell_price > 0
+        else (dlr_shares * usd_buy_price * usd_to_cad_rate)
+    )
+
+    return CurrencyConversion(
+        account_number=acct_num,
+        account_type=acct.account_type,
+        owner=acct.owner,
+        direction="USD_TO_CAD",
+        source_amount=dlr_shares * usd_buy_price,
+        target_amount=actual_cad,
+        dlr_symbol="DLR.U.TO",
+        dlr_shares=dlr_shares,
+        dlr_price=usd_buy_price,
+        fee=fee_cad,
+    )
+
+
 def calculate_currency_needs(
     trades: list,
     accounts: list,
@@ -239,38 +345,16 @@ def calculate_currency_needs(
     Returns:
         List of CurrencyConversion objects with per-account conversion details.
     """
-    # Build a map of account info
     if dlr_quotes is None:
-        dlr_quotes = DlrQuotes(
-            cad_bid_price=0.0,
-            cad_ask_price=0.0,
-            usd_bid_price=0.0,
-            usd_ask_price=0.0,
-            exchange_rate=None,
-        )
+        dlr_quotes = _empty_dlr_quotes()
 
     cad_buy_price = dlr_quotes.cad_buy_price
     cad_sell_price = dlr_quotes.cad_sell_price
     usd_buy_price = dlr_quotes.usd_buy_price
     usd_sell_price = dlr_quotes.usd_sell_price
 
-    acct_map = {}
-    for acct in accounts:
-        acct_map[acct.number] = acct
-
-    # Track net currency impact per account
-    # Positive = spending cash, negative = receiving cash (from sells)
-    account_impact = {}  # account_number -> {"CAD": net_spend, "USD": net_spend}
-
-    for trade in trades:
-        acct_num = trade.account_number
-        if acct_num not in account_impact:
-            account_impact[acct_num] = {"CAD": 0.0, "USD": 0.0}
-
-        if trade.action == "BUY":
-            account_impact[acct_num][trade.currency] += trade.estimated_value
-        elif trade.action == "SELL":
-            account_impact[acct_num][trade.currency] -= trade.estimated_value
+    acct_map = _build_account_map(accounts)
+    account_impact = build_account_trade_impacts(trades)
 
     conversions = []
 
@@ -279,95 +363,30 @@ def calculate_currency_needs(
         if not acct:
             continue
 
-        # Net cash position after trades
-        # Positive = have cash left, negative = short on cash
-        net_cad = acct.cash_cad - impact["CAD"]
-        net_usd = acct.cash_usd - impact["USD"]
+        net_cash = net_account_cash(acct, impact)
 
-        # Only generate conversion if one currency is short and there's
-        # a logical need for conversion. Don't generate both directions.
-
-        if net_usd < -0.01 and net_cad > 0.01:
-            # Need USD but have CAD surplus -> Convert CAD to USD
-            usd_shortfall = abs(net_usd)
-            # Size the gambit from the USD proceeds side, not the CAD spend side.
-            # Otherwise the bid/ask spread between DLR.TO and DLR.U.TO can leave
-            # us a little short of the USD needed for the buy.
-            if cad_buy_price > 0 and usd_sell_price > 0:
-                dlr_shares_needed = int(math.ceil(usd_shortfall / usd_sell_price))
-                dlr_shares_affordable = int(
-                    math.floor(max(0.0, net_cad - norberts_gambit_fee_cad) / cad_buy_price)
-                )
-                dlr_shares = min(dlr_shares_needed, dlr_shares_affordable)
-            else:
-                dlr_shares = 0
-
-            # Skip conversion if we can't buy even 1 DLR share (fee exceeds amount)
-            if dlr_shares <= 0:
-                continue
-
-            # Recalculate actual USD we'd get
-            actual_usd = (
-                dlr_shares * usd_sell_price
-                if dlr_shares > 0 and usd_sell_price > 0
-                else (dlr_shares * cad_buy_price) / usd_to_cad_rate if dlr_shares > 0 and usd_to_cad_rate > 0 else 0.0
+        required_conversion = _build_cad_to_usd_conversion(
+            acct_num,
+            acct,
+            net_cash,
+            usd_to_cad_rate,
+            cad_buy_price,
+            usd_sell_price,
+            norberts_gambit_fee_cad,
+        )
+        if required_conversion is None:
+            required_conversion = _build_usd_to_cad_conversion(
+                acct_num,
+                acct,
+                net_cash,
+                usd_to_cad_rate,
+                usd_buy_price,
+                cad_sell_price,
+                norberts_gambit_fee_cad,
             )
 
-            if usd_shortfall > 0.01:
-                conversions.append(CurrencyConversion(
-                    account_number=acct_num,
-                    account_type=acct.account_type,
-                    owner=acct.owner,
-                    direction="CAD_TO_USD",
-                    source_amount=(
-                        dlr_shares * cad_buy_price
-                        if dlr_shares > 0
-                        else usd_shortfall * usd_to_cad_rate
-                    ),
-                    target_amount=actual_usd,
-                    dlr_symbol="DLR.TO",
-                    dlr_shares=dlr_shares,
-                    dlr_price=cad_buy_price,
-                    fee=norberts_gambit_fee_cad,
-                ))
-
-        elif net_cad < -0.01 and net_usd > 0.01:
-            # Need CAD but have USD surplus -> Convert USD to CAD
-            cad_shortfall = abs(net_cad)
-
-            if usd_buy_price > 0 and cad_sell_price > 0:
-                # Need enough CAD proceeds to cover the shortfall plus fee,
-                # while respecting the USD cost to buy DLR.U.TO at the ask.
-                dlr_shares_needed = int(math.ceil((cad_shortfall + norberts_gambit_fee_cad) / cad_sell_price))
-                dlr_shares_affordable = int(math.floor(net_usd / usd_buy_price))
-                dlr_shares = min(dlr_shares_needed, dlr_shares_affordable)
-            else:
-                dlr_shares = 0
-
-            actual_cad = (
-                dlr_shares * cad_sell_price
-                if dlr_shares > 0 and cad_sell_price > 0
-                else (dlr_shares * usd_buy_price * usd_to_cad_rate) if dlr_shares > 0 else cad_shortfall
-            )
-
-            # Skip conversion if we can't buy even 1 DLR.U share (fee exceeds amount)
-            if dlr_shares <= 0:
-                continue
-
-            usd_needed = (dlr_shares * usd_buy_price) if dlr_shares > 0 else 0.0
-            if usd_needed > 0.01:
-                conversions.append(CurrencyConversion(
-                    account_number=acct_num,
-                    account_type=acct.account_type,
-                    owner=acct.owner,
-                    direction="USD_TO_CAD",
-                    source_amount=usd_needed,
-                    target_amount=actual_cad,
-                    dlr_symbol="DLR.U.TO",
-                    dlr_shares=dlr_shares,
-                    dlr_price=usd_buy_price,
-                    fee=norberts_gambit_fee_cad,
-                ))
+        if required_conversion is not None:
+            conversions.append(required_conversion)
 
     # ── Sweep: convert stranded foreign cash in single-currency accounts ──
     # If all positions in an account are one currency, convert leftover cash
@@ -380,9 +399,10 @@ def calculate_currency_needs(
         position_currency = next(iter(pos_currencies))
 
         # Remaining cash after trades
-        impact = account_impact.get(acct.number, {"CAD": 0.0, "USD": 0.0})
-        remaining_cad = acct.cash_cad - impact["CAD"]
-        remaining_usd = acct.cash_usd - impact["USD"]
+        impact = account_impact.get(acct.number)
+        remaining_cash = net_account_cash(acct, impact)
+        remaining_cad = remaining_cash.cad
+        remaining_usd = remaining_cash.usd
 
         # Subtract cash already allocated to first-pass conversions
         existing_conv = None

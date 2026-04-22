@@ -19,6 +19,7 @@ from src.rebalancer_core import (
     RebalanceState,
 )
 from src.rebalancer_netting import net_trades
+from src.rebalancer_reconcile import trim_excess_sell_funding
 from src.rebalancer_steps import (
     step_buy_underweight,
     step_sell_overweight,
@@ -38,6 +39,7 @@ def calculate_trades(
     drift_trade_threshold_pct: float = DEFAULT_DRIFT_TRADE_THRESHOLD_PCT,
     existing_only: bool = True,
     transient_symbols: set = None,
+    dlr_quotes=None,
 ) -> list:
     """
     Calculate trades to rebalance the portfolio using an iterative algorithm.
@@ -102,7 +104,17 @@ def calculate_trades(
         if round_count == 0:
             break  # No more work to do
 
-    return net_trades(state.all_trades)
+    trades = net_trades(state.all_trades)
+    return trim_excess_sell_funding(
+        portfolio,
+        trades,
+        targets,
+        usd_to_cad_rate,
+        norberts_gambit_fee_cad,
+        drift_trade_threshold_pct,
+        dlr_quotes=dlr_quotes,
+        hidden_symbols=transient_symbols,
+    )
 
 
 def simulate_rebalance(

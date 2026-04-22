@@ -1,0 +1,106 @@
+"""Shared funding and currency-capacity helpers.
+
+This module centralizes the conservative cash/conversion math used by both the
+trade reconciler and the currency-conversion planner.
+"""
+
+import math
+from dataclasses import dataclass
+
+
+FUNDING_TOLERANCE = 0.01
+
+
+@dataclass
+class CurrencyTotals:
+    """Simple CAD/USD totals container used for account cash math."""
+
+    cad: float = 0.0
+    usd: float = 0.0
+
+    def add(self, currency: str, amount: float) -> None:
+        if currency == "CAD":
+            self.cad += amount
+        elif currency == "USD":
+            self.usd += amount
+        else:
+            raise ValueError(f"Unsupported currency: {currency}")
+
+
+def build_account_trade_impacts(trades: list) -> dict:
+    """Return per-account cash impacts where buys spend and sells raise cash."""
+    impacts = {}
+    for trade in trades:
+        totals = impacts.setdefault(trade.account_number, CurrencyTotals())
+        amount = trade.estimated_value if trade.action == "BUY" else -trade.estimated_value
+        totals.add(trade.currency, amount)
+    return impacts
+
+
+def net_account_cash(account, impact: CurrencyTotals | None = None) -> CurrencyTotals:
+    """Return remaining account cash after applying a trade impact."""
+    impact = impact or CurrencyTotals()
+    return CurrencyTotals(
+        cad=account.cash_cad - impact.cad,
+        usd=account.cash_usd - impact.usd,
+    )
+
+
+def max_usd_from_cad(
+    cad_available: float,
+    usd_to_cad_rate: float,
+    fee_cad: float,
+    dlr_quotes=None,
+) -> float:
+    """Maximum USD obtainable from available CAD under conservative assumptions."""
+    usable_cad = max(0.0, cad_available - fee_cad)
+    if usable_cad <= 0:
+        return 0.0
+
+    cad_buy_price = getattr(dlr_quotes, "cad_buy_price", 0.0) if dlr_quotes else 0.0
+    usd_sell_price = getattr(dlr_quotes, "usd_sell_price", 0.0) if dlr_quotes else 0.0
+    if cad_buy_price > 0 and usd_sell_price > 0:
+        shares = int(math.floor(usable_cad / cad_buy_price))
+        return shares * usd_sell_price
+
+    return usable_cad / usd_to_cad_rate if usd_to_cad_rate > 0 else 0.0
+
+
+def max_cad_from_usd(
+    usd_available: float,
+    usd_to_cad_rate: float,
+    fee_cad: float,
+    dlr_quotes=None,
+) -> float:
+    """Maximum net CAD obtainable from available USD under conservative assumptions."""
+    if usd_available <= 0:
+        return 0.0
+
+    usd_buy_price = getattr(dlr_quotes, "usd_buy_price", 0.0) if dlr_quotes else 0.0
+    cad_sell_price = getattr(dlr_quotes, "cad_sell_price", 0.0) if dlr_quotes else 0.0
+    if usd_buy_price > 0 and cad_sell_price > 0:
+        shares = int(math.floor(usd_available / usd_buy_price))
+        gross_cad = shares * cad_sell_price
+        return max(0.0, gross_cad - fee_cad)
+
+    return max(0.0, usd_available * usd_to_cad_rate - fee_cad)
+
+
+def can_fund_net_cash_requirement(
+    net_cash: CurrencyTotals,
+    usd_to_cad_rate: float,
+    fee_cad: float,
+    dlr_quotes=None,
+    tolerance: float = FUNDING_TOLERANCE,
+) -> bool:
+    """Whether an account can fund its net needs with at most one conversion."""
+    if net_cash.cad >= -tolerance and net_cash.usd >= -tolerance:
+        return True
+
+    if net_cash.usd < -tolerance and net_cash.cad > tolerance:
+        return max_usd_from_cad(net_cash.cad, usd_to_cad_rate, fee_cad, dlr_quotes) + tolerance >= abs(net_cash.usd)
+
+    if net_cash.cad < -tolerance and net_cash.usd > tolerance:
+        return max_cad_from_usd(net_cash.usd, usd_to_cad_rate, fee_cad, dlr_quotes) + tolerance >= abs(net_cash.cad)
+
+    return False

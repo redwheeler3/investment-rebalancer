@@ -42,6 +42,7 @@ def build_report_data(
         drift_trade_threshold_pct,
         existing_only=True,
         transient_symbols=hidden_symbols,
+        dlr_quotes=dlr_quotes,
     )
 
     currency_conversions = calculate_currency_needs(
