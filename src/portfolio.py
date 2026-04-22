@@ -9,6 +9,17 @@ from dataclasses import dataclass, field
 from src.report_models import AllocationSnapshot
 
 
+def _coerce_numeric(value, default: float = 0.0) -> float:
+    """Normalize API numeric fields so None/missing values don't break math."""
+    if value is None:
+        return default
+
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return default
+
+
 @dataclass
 class Position:
     """A single position in a specific account."""
@@ -118,21 +129,21 @@ def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
             # Questrade returns combinedBalances with per-currency entries
             for bal in balances_data.get("perCurrencyBalances", []):
                 if bal["currency"] == "CAD":
-                    cash_cad = bal.get("cash", 0.0)
+                    cash_cad = _coerce_numeric(bal.get("cash", 0.0))
                 elif bal["currency"] == "USD":
-                    cash_usd = bal.get("cash", 0.0)
+                    cash_usd = _coerce_numeric(bal.get("cash", 0.0))
 
             # Get positions
             raw_positions = client.get_positions(acct_number)
             positions = []
 
             for pos in raw_positions:
-                symbol = pos.get("symbol", "")
-                quantity = pos.get("openQuantity", 0)
-                market_value = pos.get("currentMarketValue", 0.0)
-                current_price = pos.get("currentPrice", 0.0)
-                symbol_id = pos.get("symbolId", 0)
-                avg_cost = pos.get("averageEntryPrice", 0.0)
+                symbol = pos.get("symbol") or ""
+                quantity = _coerce_numeric(pos.get("openQuantity", 0))
+                market_value = _coerce_numeric(pos.get("currentMarketValue", 0.0))
+                current_price = _coerce_numeric(pos.get("currentPrice", 0.0))
+                symbol_id = int(_coerce_numeric(pos.get("symbolId", 0), default=0.0))
+                avg_cost = _coerce_numeric(pos.get("averageEntryPrice", 0.0))
 
                 if quantity == 0 and market_value == 0:
                     continue
