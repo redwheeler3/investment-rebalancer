@@ -176,7 +176,13 @@ def _fetch_dlr_quotes(client):
     return dlr_quotes
 
 
-def _render_report(portfolio, targets: dict, usd_to_cad_rate: float, report) -> None:
+def _render_report(
+    portfolio,
+    targets: dict,
+    usd_to_cad_rate: float,
+    drift_trade_threshold_pct: float,
+    report,
+) -> None:
     """Render the completed report data to the terminal."""
     projected_snapshot = report.projected
 
@@ -194,6 +200,7 @@ def _render_report(portfolio, targets: dict, usd_to_cad_rate: float, report) -> 
         projected_allocations=projected_snapshot.allocations if projected_snapshot else None,
         all_time_high=report.all_time_high,
         fx_target_rule_resolutions=report.fx_target_rule_resolutions,
+        drift_trade_threshold_pct=drift_trade_threshold_pct,
     )
 
 
@@ -227,7 +234,13 @@ def run_rebalancer():
         dlr_quotes,
         fx_target_rule_resolutions=resolved_targets.fx_target_rule_resolutions,
     )
-    _render_report(portfolio, resolved_targets.targets, usd_to_cad_rate, report)
+    _render_report(
+        portfolio,
+        resolved_targets.targets,
+        usd_to_cad_rate,
+        drift_trade_threshold_pct,
+        report,
+    )
 
 
 def _pull_latest():

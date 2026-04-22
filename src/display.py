@@ -63,9 +63,16 @@ def _partition_symbols(allocations: dict, targets: dict, drifts: dict):
     return stocks, cash
 
 
-def _add_drift_row(table, symbol: str, value_pct: float, target: float, drift: float):
-    """Add an allocation/drift row to a table (shared by current and projected tables)."""
-    if abs(drift) < 0.1:
+def _add_drift_row(
+    table,
+    symbol: str,
+    value_pct: float,
+    target: float,
+    drift: float,
+    tolerance_pct: float,
+):
+    """Add an allocation/drift row using the configured drift tolerance."""
+    if abs(drift) < tolerance_pct:
         drift_style = "dim"
         status = "[green]OK[/green]"
     elif drift > 0:
@@ -213,6 +220,7 @@ def _display_allocation_table(
     allocations: dict,
     targets: dict,
     value_column_name: str = "Current %",
+    tolerance_pct: float = 0.1,
 ):
     """Display an allocation vs target table — shared by current and projected views."""
     # Calculate drifts inline
@@ -235,26 +243,44 @@ def _display_allocation_table(
     stock_symbols, cash_list = _partition_symbols(allocations, targets, drifts)
 
     for symbol in stock_symbols:
-        _add_drift_row(table, symbol, allocations.get(symbol, 0.0),
-                       targets.get(symbol, 0.0), drifts.get(symbol, 0.0))
+        _add_drift_row(
+            table,
+            symbol,
+            allocations.get(symbol, 0.0),
+            targets.get(symbol, 0.0),
+            drifts.get(symbol, 0.0),
+            tolerance_pct,
+        )
 
     if cash_list:
         table.add_section()
         for symbol in cash_list:
-            _add_drift_row(table, symbol, allocations.get(symbol, 0.0),
-                           targets.get(symbol, 0.0), drifts.get(symbol, 0.0))
+            _add_drift_row(
+                table,
+                symbol,
+                allocations.get(symbol, 0.0),
+                targets.get(symbol, 0.0),
+                drifts.get(symbol, 0.0),
+                tolerance_pct,
+            )
 
     console.print(table)
     console.print()
 
 
-def display_allocations(current_allocations: dict, targets: dict, drifts: dict):
+def display_allocations(
+    current_allocations: dict,
+    targets: dict,
+    drifts: dict,
+    tolerance_pct: float,
+):
     """Display current vs target allocation table, sorted by drift ascending."""
     _display_allocation_table(
         title="Current vs Target Allocation",
         header_style="bold magenta",
         allocations=current_allocations,
         targets=targets,
+        tolerance_pct=tolerance_pct,
     )
 
 
@@ -448,7 +474,11 @@ def display_account_summary(accounts: list, usd_to_cad_rate: float):
     console.print()
 
 
-def display_projected_allocations(projected_allocations: dict, targets: dict):
+def display_projected_allocations(
+    projected_allocations: dict,
+    targets: dict,
+    tolerance_pct: float,
+):
     """Display projected allocation table after trades, sorted by drift ascending."""
     if not projected_allocations:
         return
@@ -459,6 +489,7 @@ def display_projected_allocations(projected_allocations: dict, targets: dict):
         allocations=projected_allocations,
         targets=targets,
         value_column_name="Projected %",
+        tolerance_pct=tolerance_pct,
     )
 
 
@@ -476,6 +507,7 @@ def display_full_report(
     projected_allocations: dict = None,
     all_time_high=None,
     fx_target_rule_resolutions: list = None,
+    drift_trade_threshold_pct: float = 0.1,
 ):
     """Display the complete rebalancing report."""
     display_header()
@@ -483,8 +515,8 @@ def display_full_report(
     display_all_time_high(all_time_high)
     display_holdings_summary(portfolio, usd_to_cad_rate)
     display_account_summary(portfolio.accounts, usd_to_cad_rate)
-    display_allocations(current_allocations, targets, drifts)
+    display_allocations(current_allocations, targets, drifts, drift_trade_threshold_pct)
     display_transient_alerts(transient_alerts)
     display_trades(trades)
     display_currency_conversions(currency_conversions)
-    display_projected_allocations(projected_allocations, targets)
+    display_projected_allocations(projected_allocations, targets, drift_trade_threshold_pct)
