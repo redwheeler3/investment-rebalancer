@@ -12,6 +12,7 @@ from src.rebalancer_core import (
     effective_cash,
     record_trade,
     shares_for_drift,
+    to_cad,
 )
 from src.rules import (
     TradeRecommendation,
@@ -216,9 +217,17 @@ def try_displacement_sell(
     acct,
     remaining_shares: int,
 ) -> int:
-    """Sell another position in this account to raise cash for a buy."""
+    """Sell another position in this account to raise cash for a buy.
+
+    Displacement sells are intentionally conservative: they are only allowed
+    from positions that are still globally overweight, and only up to the point
+    where the sold symbol remains at or above the configured drift tolerance.
+    This prevents cross-account churn where a symbol is sold in one account
+    only to become underweight and get repurchased elsewhere.
+    """
     trade_count = 0
     displacement_candidates = []
+    tolerance_pct = state.drift_trade_threshold_pct
 
     for pos in acct.positions:
         if pos.symbol == buy_symbol or pos.symbol in state.transient_symbols:
@@ -235,22 +244,31 @@ def try_displacement_sell(
             continue
 
         drift_pct = state.effective_drift.get(pos.symbol, 0)
-        displacement_candidates.append((pos.symbol, drift_pct, bid_price_native))
+        max_sell_quantity = max_displacement_sell_quantity(
+            state,
+            drift_pct,
+            bid_price_native,
+            currency,
+        )
+        if max_sell_quantity <= 0:
+            continue
+
+        displacement_candidates.append(
+            (pos.symbol, drift_pct, bid_price_native, max_sell_quantity)
+        )
 
     if not displacement_candidates:
         return 0
 
     displacement_candidates.sort(key=lambda item: item[1], reverse=True)
-    for candidate_symbol, candidate_drift_pct, candidate_bid_native in displacement_candidates:
+    for (
+        candidate_symbol,
+        _candidate_drift_pct,
+        candidate_bid_native,
+        max_sell_quantity,
+    ) in displacement_candidates:
         if remaining_shares <= 0:
             break
-
-        tolerance_pct = state.drift_trade_threshold_pct
-        is_overweight = candidate_drift_pct > tolerance_pct
-        if not is_overweight:
-            holders = find_accounts_for_symbol(candidate_symbol, state.portfolio.accounts)
-            if len(holders) <= 1:
-                continue
 
         acct_cash_native = max(0, state.available_cash.get(acct.number, {}).get(currency, 0))
         shortfall_native = remaining_shares * buy_ask_native - acct_cash_native
@@ -259,11 +277,10 @@ def try_displacement_sell(
 
         sell_quantity = int(math.ceil(shortfall_native / candidate_bid_native))
         held_quantity = effective_qty(acct, candidate_symbol, state.position_deltas)
-        sell_quantity = min(sell_quantity, held_quantity)
+        sell_quantity = min(sell_quantity, held_quantity, max_sell_quantity)
         if sell_quantity <= 0:
             continue
 
-        note = "" if is_overweight else "Displacement sell"
         sell_trade = TradeRecommendation(
             symbol=candidate_symbol,
             action="SELL",
@@ -274,13 +291,34 @@ def try_displacement_sell(
             price=candidate_bid_native,
             currency=currency,
             estimated_value=candidate_bid_native * sell_quantity,
-            note=note,
+            note="Displacement sell",
         )
         state.available_cash[acct.number][currency] += sell_trade.estimated_value
         record_trade(state, sell_trade)
         trade_count += 1
 
     return trade_count
+
+
+def max_displacement_sell_quantity(
+    state: RebalanceState,
+    drift_pct: float,
+    price_native: float,
+    currency: str,
+) -> int:
+    """Maximum whole shares sellable without pushing a symbol below tolerance."""
+    tolerance_pct = state.drift_trade_threshold_pct
+    excess_drift_pct = drift_pct - tolerance_pct
+    if excess_drift_pct <= 0 or state.total_value <= 0 or price_native <= 0:
+        return 0
+
+    per_share_drift_pct = (
+        to_cad(price_native, currency, state.usd_to_cad_rate) / state.total_value
+    ) * 100.0
+    if per_share_drift_pct <= 0:
+        return 0
+
+    return int(math.floor((excess_drift_pct + 1e-9) / per_share_drift_pct))
 
 
 def step_sweep_cash(state: RebalanceState) -> int:
