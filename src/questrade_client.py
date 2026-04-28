@@ -147,37 +147,3 @@ class QuestradeClient:
         """
         data = self._get("v1/symbols/search", params={"prefix": symbol})
         return data.get("symbols", [])
-
-def refresh_token_only(token_path: str) -> bool:
-    """
-    Refresh the token without doing anything else.
-    Used by the GitHub Actions cron job.
-
-    Args:
-        token_path: Path to the token JSON file.
-
-    Returns:
-        True if refresh was successful, False otherwise.
-    """
-    try:
-        with open(token_path, "r") as f:
-            data = json.load(f)
-
-        resp = requests.get(
-            QUESTRADE_AUTH_URL,
-            params={
-                "grant_type": "refresh_token",
-                "refresh_token": data["refresh_token"],
-            },
-            timeout=30,
-        )
-        resp.raise_for_status()
-        token_data = resp.json()
-
-        with open(token_path, "w") as f:
-            json.dump({"refresh_token": token_data["refresh_token"]}, f, indent=2)
-
-        return True
-    except Exception as e:
-        print(f"ERROR refreshing token at {token_path}: {e}")
-        return False

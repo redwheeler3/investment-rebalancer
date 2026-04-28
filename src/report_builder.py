@@ -13,7 +13,6 @@ from src.portfolio import AllocationSnapshot
 from src.rebalancer import calculate_trades
 from src.rebalancer_simulation import simulate_rebalance
 from src.rules import get_transient_status
-from src.target_resolver import FxTargetRuleResolution
 
 
 @dataclass
@@ -26,7 +25,6 @@ class RebalanceReportData:
     currency_conversions: list
     projected: AllocationSnapshot | None = None
     all_time_high: Any | None = None
-    fx_target_rule_resolutions: list[FxTargetRuleResolution] = field(default_factory=list)
 
 
 def build_report_data(
@@ -37,7 +35,6 @@ def build_report_data(
     drift_trade_threshold_pct: float,
     usd_to_cad_rate: float,
     dlr_quotes,
-    fx_target_rule_resolutions: list | None = None,
 ) -> RebalanceReportData:
     """Calculate all report inputs from the current portfolio state."""
     from src.portfolio import build_allocation_snapshot
@@ -91,5 +88,4 @@ def build_report_data(
         currency_conversions=currency_conversions,
         projected=projected_snapshot,
         all_time_high=all_time_high,
-        fx_target_rule_resolutions=fx_target_rule_resolutions or [],
     )

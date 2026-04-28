@@ -115,26 +115,3 @@ def calculate_trades(
         dlr_quotes=dlr_quotes,
         hidden_symbols=transient_symbols,
     )
-
-
-def simulate_rebalance(
-    portfolio: PortfolioSummary,
-    trades: list,
-    targets: dict,
-    usd_to_cad_rate: float,
-    hidden_symbols: set = None,
-) -> dict:
-    """Compatibility wrapper for the dedicated simulation module."""
-    from src.rebalancer_simulation import simulate_rebalance as _simulate_rebalance
-
-    snapshot = _simulate_rebalance(
-        portfolio,
-        trades,
-        targets,
-        usd_to_cad_rate,
-        hidden_symbols=hidden_symbols,
-    )
-    return {
-        "projected_allocations": snapshot.allocations,
-        "projected_accuracy": snapshot.accuracy,
-    }

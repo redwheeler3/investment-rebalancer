@@ -159,6 +159,6 @@ Accuracy = 100% - (sum of absolute drifts / 2)
 ```
 
 - **100%** = perfectly balanced
-- **95%+** = minor drift, probably fine
-- **90-95%** = moderate drift, consider rebalancing
-- **<90%** = significant drift, rebalance recommended
+- **98%+** = very close to target
+- **95-98%** = minor drift, probably fine
+- **<95%** = rebalance recommended

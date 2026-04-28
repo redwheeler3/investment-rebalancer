@@ -100,16 +100,6 @@ class DlrQuotes:
     exchange_rate: float | None  # Derived USD/CAD rate, or None if unavailable
 
     @property
-    def cad_price(self) -> float:
-        """Backward-compatible alias for the DLR.TO buy-side quote."""
-        return self.cad_buy_price
-
-    @property
-    def usd_price(self) -> float:
-        """Backward-compatible alias for the DLR.U.TO buy-side quote."""
-        return self.usd_buy_price
-
-    @property
     def cad_buy_price(self) -> float:
         """Least advantageous buy price for DLR.TO (ask preferred)."""
         return self.cad_ask_price or self.cad_bid_price

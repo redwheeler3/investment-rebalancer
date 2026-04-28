@@ -96,8 +96,7 @@ def run_scheduled_sync():
         name = token_file.stem.replace("_token", "")
         print(f"Refreshing token for {name}...")
         try:
-            # QuestradeClient.__init__ handles the token refresh and saves
-            # the new token — no need to call refresh_token_only() separately.
+            # QuestradeClient.__init__ refreshes and persists the rotated token.
             client = QuestradeClient(str(token_file), name)
             clients.append(client)
             print(f"  ✓ {name} token refreshed successfully")
@@ -199,7 +198,6 @@ def _render_report(
         projected_accuracy=projected_snapshot.accuracy if projected_snapshot else None,
         projected_allocations=projected_snapshot.allocations if projected_snapshot else None,
         all_time_high=report.all_time_high,
-        fx_target_rule_resolutions=report.fx_target_rule_resolutions,
         drift_trade_threshold_pct=drift_trade_threshold_pct,
     )
 
@@ -219,24 +217,23 @@ def run_rebalancer():
     clients = _connect_clients()
     usd_to_cad_rate = _fetch_exchange_rate(clients[0])
     resolved_targets = resolve_targets(targets, fx_target_rules, usd_to_cad_rate)
-    _validate_resolved_targets(resolved_targets.targets)
+    _validate_resolved_targets(resolved_targets)
     portfolio = _build_priced_portfolio(clients, usd_to_cad_rate)
     dlr_quotes = _fetch_dlr_quotes(clients[0])
 
     console.print("  [dim]Calculating trades...[/dim]")
     report = build_report_data(
         portfolio,
-        resolved_targets.targets,
+        resolved_targets,
         transient_symbols,
         norberts_gambit_fee_cad,
         drift_trade_threshold_pct,
         usd_to_cad_rate,
         dlr_quotes,
-        fx_target_rule_resolutions=resolved_targets.fx_target_rule_resolutions,
     )
     _render_report(
         portfolio,
-        resolved_targets.targets,
+        resolved_targets,
         usd_to_cad_rate,
         drift_trade_threshold_pct,
         report,
