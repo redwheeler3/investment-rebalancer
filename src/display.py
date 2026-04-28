@@ -194,8 +194,6 @@ def display_accuracy(current_accuracy: float, projected_accuracy: float = None):
         color = "green"
     elif current_accuracy >= 95:
         color = "yellow"
-    elif current_accuracy >= 90:
-        color = "dark_orange"
     else:
         color = "red"
 
@@ -207,7 +205,7 @@ def display_accuracy(current_accuracy: float, projected_accuracy: float = None):
         elif projected_accuracy >= 95:
             proj_color = "yellow"
         else:
-            proj_color = "dark_orange"
+            proj_color = "red"
         console.print(f"  →  [{proj_color}]{projected_accuracy:.1f}%[/{proj_color}] (after trades)", end="")
 
     console.print()
