@@ -4,8 +4,15 @@ This module holds the immutable tuning constants plus the low-level state and
 cash/drift helpers used by the rebalancing steps.
 """
 
+from __future__ import annotations
+
 import math
 from dataclasses import dataclass, field
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from src.portfolio import PortfolioSummary
+    from src.rules import TradeRecommendation
 
 
 # Default minimum absolute drift before a symbol is eligible for trading
@@ -19,18 +26,18 @@ MAX_ROUNDS = 10
 class RebalanceState:
     """Mutable state passed through all rebalance steps."""
 
-    portfolio: object
-    targets: dict
+    portfolio: PortfolioSummary
+    targets: dict[str, float]
     usd_to_cad_rate: float
     norberts_gambit_fee_cad: float
     drift_trade_threshold_pct: float
-    transient_symbols: set
+    transient_symbols: set[str]
     total_value: float
-    holdings_view: dict = field(default_factory=dict)   # symbol -> holding data
-    available_cash: dict = field(default_factory=dict)  # acct_number -> {"CAD": float, "USD": float}
-    effective_drift: dict = field(default_factory=dict)  # symbol -> drift %
-    position_deltas: dict = field(default_factory=dict)  # (acct_number, symbol) -> qty change
-    all_trades: list = field(default_factory=list)
+    holdings_view: dict = field(default_factory=dict)   # symbol -> HoldingSummary
+    available_cash: dict[str, dict[str, float]] = field(default_factory=dict)
+    effective_drift: dict[str, float] = field(default_factory=dict)
+    position_deltas: dict[tuple[str, str], int] = field(default_factory=dict)
+    all_trades: list[TradeRecommendation] = field(default_factory=list)
 
 
 def to_cad(value: float, currency: str, usd_to_cad_rate: float) -> float:

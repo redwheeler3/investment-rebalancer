@@ -5,14 +5,21 @@ without mixing that logic into the CLI entrypoint.
 """
 
 from dataclasses import dataclass, field
-from typing import Any
 
-from src.currency import calculate_currency_needs
-from src.history import get_all_time_high, get_daily_change, get_year_to_date_history, record_value
+from src.currency import CurrencyConversion, calculate_currency_needs
+from src.history import (
+    AllTimeHigh,
+    DailyChange,
+    HistoryPoint,
+    get_all_time_high,
+    get_daily_change,
+    get_year_to_date_history,
+    record_value,
+)
 from src.portfolio import AllocationSnapshot
 from src.rebalancer import calculate_trades
 from src.rebalancer_simulation import simulate_rebalance
-from src.rules import get_transient_status
+from src.rules import TradeRecommendation, TransientAlert, get_transient_status
 
 
 @dataclass
@@ -20,13 +27,13 @@ class RebalanceReportData:
     """All calculated data needed to render the rebalancing report."""
 
     current: AllocationSnapshot
-    transient_alerts: list
-    trades: list
-    currency_conversions: list
+    transient_alerts: list[TransientAlert]
+    trades: list[TradeRecommendation]
+    currency_conversions: list[CurrencyConversion]
     projected: AllocationSnapshot | None = None
-    all_time_high: Any | None = None
-    daily_change: Any | None = None
-    ytd_history: list = field(default_factory=list)
+    all_time_high: AllTimeHigh | None = None
+    daily_change: DailyChange | None = None
+    ytd_history: list[HistoryPoint] = field(default_factory=list)
 
 
 def build_report_data(

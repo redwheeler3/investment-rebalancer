@@ -182,27 +182,31 @@ def display_all_time_high(ath):
         )
 
 
-def display_daily_change(daily_change):
-    """Display the day-over-day portfolio value change."""
+def display_daily_change(daily_change, portfolio_value: float):
+    """Display the current portfolio value with day-over-day change."""
     if daily_change is None:
-        return
-
-    change = daily_change.change_dollars
-    pct = daily_change.change_pct
-
-    if change >= 0:
-        color = "green"
-        arrow = "▲"
-        sign = "+"
+        console.print(
+            f"  [bold]Portfolio Value:[/bold]         "
+            f"[default]${portfolio_value:,.2f}[/default]"
+        )
     else:
-        color = "red"
-        arrow = "▼"
-        sign = "-"
+        change = daily_change.change_dollars
+        pct = daily_change.change_pct
 
-    console.print(
-        f"  [bold]Daily Change:[/bold]            "
-        f"[{color}]{arrow} {sign}${abs(change):,.2f} ({sign}{abs(pct):.1f}%)[/{color}]"
-    )
+        if change >= 0:
+            color = "green"
+            arrow = "▲"
+            sign = "+"
+        else:
+            color = "red"
+            arrow = "▼"
+            sign = "-"
+
+        console.print(
+            f"  [bold]Portfolio Value:[/bold]         "
+            f"[default]${portfolio_value:,.2f}[/default]  "
+            f"[{color}]{arrow} {sign}${abs(change):,.2f} ({sign}{abs(pct):.1f}%)[/{color}]"
+        )
     console.print()
 
 
@@ -448,7 +452,7 @@ def display_accuracy(current_accuracy: float, projected_accuracy: float = None):
     else:
         color = "red"
 
-    console.print(f"  [bold]Accuracy Score:[/bold]         [{color}]{current_accuracy:.1f}%[/{color}]", end="")
+    console.print(f"  [bold]Accuracy Score:[/bold]          [{color}]{current_accuracy:.1f}%[/{color}]", end="")
 
     if projected_accuracy is not None:
         if projected_accuracy >= 98:
@@ -457,7 +461,7 @@ def display_accuracy(current_accuracy: float, projected_accuracy: float = None):
             proj_color = "yellow"
         else:
             proj_color = "red"
-        console.print(f"  →  [{proj_color}]{projected_accuracy:.1f}%[/{proj_color}] (after trades)", end="")
+        console.print(f"  →  [{proj_color}]{projected_accuracy:.1f}%[/{proj_color}]", end="")
 
     console.print()
 
@@ -762,7 +766,7 @@ def display_full_report(
     display_header()
     display_accuracy(accuracy, projected_accuracy)
     display_all_time_high(all_time_high)
-    display_daily_change(daily_change)
+    display_daily_change(daily_change, portfolio.total_value_cad)
     display_year_to_date_chart(ytd_history or [])
     display_holdings_summary(portfolio, usd_to_cad_rate)
     display_account_summary(portfolio.accounts, usd_to_cad_rate)

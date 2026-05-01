@@ -43,7 +43,7 @@ class AccountInfo:
     account_type: str  # e.g., "Margin", "TFSA", "RRSP"
     client_account_type: str  # e.g., "Individual", "Corporation" (from Questrade API)
     owner: str  # Display name: "Jeff", "Eunee", or "Rexin" for corporate
-    positions: list = field(default_factory=list)  # List of Position
+    positions: list["Position"] = field(default_factory=list)
     cash_cad: float = 0.0
     cash_usd: float = 0.0
 
@@ -69,16 +69,15 @@ class HoldingSummary:
     currency: str = "CAD"
     bid_price: float = 0.0
     ask_price: float = 0.0
-    accounts: list = field(default_factory=list)
+    accounts: list["HoldingAccountDetail"] = field(default_factory=list)
 
 
 @dataclass
 class PortfolioSummary:
     """Aggregated portfolio across all accounts."""
 
-    accounts: list  # List of AccountInfo
-    # Keyed by symbol -> total market value in CAD
-    holdings: dict = field(default_factory=dict)  # symbol -> HoldingSummary
+    accounts: list["AccountInfo"]
+    holdings: dict[str, "HoldingSummary"] = field(default_factory=dict)
     total_value_cad: float = 0.0
     cash_cad_total: float = 0.0
     cash_usd_total: float = 0.0
