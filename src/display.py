@@ -180,7 +180,6 @@ def display_all_time_high(ath):
             f"${ath.value:,.2f} ({ath.date})  "
             f"[yellow]▼ {ath.drawdown_pct:.1f}%[/yellow]"
         )
-    console.print()
 
 
 def display_daily_change(daily_change):
@@ -460,7 +459,6 @@ def display_accuracy(current_accuracy: float, projected_accuracy: float = None):
             proj_color = "red"
         console.print(f"  →  [{proj_color}]{projected_accuracy:.1f}%[/{proj_color}] (after trades)", end="")
 
-    console.print()
     console.print()
 
 
