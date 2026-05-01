@@ -5,7 +5,8 @@ Pretty-prints portfolio status, allocation drift, and trade recommendations
 using the Rich library.
 """
 
-from datetime import datetime
+from datetime import date, datetime
+from textwrap import wrap
 from rich.console import Console
 from rich.table import Table
 from rich.panel import Panel
@@ -179,6 +180,228 @@ def display_all_time_high(ath):
             f"${ath.value:,.2f} ({ath.date})  "
             f"[yellow]▼ {ath.drawdown_pct:.1f}%[/yellow]"
         )
+    console.print()
+
+
+def _format_compact_money(amount: float) -> str:
+    """Format large money values compactly for chart labels."""
+    amount = _normalize_amount(amount)
+    absolute_amount = abs(amount)
+
+    if absolute_amount >= 1_000_000_000:
+        return f"${amount / 1_000_000_000:.2f}B"
+    if absolute_amount >= 1_000_000:
+        return f"${amount / 1_000_000:.2f}M"
+    if absolute_amount >= 1_000:
+        return f"${amount / 1_000:.1f}K"
+    return f"${amount:,.0f}"
+
+
+def _append_wrapped_line(lines: list[str], text: str, width: int) -> None:
+    """Append text to the output, wrapped to the target width when needed."""
+    wrapped = wrap(text, width=width) or [""]
+    lines.extend(wrapped)
+
+
+def _iter_month_starts(start_date: date, end_date: date):
+    """Yield the first day of each month from start_date's month through end_date."""
+    current = date(start_date.year, start_date.month, 1)
+    while current <= end_date:
+        yield current
+        if current.month == 12:
+            current = date(current.year + 1, 1, 1)
+        else:
+            current = date(current.year, current.month + 1, 1)
+
+
+def _determine_chart_height(console_height: int) -> int:
+    """Choose a chart height so the full chart panel nearly fills the terminal height.
+
+    We reserve rows for:
+    - top and bottom panel borders (2)
+    - x-axis baseline (1)
+    - x-axis date labels (1)
+    - spacer before stats (1)
+    - Latest / Low / High lines (3)
+
+    That fixed overhead totals 8 rows, so a panel that should occupy roughly
+    ``console_height - 2`` rows leaves ``console_height - 10`` rows available
+    for the actual plotted chart area.
+    """
+    reserved_rows = 8
+    return max(4, console_height - reserved_rows - 2)
+
+
+def _build_vertical_tick_labels(min_value: float, max_value: float, chart_height: int) -> dict[int, str]:
+    """Create evenly spaced Y-axis labels based on available chart height."""
+    tick_count = max(3, min(6, (chart_height // 4) + 1))
+    tick_labels = {}
+
+    for tick_index in range(tick_count):
+        row = round(tick_index * (chart_height - 1) / (tick_count - 1)) if tick_count > 1 else 0
+        value = (
+            max_value - ((max_value - min_value) * tick_index / (tick_count - 1))
+            if tick_count > 1
+            else max_value
+        )
+        tick_labels[row] = _format_compact_money(value)
+
+    return tick_labels
+
+
+def _month_tick_candidates(start_of_year: date, today: date, chart_width: int, total_days: int) -> list[tuple[int, str]]:
+    """Return month-start tick candidates mapped onto the chart width."""
+    candidates = []
+    used_positions = set()
+
+    for tick_date in _iter_month_starts(start_of_year, today):
+        x = 0 if total_days == 0 else round(((tick_date - start_of_year).days * (chart_width - 1)) / total_days)
+        if x in used_positions:
+            continue
+        used_positions.add(x)
+        candidates.append((x, tick_date.strftime("%b %d")))
+
+    return candidates
+
+
+def _tick_label_layout(ticks: list[tuple[int, str]], chart_width: int) -> list[tuple[int, str]] | None:
+    """Compute non-overlapping single-line positions for X-axis labels."""
+    layout = []
+    previous_end = -2
+
+    for x, label in ticks:
+        start = max(0, min(chart_width - len(label), x - (len(label) // 2)))
+        end = start + len(label) - 1
+        if start <= previous_end + 1:
+            return None
+        layout.append((start, label))
+        previous_end = end
+
+    return layout
+
+
+def _select_horizontal_ticks(start_of_year: date, today: date, chart_width: int, total_days: int) -> list[tuple[int, str]]:
+    """Choose a subset of month-start labels that fits the chart width cleanly."""
+    candidates = _month_tick_candidates(start_of_year, today, chart_width, total_days)
+    if not candidates:
+        return []
+
+    for stride in range(1, len(candidates) + 1):
+        selected = candidates[::stride]
+        if candidates[-1] not in selected:
+            selected.append(candidates[-1])
+
+        deduped = []
+        for tick in selected:
+            if tick not in deduped:
+                deduped.append(tick)
+
+        if _tick_label_layout(deduped, chart_width) is not None:
+            return deduped
+
+    return [candidates[0]]
+
+
+def display_year_to_date_chart(history_points: list, console_height: int | None = None):
+    """Display a terminal chart of recorded year-to-date portfolio values."""
+    if not history_points:
+        return
+
+    today = date.today()
+    start_of_year = date(today.year, 1, 1)
+    total_days = max(1, (today - start_of_year).days)
+    values = [point.value for point in history_points]
+    min_value = min(values)
+    max_value = max(values)
+    midpoint_value = (min_value + max_value) / 2
+
+    top_label = _format_compact_money(max_value)
+    mid_label = _format_compact_money(midpoint_value)
+    bottom_label = _format_compact_money(min_value)
+
+    chart_height = _determine_chart_height(console_height or console.size.height)
+    horizontal_padding = 1
+    left_axis_width = max(len(top_label), len(mid_label), len(bottom_label))
+    panel_inner_width = max(20, console.size.width - 4 - (horizontal_padding * 2))
+    available_width = max(10, panel_inner_width - left_axis_width - 2)
+    chart_width = min(total_days + 1, available_width)
+
+    buckets = [[] for _ in range(chart_width)]
+    for point in history_points:
+        day_offset = (point.date - start_of_year).days
+        x = 0 if total_days == 0 else round(day_offset * (chart_width - 1) / total_days)
+        buckets[x].append(point)
+
+    series = [bucket[-1] if bucket else None for bucket in buckets]
+    value_span = max_value - min_value
+    row_labels = _build_vertical_tick_labels(min_value, max_value, chart_height)
+    left_axis_width = max(len(label) for label in row_labels.values())
+    selected_ticks = _select_horizontal_ticks(start_of_year, today, chart_width, total_days)
+
+    def value_to_row(value: float) -> int:
+        if value_span == 0:
+            return chart_height // 2
+        scaled = (value - min_value) / value_span
+        return chart_height - 1 - round(scaled * (chart_height - 1))
+
+    grid = [[" " for _ in range(chart_width)] for _ in range(chart_height)]
+    previous_plot = None
+
+    for x, point in enumerate(series):
+        if point is None:
+            continue
+
+        y = value_to_row(point.value)
+        if previous_plot is not None:
+            prev_x, prev_y = previous_plot
+            dx = x - prev_x
+            if dx > 1:
+                for step in range(1, dx):
+                    xi = prev_x + step
+                    yi = round(prev_y + ((y - prev_y) * step / dx))
+                    if grid[yi][xi] == " ":
+                        if yi == prev_y == y:
+                            grid[yi][xi] = "-"
+                        elif y < prev_y:
+                            grid[yi][xi] = "/"
+                        else:
+                            grid[yi][xi] = "\\"
+
+        grid[y][x] = "o"
+        previous_plot = (x, y)
+
+    lines = []
+    for row_index, row in enumerate(grid):
+        label = row_labels.get(row_index, "")
+        lines.append(f"{label:>{left_axis_width}} |{''.join(row)}")
+
+    axis_chars = ["-" for _ in range(chart_width)]
+    axis_chars[0] = "+"
+    for x, _label in selected_ticks:
+        axis_chars[x] = "+"
+    lines.append(f"{'':>{left_axis_width}} {''.join(axis_chars)}")
+
+    label_chars = [" " for _ in range(chart_width)]
+    for start, label in _tick_label_layout(selected_ticks, chart_width) or []:
+        for offset, char in enumerate(label):
+            label_chars[start + offset] = char
+    lines.append(f"{'':>{left_axis_width + 1}} {''.join(label_chars)}")
+
+    lines.append("")
+    _append_wrapped_line(lines, f"Latest {_format_money(history_points[-1].value)}", panel_inner_width)
+    _append_wrapped_line(lines, f"Low {_format_money(min_value)}", panel_inner_width)
+    _append_wrapped_line(lines, f"High {_format_money(max_value)}", panel_inner_width)
+
+    console.print(
+        Panel(
+            "\n".join(lines),
+            title="Year-to-Date Portfolio Value",
+            box=box.ROUNDED,
+            border_style="cyan",
+            padding=(0, horizontal_padding),
+            expand=False,
+        )
+    )
     console.print()
 
 
@@ -499,12 +722,14 @@ def display_full_report(
     projected_accuracy: float = None,
     projected_allocations: dict = None,
     all_time_high=None,
+    ytd_history: list = None,
     drift_trade_threshold_pct: float = 0.1,
 ):
     """Display the complete rebalancing report."""
     display_header()
     display_accuracy(accuracy, projected_accuracy)
     display_all_time_high(all_time_high)
+    display_year_to_date_chart(ytd_history or [])
     display_holdings_summary(portfolio, usd_to_cad_rate)
     display_account_summary(portfolio.accounts, usd_to_cad_rate)
     display_allocations(current_allocations, targets, drifts, drift_trade_threshold_pct)

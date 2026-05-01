@@ -1,7 +1,8 @@
 """
 Portfolio history tracking module.
 
-Records daily portfolio values to a JSON file and calculates the all-time high.
+Records daily portfolio values to a JSON file, calculates the all-time high,
+and exposes filtered history views for reporting.
 One entry per day — multiple runs on the same day overwrite with the latest value.
 """
 
@@ -23,6 +24,14 @@ class AllTimeHigh:
     date: str  # ISO date string (YYYY-MM-DD)
     is_new_ath: bool  # True if today's value is the new ATH
     drawdown_pct: float  # Current drawdown from ATH (0.0 if at ATH)
+
+
+@dataclass
+class HistoryPoint:
+    """A single recorded daily portfolio value."""
+
+    date: date
+    value: float
 
 
 def record_value(total_value_cad: float) -> None:
@@ -84,6 +93,31 @@ def get_all_time_high(current_value: float = None) -> AllTimeHigh | None:
         is_new_ath=is_new_ath,
         drawdown_pct=drawdown_pct,
     )
+
+
+def get_year_to_date_history(today: date | None = None) -> list[HistoryPoint]:
+    """Return recorded portfolio values from Jan 1 of the current year through today.
+
+    Missing dates are not synthesized; only recorded values are returned.
+    """
+    today = today or date.today()
+    start_of_year = date(today.year, 1, 1)
+
+    latest_by_day: dict[date, float] = {}
+    for entry in _load_history():
+        try:
+            entry_date = date.fromisoformat(entry["date"])
+            entry_value = float(entry["value"])
+        except (KeyError, TypeError, ValueError):
+            continue
+
+        if start_of_year <= entry_date <= today:
+            latest_by_day[entry_date] = entry_value
+
+    return [
+        HistoryPoint(date=entry_date, value=latest_by_day[entry_date])
+        for entry_date in sorted(latest_by_day)
+    ]
 
 
 def _load_history() -> list:

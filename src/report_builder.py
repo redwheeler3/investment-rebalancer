@@ -8,7 +8,7 @@ from dataclasses import dataclass, field
 from typing import Any
 
 from src.currency import calculate_currency_needs
-from src.history import get_all_time_high, record_value
+from src.history import get_all_time_high, get_year_to_date_history, record_value
 from src.portfolio import AllocationSnapshot
 from src.rebalancer import calculate_trades
 from src.rebalancer_simulation import simulate_rebalance
@@ -25,6 +25,7 @@ class RebalanceReportData:
     currency_conversions: list
     projected: AllocationSnapshot | None = None
     all_time_high: Any | None = None
+    ytd_history: list = field(default_factory=list)
 
 
 def build_report_data(
@@ -80,6 +81,7 @@ def build_report_data(
 
     record_value(portfolio.total_value_cad)
     all_time_high = get_all_time_high(current_value=portfolio.total_value_cad)
+    ytd_history = get_year_to_date_history()
 
     return RebalanceReportData(
         current=current_snapshot,
@@ -88,4 +90,5 @@ def build_report_data(
         currency_conversions=currency_conversions,
         projected=projected_snapshot,
         all_time_high=all_time_high,
+        ytd_history=ytd_history,
     )
