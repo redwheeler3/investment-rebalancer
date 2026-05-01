@@ -183,6 +183,30 @@ def display_all_time_high(ath):
     console.print()
 
 
+def display_daily_change(daily_change):
+    """Display the day-over-day portfolio value change."""
+    if daily_change is None:
+        return
+
+    change = daily_change.change_dollars
+    pct = daily_change.change_pct
+
+    if change >= 0:
+        color = "green"
+        arrow = "▲"
+        sign = "+"
+    else:
+        color = "red"
+        arrow = "▼"
+        sign = "-"
+
+    console.print(
+        f"  [bold]Daily Change:[/bold]            "
+        f"[{color}]{arrow} {sign}${abs(change):,.2f} ({sign}{abs(pct):.1f}%)[/{color}]"
+    )
+    console.print()
+
+
 def _format_compact_money(amount: float) -> str:
     """Format large money values compactly for chart labels."""
     amount = _normalize_amount(amount)
@@ -732,6 +756,7 @@ def display_full_report(
     projected_accuracy: float = None,
     projected_allocations: dict = None,
     all_time_high=None,
+    daily_change=None,
     ytd_history: list = None,
     drift_trade_threshold_pct: float = 0.1,
 ):
@@ -739,6 +764,7 @@ def display_full_report(
     display_header()
     display_accuracy(accuracy, projected_accuracy)
     display_all_time_high(all_time_high)
+    display_daily_change(daily_change)
     display_year_to_date_chart(ytd_history or [])
     display_holdings_summary(portfolio, usd_to_cad_rate)
     display_account_summary(portfolio.accounts, usd_to_cad_rate)

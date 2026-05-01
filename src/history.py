@@ -17,6 +17,16 @@ HISTORY_FILE = Path(__file__).parent.parent / "data" / "portfolio_history.json"
 
 
 @dataclass
+class DailyChange:
+    """Day-over-day portfolio value change."""
+
+    change_dollars: float  # Absolute change in CAD
+    change_pct: float  # Percentage change
+    previous_value: float  # Yesterday's portfolio value
+    previous_date: str  # ISO date string of the previous entry
+
+
+@dataclass
 class AllTimeHigh:
     """All-time high portfolio value."""
 
@@ -92,6 +102,42 @@ def get_all_time_high(current_value: float = None) -> AllTimeHigh | None:
         date=best["date"],
         is_new_ath=is_new_ath,
         drawdown_pct=drawdown_pct,
+    )
+
+
+def get_daily_change(current_value: float) -> DailyChange | None:
+    """
+    Calculate the change from the most recent previous day's recorded value.
+
+    Args:
+        current_value: Today's portfolio value in CAD.
+
+    Returns:
+        DailyChange with dollar and percentage change, or None if no previous
+        day's data exists.
+    """
+    today_str = date.today().isoformat()
+    history = _load_history()
+
+    # Find the most recent entry that is NOT today
+    previous = None
+    for entry in reversed(history):
+        if entry["date"] != today_str:
+            previous = entry
+            break
+
+    if previous is None or previous["value"] == 0:
+        return None
+
+    prev_value = previous["value"]
+    change_dollars = current_value - prev_value
+    change_pct = (change_dollars / prev_value) * 100.0
+
+    return DailyChange(
+        change_dollars=change_dollars,
+        change_pct=change_pct,
+        previous_value=prev_value,
+        previous_date=previous["date"],
     )
 
 

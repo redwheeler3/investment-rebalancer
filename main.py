@@ -198,6 +198,7 @@ def _render_report(
         projected_accuracy=projected_snapshot.accuracy if projected_snapshot else None,
         projected_allocations=projected_snapshot.allocations if projected_snapshot else None,
         all_time_high=report.all_time_high,
+        daily_change=report.daily_change,
         ytd_history=report.ytd_history,
         drift_trade_threshold_pct=drift_trade_threshold_pct,
     )
