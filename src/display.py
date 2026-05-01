@@ -347,6 +347,8 @@ def display_year_to_date_chart(history_points: list, console_height: int | None 
     grid = [[" " for _ in range(chart_width)] for _ in range(chart_height)]
     previous_plot = None
 
+    fill_char = "░"
+
     for x, point in enumerate(series):
         if point is None:
             continue
@@ -367,8 +369,16 @@ def display_year_to_date_chart(history_points: list, console_height: int | None 
                         else:
                             grid[yi][xi] = "\\"
 
-        grid[y][x] = "o"
+        grid[y][x] = fill_char
         previous_plot = (x, y)
+
+    for x in range(chart_width):
+        first_drawn_row = next((row for row in range(chart_height) if grid[row][x] != " "), None)
+        if first_drawn_row is None:
+            continue
+        for y in range(first_drawn_row + 1, chart_height):
+            if grid[y][x] == " ":
+                grid[y][x] = fill_char
 
     lines = []
     for row_index, row in enumerate(grid):
