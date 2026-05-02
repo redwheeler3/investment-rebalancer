@@ -23,13 +23,3 @@ Thumbs.db
 
 # Local temporary working files
 temp/
-
-# Private state files belong in a separate private state repo.
-config/targets.yaml
-data/portfolio_history.json
-tokens/*.json
-
-# Public examples/templates should remain tracked.
-!config/targets.example.yaml
-!data/portfolio_history.example.jsonl
-!tokens/token.example.json

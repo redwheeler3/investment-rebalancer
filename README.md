@@ -4,16 +4,9 @@ A Python-based portfolio rebalancer for Questrade accounts. It replaces Passiv w
 
 ## Why this repo is structured differently
 
-This project intentionally separates:
-
-- **public code** — this repository
-- **private personal state** — a separate private repo that you control
-
-That private state repo contains:
-
-- your live Questrade refresh tokens
-- your real `targets.yaml`
-- your portfolio history file
+This project intentionally separates **public code** from **private personal state**.
+The code lives here; your broker tokens, real target config, and portfolio history
+live in a separate private repo that the app reads through `REBALANCER_STATE_DIR`.
 
 This is one of the best parts of the implementation:
 
@@ -75,7 +68,7 @@ investment-rebalancer-state/
 ├── config/
 │   └── targets.yaml
 ├── data/
-│   └── portfolio_history.json
+│   └── portfolio_history.jsonl
 └── tokens/
     ├── jeff_token.json
     └── eunee_token.json
@@ -156,12 +149,15 @@ You can use `tokens/token.example.json` in this repo as a template.
 If you want all-time high / daily change / YTD reporting immediately, create:
 
 ```text
-data/portfolio_history.json
+data/portfolio_history.jsonl
 ```
 
 You can start with an empty file, or copy the structure from `data/portfolio_history.example.jsonl`.
 
 If the file doesn't exist yet, the app will create it when it first records a value.
+
+If you're migrating from an older setup that used `portfolio_history.json`, the app
+will read the legacy file and rewrite it in `.jsonl` format on the next save.
 
 ### 7. Set `REBALANCER_STATE_DIR`
 
@@ -231,10 +227,10 @@ This mode:
 
 ## Private repo GitHub Actions setup
 
-The recommended automation model is:
+The recommended automation model is simple:
 
-- **public repo** holds the code
-- **private repo** holds tokens, config, history, and scheduled workflows
+- **public repo** = code and public-safe examples
+- **private repo** = your state and scheduled workflows
 
 This repo includes workflow templates you can copy into your private state repo:
 
@@ -349,7 +345,7 @@ all aligned on the latest token state.
 
 - Never commit live Questrade tokens to the public repo
 - Keep your real `targets.yaml` in the private state repo if you consider it personal data
-- Keep `portfolio_history.json` in the private state repo
+- Keep `portfolio_history.jsonl` in the private state repo
 - If you are converting an old private repo into a public one, do **not** rely only on deleting files from the latest commit — clean or replace the git history first
 
 ---

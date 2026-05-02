@@ -1,7 +1,7 @@
 """
 Portfolio history tracking module.
 
-Records daily portfolio values to a JSON file, calculates the all-time high,
+Records daily portfolio values to a JSON Lines file, calculates the all-time high,
 and exposes filtered history views for reporting.
 One entry per day — multiple runs on the same day overwrite with the latest value.
 """
@@ -10,7 +10,7 @@ import json
 from datetime import date
 from dataclasses import dataclass
 
-from src.paths import get_history_file
+from src.paths import get_history_file, get_legacy_history_file
 
 
 @dataclass
@@ -172,10 +172,17 @@ def _load_history() -> list:
     Each line: {"date":"2026-04-14","value":156432.50}
     """
     history_file = get_history_file()
-    if not history_file.exists():
+    legacy_history_file = get_legacy_history_file()
+
+    if history_file.exists():
+        source_file = history_file
+    elif legacy_history_file.exists():
+        source_file = legacy_history_file
+    else:
         return []
+
     try:
-        with open(history_file, "r") as f:
+        with open(source_file, "r") as f:
             content = f.read().strip()
         if not content:
             return []
@@ -198,7 +205,14 @@ def _load_history() -> list:
 def _save_history(history: list) -> None:
     """Save history as JSONL (one JSON object per line). Creates data/ if needed."""
     history_file = get_history_file()
+    legacy_history_file = get_legacy_history_file()
     history_file.parent.mkdir(parents=True, exist_ok=True)
     with open(history_file, "w") as f:
         for entry in history:
             f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+
+    if legacy_history_file.exists() and legacy_history_file != history_file:
+        try:
+            legacy_history_file.unlink()
+        except OSError:
+            pass
