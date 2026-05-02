@@ -1,24 +1,31 @@
 # Investment Rebalancer
 
-A Python-based portfolio rebalancer for Questrade accounts. It replaces Passiv with a more customizable workflow that treats multiple accounts across multiple Questrade logins as one unified portfolio.
+A Python-based portfolio rebalancer for Questrade accounts that treats multiple accounts across multiple Questrade logins as one unified portfolio.
 
-## Why this repo is structured differently
+Built as an alternative to Passiv, this project combines portfolio rebalancing
+with a public-code/private-state model that keeps expiring Questrade tokens
+refreshed for free via GitHub Actions.
 
-This project intentionally separates **public code** from **private personal state**.
-The code lives here; your broker tokens, real target config, and portfolio history
-live in a separate private repo that the app reads through `REBALANCER_STATE_DIR`.
+For Questrade specifically, local-only usage is not enough if you want this to be
+hands-off. If the app does not run often enough, the refresh tokens eventually
+expire. At that point you have to go back to the Questrade website, generate new
+tokens manually, and copy them back into your setup. This
+architecture is avoids that recurring manual recovery step.
 
-This is one of the best parts of the implementation:
+This project uses a simple pattern that works well for Questrade and can be
+adapted to other token-based API workflows:
 
-> you can keep the code public and reusable, while keeping broker credentials and rotating state private and still fully automated.
+- keep the **code public**
+- keep the **live state private**
+- let **GitHub Actions refresh and persist the state for free**
 
-Questrade refresh tokens rotate and expire quickly, so they should never live in a public repo. Instead, this app reads state from a private companion repo through one explicit environment variable:
+In practice, that means the public repo contains the app, docs, and templates,
+while a separate private repo holds the mutable state: tokens, real target
+config, and portfolio history. The app reads that private state through one
+explicit environment variable, `REBALANCER_STATE_DIR`, so local runs and GitHub
+Actions both operate against the same source of truth.
 
-```bash
-REBALANCER_STATE_DIR
-```
-
-If that variable is missing, the app fails fast with a clear error.
+> Keep code public and reusable, while keeping broker credentials and rotating state private and fully automated.
 
 ---
 
@@ -238,19 +245,6 @@ This repo includes workflow templates you can copy into your private state repo:
 templates/private-state-repo/portfolio_sync.yml
 templates/private-state-repo/cleanup-runs.yml
 ```
-
-### If the code repo is still private
-
-Until `redwheeler3/investment-rebalancer` is actually public on GitHub, the
-private repo workflow cannot check it out with its default `GITHUB_TOKEN`
-alone.
-
-In that case, add this secret to the **private state repo**:
-
-- `PUBLIC_CODE_REPO_READ_TOKEN`
-
-That token should have **read access** to the code repo. The workflow template
-uses that secret for the code checkout step.
 
 ### How the private workflow works
 
