@@ -243,6 +243,19 @@ templates/private-state-repo/portfolio_sync.yml
 templates/private-state-repo/cleanup-runs.yml
 ```
 
+### If the code repo is still private
+
+Until `redwheeler3/investment-rebalancer` is actually public on GitHub, the
+private repo workflow cannot check it out with its default `GITHUB_TOKEN`
+alone.
+
+In that case, add this secret to the **private state repo**:
+
+- `PUBLIC_CODE_REPO_READ_TOKEN`
+
+That token should have **read access** to the code repo. The workflow template
+uses that secret for the code checkout step.
+
 ### How the private workflow works
 
 1. Checks out the private state repo

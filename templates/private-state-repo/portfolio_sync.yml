@@ -25,6 +25,8 @@ jobs:
         uses: actions/checkout@v5
         with:
           repository: <PUBLIC_REPO_OWNER>/<PUBLIC_REPO_NAME>
+          ref: main
+          token: ${{ secrets.PUBLIC_CODE_REPO_READ_TOKEN }}
           path: code
 
       - name: Set up Python
