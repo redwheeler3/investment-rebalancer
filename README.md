@@ -9,8 +9,8 @@ refreshed for free via GitHub Actions.
 For Questrade specifically, local-only usage is not enough if you want this to be
 hands-off. If the app does not run often enough, the refresh tokens eventually
 expire. At that point you have to go back to the Questrade website, generate new
-tokens manually, and copy them back into your setup. This
-architecture is avoids that recurring manual recovery step.
+tokens manually, and copy them back into your setup. This architecture avoids
+that recurring manual recovery step.
 
 This project uses a simple pattern that works well for Questrade and can be
 adapted to other token-based API workflows:
@@ -46,6 +46,22 @@ Actions both operate against the same source of truth.
 - **Conservative FX Funding** — Uses conservative DLR bid/ask math for Norbert's Gambit sizing
 - **Sell Trimming Reconciliation** — Trims excess sells when possible
 - **Automatic Portfolio Sync** — Designed to run with GitHub Actions from a private state repo
+
+---
+
+## Why Norbert's Gambit is part of this workflow
+
+Questrade users often prefer **Norbert's Gambit** for larger CAD/USD conversions
+because it can be cheaper than a standard broker FX conversion. This project
+does not execute the gambit for you, but it does model the planning around it:
+
+- detecting when cross-currency funding is needed
+- sizing the conversion conservatively with DLR bid/ask pricing
+- accounting for the trading fee in the recommendation
+- letting you mark `DLR.TO` / `DLR.U.TO` as transient while the gambit is in flight
+
+That keeps the rebalance plan realistic without pretending that the conversion is
+instant or free.
 
 ---
 
@@ -131,6 +147,31 @@ Copy the public example file:
 - into `config/targets.yaml` in your private state repo
 
 Then edit it with your real allocation targets.
+
+The same file also defines which Questrade logins to connect to. Instead of
+hardcoding names like `Jeff`, `Eunee`, or a corporate label in the public code,
+the app now reads account definitions from private config.
+
+Example shape:
+
+```yaml
+accounts:
+  - owner_name: Primary
+    token_file: primary_token.json
+  - owner_name: Secondary
+    token_file: secondary_token.json
+    account_type_display_overrides:
+      Corporation: HoldingCo
+```
+
+- `owner_name` is the label shown in reports
+- `token_file` is the filename under `tokens/`
+- `account_type_display_overrides` is optional and lets you relabel specific
+  Questrade `clientAccountType` values for display purposes
+
+This is how the old special `Rexin` case is handled now: instead of a hardcoded
+rule in the public code, a login can say “when Questrade reports
+`clientAccountType: Corporation`, display `HoldingCo` (or whatever label you want).”
 
 ### 5. Add your Questrade token files
 
@@ -281,6 +322,8 @@ Key fields:
 - **Transient symbols:** useful for DLR.TO / DLR.U.TO during Norbert's Gambit
 - **Unknown holdings:** any non-transient symbol missing from targets gets an implicit 0% target
 - **Target totals:** static targets plus enabled FX-derived targets should sum to about 100%
+- **Account labels:** the `accounts:` section in private config controls token filenames,
+  report labels, and optional account-type display overrides
 
 ---
 

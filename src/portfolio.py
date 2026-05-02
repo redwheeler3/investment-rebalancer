@@ -31,7 +31,7 @@ class Position:
     currency: str  # "CAD" or "USD"
     account_number: str
     account_type: str
-    owner: str  # "Jeff" or "Eunee"
+    owner: str  # Friendly owner/display label from config
     average_cost: float = 0.0
 
 
@@ -42,7 +42,7 @@ class AccountInfo:
     number: str
     account_type: str  # e.g., "Margin", "TFSA", "RRSP"
     client_account_type: str  # e.g., "Individual", "Corporation" (from Questrade API)
-    owner: str  # Display name: "Jeff", "Eunee", or "Rexin" for corporate
+    owner: str  # Display owner label shown in reports
     positions: list["Position"] = field(default_factory=list)
     cash_cad: float = 0.0
     cash_usd: float = 0.0
@@ -121,12 +121,13 @@ def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
             acct_type = acct["type"]
             client_acct_type = acct.get("clientAccountType", "Individual")
 
-            # Determine display owner name
-            # Corporation accounts under Jeff's login are labeled "Rexin"
-            if client_acct_type == "Corporation":
-                display_owner = "Rexin"
-            else:
-                display_owner = client.owner_name
+            # Determine display owner name. Account-type-specific labels can be
+            # overridden in private config, e.g. mapping "Corporation" to a
+            # holding-company display name.
+            display_owner = client.account_type_display_overrides.get(
+                client_acct_type,
+                client.owner_name,
+            )
 
             # Get balances
             balances_data = client.get_balances(acct_number)

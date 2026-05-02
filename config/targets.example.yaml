@@ -6,6 +6,20 @@
 # This file is intentionally public-safe sample data. Replace it with your own
 # real targets in the private state repo's config/targets.yaml.
 
+# Account definitions.
+# - owner_name is the label shown in reports
+# - token_file is the filename in your private repo's tokens/ directory
+# - account_type_display_overrides is optional and lets you relabel certain
+#   Questrade clientAccountType values, such as mapping Corporation to a
+#   holding-company display name.
+accounts:
+  - owner_name: Primary
+    token_file: primary_token.json
+  - owner_name: Secondary
+    token_file: secondary_token.json
+    account_type_display_overrides:
+      Corporation: HoldingCo
+
 targets:
   CAD: 0.0
   USD: 0.0

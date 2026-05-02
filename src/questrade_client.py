@@ -15,16 +15,24 @@ QUESTRADE_AUTH_URL = "https://login.questrade.com/oauth2/token"
 class QuestradeClient:
     """Client for interacting with the Questrade API."""
 
-    def __init__(self, token_path: str, owner_name: str):
+    def __init__(
+        self,
+        token_path: str,
+        owner_name: str,
+        account_type_display_overrides: dict | None = None,
+    ):
         """
         Initialize the Questrade client.
 
         Args:
             token_path: Path to the JSON file containing the refresh token.
-            owner_name: Friendly name for this account holder (e.g., "Jeff", "Eunee").
+            owner_name: Friendly name for this account holder.
+            account_type_display_overrides: Optional mapping of Questrade
+                clientAccountType -> display owner label.
         """
         self.token_path = Path(token_path)
         self.owner_name = owner_name
+        self.account_type_display_overrides = account_type_display_overrides or {}
         self.access_token = None
         self.api_server = None
         self.refresh_token = None

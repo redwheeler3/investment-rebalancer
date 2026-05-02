@@ -35,6 +35,7 @@ def load_config() -> tuple:
 
     Returns:
         Tuple of (
+            accounts list,
             targets dict,
             transient_symbols list,
             norberts_gambit_fee_cad float,
@@ -52,6 +53,33 @@ def load_config() -> tuple:
     with open(targets_path, "r") as f:
         data = yaml.safe_load(f)
 
+    raw_accounts = data.get("accounts", [])
+    if not raw_accounts:
+        raise ValueError(
+            "No accounts configured in config/targets.yaml. "
+            "Add at least one account with owner_name and token_file."
+        )
+
+    accounts = []
+    for index, account in enumerate(raw_accounts, start=1):
+        owner_name = str(account.get("owner_name", "")).strip()
+        token_file = str(account.get("token_file", "")).strip()
+        overrides = account.get("account_type_display_overrides", {}) or {}
+
+        if not owner_name or not token_file:
+            raise ValueError(
+                f"Account #{index} must define both owner_name and token_file in config/targets.yaml."
+            )
+
+        accounts.append({
+            "owner_name": owner_name,
+            "token_file": token_file,
+            "account_type_display_overrides": {
+                str(key): str(value)
+                for key, value in overrides.items()
+            },
+        })
+
     targets = data.get("targets", {})
     transient_symbols = data.get("transient_symbols", [])
     norberts_gambit_fee_cad = data.get("norberts_gambit_fee_cad", 10.49)
@@ -59,6 +87,7 @@ def load_config() -> tuple:
     drift_trade_threshold_pct = float(data.get("drift_trade_threshold_pct", 0.1))
 
     return (
+        accounts,
         targets,
         transient_symbols,
         norberts_gambit_fee_cad,
@@ -84,20 +113,29 @@ def run_scheduled_sync():
     and snapshots the current portfolio value for ATH tracking.
     GitHub Actions handles committing and pushing the updated files.
     """
-    token_files = list(get_tokens_dir().glob("*_token.json"))
-
-    if not token_files:
-        print("ERROR: No token files found in your private state repo's tokens/ directory")
-        sys.exit(1)
+    (
+        accounts,
+        _targets,
+        _transient_symbols,
+        _norberts_gambit_fee_cad,
+        _fx_target_rules,
+        _drift_trade_threshold_pct,
+    ) = load_config()
 
     all_ok = True
     clients = []
-    for token_file in token_files:
-        name = token_file.stem.replace("_token", "")
+    tokens_dir = get_tokens_dir()
+    for account in accounts:
+        name = account["owner_name"]
+        token_file = tokens_dir / account["token_file"]
         print(f"Refreshing token for {name}...")
         try:
             # QuestradeClient.__init__ refreshes and persists the rotated token.
-            client = QuestradeClient(str(token_file), name)
+            client = QuestradeClient(
+                str(token_file),
+                name,
+                account_type_display_overrides=account["account_type_display_overrides"],
+            )
             clients.append(client)
             print(f"  ✓ {name} token refreshed successfully")
         except Exception as e:
@@ -120,17 +158,22 @@ def run_scheduled_sync():
     print("\nPortfolio sync complete.")
 
 
-def _connect_clients() -> list:
+def _connect_clients(accounts: list[dict]) -> list:
     """Connect to all configured Questrade accounts."""
     console.print("  [dim]Connecting to Questrade...[/dim]")
     clients = []
     tokens_dir = get_tokens_dir()
 
-    for name, filename in [("Jeff", "jeff_token.json"), ("Eunee", "eunee_token.json")]:
-        token_path = tokens_dir / filename
+    for account in accounts:
+        name = account["owner_name"]
+        token_path = tokens_dir / account["token_file"]
         if token_path.exists():
             try:
-                clients.append(QuestradeClient(str(token_path), name))
+                clients.append(QuestradeClient(
+                    str(token_path),
+                    name,
+                    account_type_display_overrides=account["account_type_display_overrides"],
+                ))
                 console.print(f"  [green]✓[/green] {name} connected")
             except Exception as e:
                 console.print(f"  [red]✗ {name} connection failed: {e}[/red]")
@@ -213,6 +256,7 @@ def run_rebalancer():
 
     console.print("  [dim]Loading configuration...[/dim]")
     (
+        accounts,
         targets,
         transient_symbols,
         norberts_gambit_fee_cad,
@@ -220,7 +264,7 @@ def run_rebalancer():
         drift_trade_threshold_pct,
     ) = load_config()
 
-    clients = _connect_clients()
+    clients = _connect_clients(accounts)
     usd_to_cad_rate = _fetch_exchange_rate(clients[0])
     resolved_targets = resolve_targets(targets, fx_target_rules, usd_to_cad_rate)
     _validate_resolved_targets(resolved_targets)
