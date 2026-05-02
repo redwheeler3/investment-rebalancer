@@ -67,29 +67,27 @@ instant or free.
 
 ## Architecture
 
-### Public repo
-
-This repo contains:
-
-- application code
-- documentation
-- public-safe examples
-- private-state workflow templates
-
-It does **not** contain:
-
-- live token files
-- real target allocations
-- real portfolio history
-
-### Private state repo
-
-Your separate private repo should contain:
+The model is easiest to understand when you look at both repos together:
 
 ```text
-investment-rebalancer-state/
+Public repo: investment-rebalancer/
 ├── config/
-│   └── targets.yaml
+│   └── settings.example.yaml
+├── data/
+│   └── portfolio_history.example.jsonl
+├── tokens/
+│   └── token.example.json
+├── templates/
+│   └── private-state-repo/
+│       ├── cleanup-runs.yml
+│       └── portfolio_sync.yml
+├── src/
+├── main.py
+└── requirements.txt
+
+Private repo: investment-rebalancer-state/
+├── config/
+│   └── settings.yaml
 ├── data/
 │   └── portfolio_history.jsonl
 └── tokens/
@@ -97,7 +95,9 @@ investment-rebalancer-state/
     └── secondary_token.json
 ```
 
-The app reads all mutable state from that directory.
+The public repo contains code, docs, examples, and workflow templates.
+The private repo contains the live state the app reads through
+`REBALANCER_STATE_DIR`.
 
 ---
 
@@ -202,9 +202,6 @@ data/portfolio_history.jsonl
 You can start with an empty file, or copy the structure from `data/portfolio_history.example.jsonl`.
 
 If the file doesn't exist yet, the app will create it when it first records a value.
-
-If you're migrating from an older setup that used `portfolio_history.json`, the app
-will read the legacy file and rewrite it in `.jsonl` format on the next save.
 
 ### 7. Set `REBALANCER_STATE_DIR`
 
@@ -327,31 +324,6 @@ Key fields:
 
 ---
 
-## Project structure
-
-```text
-investment-rebalancer/
-├── config/
-│   └── targets.example.yaml
-├── data/
-│   └── portfolio_history.example.jsonl
-├── tokens/
-│   └── token.example.json
-├── templates/
-│   └── private-state-repo/
-│       ├── cleanup-runs.yml
-│       └── portfolio_sync.yml
-├── src/
-│   ├── questrade_client.py
-│   ├── history.py
-│   ├── paths.py
-│   └── ...
-├── main.py
-└── requirements.txt
-```
-
----
-
 ## Local sync behavior
 
 When you run:
@@ -381,7 +353,7 @@ all aligned on the latest token state.
 ## Security notes
 
 - Never commit live Questrade tokens to the public repo
-- Keep your real `targets.yaml` in the private state repo if you consider it personal data
+- Keep your real `settings.yaml` in the private state repo
 - Keep `portfolio_history.jsonl` in the private state repo
 - If you are converting an old private repo into a public one, do **not** rely only on deleting files from the latest commit — clean or replace the git history first
 

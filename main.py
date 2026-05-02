@@ -56,7 +56,7 @@ def load_config() -> tuple:
     raw_accounts = data.get("accounts", [])
     if not raw_accounts:
         raise ValueError(
-            "No accounts configured in config/targets.yaml. "
+            "No accounts configured in config/settings.yaml. "
             "Add at least one account with owner_name and token_file."
         )
 

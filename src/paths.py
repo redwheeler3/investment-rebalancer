@@ -69,8 +69,3 @@ def get_data_dir() -> Path:
 def get_history_file() -> Path:
     """Return the canonical portfolio history file inside the private state repo."""
     return get_data_dir() / "portfolio_history.jsonl"
-
-
-def get_legacy_history_file() -> Path:
-    """Return the legacy portfolio history filename for backward compatibility."""
-    return get_data_dir() / "portfolio_history.json"

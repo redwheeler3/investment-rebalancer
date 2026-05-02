@@ -10,7 +10,7 @@ import json
 from datetime import date
 from dataclasses import dataclass
 
-from src.paths import get_history_file, get_legacy_history_file
+from src.paths import get_history_file
 
 
 @dataclass
@@ -166,30 +166,17 @@ def get_year_to_date_history(today: date | None = None) -> list[HistoryPoint]:
 def _load_history() -> list:
     """Load history from a JSONL file (one JSON object per line).
 
-    Also handles the legacy format (a single JSON array) for backward
-    compatibility — it will be converted to JSONL on the next save.
-
     Each line: {"date":"2026-04-14","value":156432.50}
     """
     history_file = get_history_file()
-    legacy_history_file = get_legacy_history_file()
-
-    if history_file.exists():
-        source_file = history_file
-    elif legacy_history_file.exists():
-        source_file = legacy_history_file
-    else:
+    if not history_file.exists():
         return []
 
     try:
-        with open(source_file, "r") as f:
+        with open(history_file, "r") as f:
             content = f.read().strip()
         if not content:
             return []
-
-        # Legacy format: entire file is a JSON array
-        if content.startswith("["):
-            return json.loads(content)
 
         # JSONL format: one JSON object per line
         entries = []
@@ -205,14 +192,7 @@ def _load_history() -> list:
 def _save_history(history: list) -> None:
     """Save history as JSONL (one JSON object per line). Creates data/ if needed."""
     history_file = get_history_file()
-    legacy_history_file = get_legacy_history_file()
     history_file.parent.mkdir(parents=True, exist_ok=True)
     with open(history_file, "w") as f:
         for entry in history:
             f.write(json.dumps(entry, separators=(",", ":")) + "\n")
-
-    if legacy_history_file.exists() and legacy_history_file != history_file:
-        try:
-            legacy_history_file.unlink()
-        except OSError:
-            pass
