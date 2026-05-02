@@ -93,8 +93,8 @@ investment-rebalancer-state/
 ├── data/
 │   └── portfolio_history.jsonl
 └── tokens/
-    ├── jeff_token.json
-    └── eunee_token.json
+    ├── primary_token.json
+    └── secondary_token.json
 ```
 
 The app reads all mutable state from that directory.
@@ -139,17 +139,17 @@ investment-rebalancer-state/
 └── tokens/
 ```
 
-### 4. Add your target config
+### 4. Add your private settings
 
 Copy the public example file:
 
-- `config/targets.example.yaml` from this repo
-- into `config/targets.yaml` in your private state repo
+- `config/settings.example.yaml` from this repo
+- into `config/settings.yaml` in your private state repo
 
-Then edit it with your real allocation targets.
+Then edit it with your real allocation targets and account definitions.
 
 The same file also defines which Questrade logins to connect to. Instead of
-hardcoding names like `Jeff`, `Eunee`, or a corporate label in the public code,
+hardcoding household-specific names or corporate labels in the public code,
 the app now reads account definitions from private config.
 
 Example shape:
@@ -169,17 +169,16 @@ accounts:
 - `account_type_display_overrides` is optional and lets you relabel specific
   Questrade `clientAccountType` values for display purposes
 
-This is how the old special `Rexin` case is handled now: instead of a hardcoded
-rule in the public code, a login can say “when Questrade reports
-`clientAccountType: Corporation`, display `HoldingCo` (or whatever label you want).”
+If Questrade reports `clientAccountType: Corporation` for one of those logins,
+you can map it to any display label you want, such as `HoldingCo`.
 
 ### 5. Add your Questrade token files
 
 Create token files in the private repo:
 
 ```text
-tokens/jeff_token.json
-tokens/eunee_token.json
+tokens/primary_token.json
+tokens/secondary_token.json
 ```
 
 Each file should look like:
@@ -304,14 +303,15 @@ This gives you automated token refresh without ever storing live credentials in 
 Your real configuration lives in the private state repo at:
 
 ```text
-config/targets.yaml
+config/settings.yaml
 ```
 
-Use `config/targets.example.yaml` in this public repo as the starting point.
+Use `config/settings.example.yaml` in this public repo as the starting point.
 
 Key fields:
 
 - `targets` — static target allocations
+- `accounts` — token filenames, display labels, and optional account-type overrides
 - `fx_target_rules` — exchange-rate-driven target logic
 - `transient_symbols` — symbols to exclude temporarily from trading
 - `norberts_gambit_fee_cad` — estimated fee used in conversion suggestions
@@ -403,9 +403,9 @@ data/
 tokens/
 ```
 
-### `Missing config file .../config/targets.yaml`
+### `Missing config file .../config/settings.yaml`
 
-Copy `config/targets.example.yaml` from this repo into your private state repo as `config/targets.yaml`.
+Copy `config/settings.example.yaml` from this repo into your private state repo as `config/settings.yaml`.
 
 ### Local run worked but push failed
 

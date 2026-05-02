@@ -3,7 +3,7 @@ Currency handling module.
 
 Fetches USD/CAD exchange rate and handles Norbert's Gambit logic.
 Calculates per-account currency conversion needs with DLR.TO/DLR.U.TO share counts.
-The trading fee is loaded from config/targets.yaml and passed in by the caller.
+The trading fee is loaded from config/settings.yaml and passed in by the caller.
 """
 
 import math

@@ -31,7 +31,7 @@ from src.target_resolver import resolve_targets
 
 
 def load_config() -> tuple:
-    """Load config data from config/targets.yaml.
+    """Load config data from config/settings.yaml.
 
     Returns:
         Tuple of (
@@ -43,7 +43,7 @@ def load_config() -> tuple:
             drift_trade_threshold_pct float,
         ).
     """
-    targets_path = get_config_dir() / "targets.yaml"
+    targets_path = get_config_dir() / "settings.yaml"
     if not targets_path.exists():
         raise FileNotFoundError(
             f"Missing config file at '{targets_path}'. "
@@ -68,7 +68,7 @@ def load_config() -> tuple:
 
         if not owner_name or not token_file:
             raise ValueError(
-                f"Account #{index} must define both owner_name and token_file in config/targets.yaml."
+                f"Account #{index} must define both owner_name and token_file in config/settings.yaml."
             )
 
         accounts.append({
@@ -102,7 +102,7 @@ def _validate_resolved_targets(targets: dict):
     if abs(total - 100.0) > 0.5:
         raise ValueError(
             f"Resolved target allocations sum to {total:.2f}% (expected 100%). "
-            "Check config/targets.yaml static targets plus any enabled fx_target_rules."
+            "Check config/settings.yaml static targets plus any enabled fx_target_rules."
         )
 
 

@@ -4,7 +4,7 @@
 # Cash targets use currency codes (CAD, USD).
 #
 # This file is intentionally public-safe sample data. Replace it with your own
-# real targets in the private state repo's config/targets.yaml.
+# real settings in the private state repo's config/settings.yaml.
 
 # Account definitions.
 # - owner_name is the label shown in reports
