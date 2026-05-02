@@ -1,28 +1,35 @@
-# Example target allocation percentages for the combined portfolio.
+# Example target allocation percentages for a generic combined portfolio.
 # Static targets plus any enabled FX-derived targets should sum to 100%
 # after resolution.
 # Cash targets use currency codes (CAD, USD).
+#
+# This file is intentionally public-safe sample data. Replace it with your own
+# real targets in the private state repo's config/targets.yaml.
 
 targets:
   CAD: 0.0
   USD: 0.0
-  XIC.TO: 20.0
-  XEF.TO: 20.0
-  XEC.TO: 10.0
-  ZAG.TO: 20.0
+  VCN.TO: 20.0
+  VUN.TO: 25.0
+  XEF.TO: 15.0
+  XBB.TO: 20.0
 
 # FX-derived targets.
-# This example keeps a combined 30% allocation shared between a USD ETF and
-# a CAD-hedged ETF, and shifts the split as USD/CAD changes.
-fx_target_rules:
-  ivv_vsp:
-    enabled: true
-    usd_symbol: IVV
-    cad_symbol: VSP.TO
-    total_target_pct: 30.0
-    min_usd_to_cad_rate: 1.0
-    max_usd_to_cad_rate: 1.5
-    target_rounding_decimals: 0
+# This optional example keeps a combined 20% allocation shared between a USD
+# ETF and a CAD-hedged ETF, and shifts the split as USD/CAD changes.
+# Replace these placeholders with real symbols that exist in your brokerage.
+fx_target_rules: {}
+
+# Example alternative FX rule shape:
+# fx_target_rules:
+#   usd_equity_split:
+#     enabled: true
+#     usd_symbol: IVV
+#     cad_symbol: XSP.TO
+#     total_target_pct: 20.0
+#     min_usd_to_cad_rate: 1.0
+#     max_usd_to_cad_rate: 1.5
+#     target_rounding_decimals: 0
 
 # Transient symbols — temporarily excluded from rebalancing.
 transient_symbols:

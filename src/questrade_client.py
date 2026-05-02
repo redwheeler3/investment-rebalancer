@@ -140,7 +140,7 @@ class QuestradeClient:
         Search for a symbol to get its Questrade symbol ID.
 
         Args:
-            symbol: Ticker symbol (e.g., "VSP.TO").
+            symbol: Ticker symbol (e.g., "ETF.TO").
 
         Returns:
             List of matching symbol dictionaries.

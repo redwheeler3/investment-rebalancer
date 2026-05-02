@@ -156,7 +156,7 @@ def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
                     continue
 
                 # Determine currency from the symbol
-                # .TO symbols are CAD, others (like IVV) are USD
+                # .TO symbols are CAD, while non-.TO symbols are typically USD
                 currency = "CAD" if symbol.endswith(".TO") else "USD"
 
                 position = Position(
