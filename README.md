@@ -1,160 +1,377 @@
 # Investment Rebalancer
 
-A Python-based portfolio rebalancer for Questrade accounts. Replaces Passiv with a streamlined, customized tool that treats multiple accounts across two Questrade logins as one unified portfolio.
+A Python-based portfolio rebalancer for Questrade accounts. It replaces Passiv with a more customizable workflow that treats multiple accounts across multiple Questrade logins as one unified portfolio.
+
+## Why this repo is structured differently
+
+This project intentionally separates:
+
+- **public code** — this repository
+- **private personal state** — a separate private repo that you control
+
+That private state repo contains:
+
+- your live Questrade refresh tokens
+- your real `targets.yaml`
+- your portfolio history file
+
+This is one of the best parts of the implementation:
+
+> you can keep the code public and reusable, while keeping broker credentials and rotating state private and still fully automated.
+
+Questrade refresh tokens rotate and expire quickly, so they should never live in a public repo. Instead, this app reads state from a private companion repo through one explicit environment variable:
+
+```bash
+REBALANCER_STATE_DIR
+```
+
+If that variable is missing, the app fails fast with a clear error.
+
+---
 
 ## Features
 
-- **Unified Portfolio View** — Aggregates all accounts (RRSP, TFSA, FHSA, Margin, RESP, LIRA, Corporate) across two Questrade logins into a single portfolio
-- **Target Allocation Tracking** — Compares current holdings against configurable target percentages
-- **Accuracy Score** — Single percentage showing how close the portfolio is to the target (100% = perfectly balanced)
-- **Smart Trade Placement** — Only recommends trades in accounts that already hold the position (never introduces new tickers into an account)
+- **Unified Portfolio View** — Aggregates all accounts into one portfolio view
+- **Target Allocation Tracking** — Compares holdings against configurable targets
+- **Accuracy Score** — Single percentage showing how close the portfolio is to target
+- **Smart Trade Placement** — Only recommends trades in accounts that already hold the position
 - **Currency Handling** — Detects USD/CAD conversion needs and flags Norbert's Gambit status
-- **Transient Symbols** — Temporarily exclude symbols from rebalancing (e.g., DLR.TO / DLR.U.TO mid-Norbert's Gambit). Value stays in the portfolio total so allocation math is correct
-- **Unknown Holdings** — Any symbol not in targets (and not transient) is treated as 0% target and sold automatically
-- **Projected Accuracy** — Shows what the accuracy would be after executing recommended trades
-- **Whole-Share Trading** — Recommends whole shares only, using bid price for sells and ask price for buys
-- **Iterative Algorithm** — Repeats Sell → Buy → Sweep rounds until all positions are within tolerance, handling same-currency, cross-currency, and displacement trades in a single unified pass
-- **Configurable Drift Trade Threshold** — Only recommends trades when a position's absolute drift meets your configured minimum threshold
-- **Tolerance-Aware Status Display** — The allocation tables mark symbols as `OK`, `OVER`, or `UNDER` using your configured drift tolerance
-- **Conservative FX Funding** — Currency conversion suggestions use conservative DLR bid/ask math so Norbert's Gambit sizing does not underfund buys
-- **Sell Trimming Reconciliation** — After baseline trade generation, oversized sells are trimmed when possible so they do not raise materially more cash than the planned buys require
-- **Automatic Portfolio Sync** — GitHub Actions cron job refreshes Questrade OAuth tokens and snapshots portfolio value twice daily
+- **Transient Symbols** — Temporarily exclude symbols such as `DLR.TO` / `DLR.U.TO` during Norbert's Gambit
+- **Unknown Holdings** — Symbols not in targets are treated as implicit 0% targets and recommended for sale
+- **Projected Accuracy** — Shows expected accuracy after recommended trades
+- **Whole-Share Trading** — Uses whole shares only, with bid pricing for sells and ask pricing for buys
+- **Iterative Algorithm** — Repeats Sell → Buy → Sweep rounds until positions are within tolerance
+- **Configurable Drift Trade Threshold** — Only acts on positions that drift beyond your chosen threshold
+- **Tolerance-Aware Status Display** — Marks symbols as `OK`, `OVER`, or `UNDER`
+- **Conservative FX Funding** — Uses conservative DLR bid/ask math for Norbert's Gambit sizing
+- **Sell Trimming Reconciliation** — Trims excess sells when possible
+- **Automatic Portfolio Sync** — Designed to run with GitHub Actions from a private state repo
 
-## Quick Start
+---
 
-### 1. Install Dependencies
+## Architecture
+
+### Public repo
+
+This repo contains:
+
+- application code
+- documentation
+- public-safe examples
+- private-state workflow templates
+
+It does **not** contain:
+
+- live token files
+- real target allocations
+- real portfolio history
+
+### Private state repo
+
+Your separate private repo should contain:
+
+```text
+investment-rebalancer-state/
+├── config/
+│   └── targets.yaml
+├── data/
+│   └── portfolio_history.json
+└── tokens/
+    ├── jeff_token.json
+    └── eunee_token.json
+```
+
+The app reads all mutable state from that directory.
+
+---
+
+## Quick start
+
+### 1. Clone the public code repo
+
+```bash
+git clone https://github.com/<you>/investment-rebalancer.git
+cd investment-rebalancer
+```
+
+### 2. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 2. Set Up Questrade API Tokens
+### 3. Create a private state repo
 
-1. Go to [Questrade API Hub](https://login.questrade.com/APIAccess/UserApps.aspx) for each account
-2. Create a personal app (or use an existing one)
-3. Generate a refresh token
-4. Paste the refresh token into the corresponding file:
+Create a separate private repository anywhere on your machine, for example:
 
-```bash
-# tokens/jeff_token.json
-{"refresh_token": "YOUR_TOKEN_HERE"}
-
-# tokens/eunee_token.json
-{"refresh_token": "YOUR_TOKEN_HERE"}
+```text
+C:\Users\you\Documents\investment-rebalancer-state
 ```
 
-### 3. Run the Rebalancer
+or on macOS:
+
+```text
+/Users/you/Documents/investment-rebalancer-state
+```
+
+Create this structure inside it:
+
+```text
+investment-rebalancer-state/
+├── config/
+├── data/
+└── tokens/
+```
+
+### 4. Add your target config
+
+Copy the public example file:
+
+- `config/targets.example.yaml` from this repo
+- into `config/targets.yaml` in your private state repo
+
+Then edit it with your real allocation targets.
+
+### 5. Add your Questrade token files
+
+Create token files in the private repo:
+
+```text
+tokens/jeff_token.json
+tokens/eunee_token.json
+```
+
+Each file should look like:
+
+```json
+{
+  "refresh_token": "YOUR_QUESTRADE_REFRESH_TOKEN"
+}
+```
+
+You can use `tokens/token.example.json` in this repo as a template.
+
+### 6. Optional: add portfolio history
+
+If you want all-time high / daily change / YTD reporting immediately, create:
+
+```text
+data/portfolio_history.json
+```
+
+You can start with an empty file, or copy the structure from `data/portfolio_history.example.jsonl`.
+
+If the file doesn't exist yet, the app will create it when it first records a value.
+
+### 7. Set `REBALANCER_STATE_DIR`
+
+Point the environment variable at the root of your private state repo.
+
+#### Windows - persistent user variable
+
+In **Command Prompt**:
+
+```cmd
+setx REBALANCER_STATE_DIR "C:\Users\you\Documents\investment-rebalancer-state"
+```
+
+Then close and reopen your terminal or VS Code.
+
+#### Windows - temporary for current shell
+
+```cmd
+set REBALANCER_STATE_DIR=C:\Users\you\Documents\investment-rebalancer-state
+```
+
+#### macOS / Linux - temporary for current shell
+
+```bash
+export REBALANCER_STATE_DIR="/Users/you/Documents/investment-rebalancer-state"
+```
+
+#### macOS / Linux - persistent
+
+Add this to your shell profile such as `~/.zshrc` or `~/.bashrc`:
+
+```bash
+export REBALANCER_STATE_DIR="/Users/you/Documents/investment-rebalancer-state"
+```
+
+Then reload your shell:
+
+```bash
+source ~/.zshrc
+```
+
+### 8. Run the rebalancer
+
+Once the environment variable is set, your normal command stays simple:
 
 ```bash
 python main.py
 ```
 
-### 4. Scheduled Sync Mode (used by GitHub Actions)
+---
+
+## Scheduled sync mode
+
+For automation, the app also supports:
 
 ```bash
 python main.py --sync
 ```
 
-## Configuration (`config/targets.yaml`)
+This mode:
 
-Edit the static target percentages, then optionally add FX-driven target rules.
-The static targets plus any enabled FX-derived targets should sum to 100%
-after resolution:
+- refreshes all token files in the private state repo
+- snapshots the current portfolio value for history / ATH tracking
+- expects the surrounding GitHub Actions workflow to commit and push the updated private state
 
-```yaml
-targets:
-  CAD: 0.0      # Cash CAD
-  USD: 0.0      # Cash USD
-  VCN.TO: 2.0
-  VUN.TO: 2.0
-  XEF.TO: 2.0
-  XEC.TO: 6.0
-  XBB.TO: 6.0
-  CASH.TO: 8.0
+---
 
-fx_target_rules:
-  ivv_vsp:
-    enabled: true
-    usd_symbol: IVV
-    cad_symbol: VSP.TO
-    total_target_pct: 74.0
-    min_usd_to_cad_rate: 1.0
-    max_usd_to_cad_rate: 1.5
-    target_rounding_decimals: 0
+## Private repo GitHub Actions setup
 
-# List symbols to temporarily exclude from rebalancing.
-# e.g., DLR.TO or DLR.U.TO mid-Norbert's Gambit.
-transient_symbols:
-  - DLR.TO
-  - DLR.U.TO
+The recommended automation model is:
 
-# Trading fee used for Norbert's Gambit conversion suggestions
-norberts_gambit_fee_cad: 10.49
+- **public repo** holds the code
+- **private repo** holds tokens, config, history, and scheduled workflows
 
-# Only trade symbols whose absolute drift is at least this %
-drift_trade_threshold_pct: 0.5
+This repo includes workflow templates you can copy into your private state repo:
+
+```text
+templates/private-state-repo/portfolio_sync.yml
+templates/private-state-repo/cleanup-runs.yml
 ```
 
-**Transient symbols:** List any symbol in `transient_symbols` that you're holding temporarily (e.g., DLR.TO / DLR.U.TO mid-Norbert's Gambit). Transient symbols are excluded from trading but their value stays in the portfolio total so allocation math remains correct. Remove them once you've sold manually.
+### How the private workflow works
 
-**FX target rules:** `fx_target_rules` lets you derive part of the portfolio target automatically from the live USD/CAD exchange rate. In the example above, IVV and VSP.TO share a combined 74% target, with more allocated to VSP.TO as USD becomes more expensive relative to CAD.
+1. Checks out the private state repo
+2. Checks out this public code repo into a sibling folder
+3. Sets `REBALANCER_STATE_DIR` to the private repo path
+4. Runs `python main.py --sync`
+5. Commits rotated tokens and updated history back to the private repo
 
-**Unknown holdings:** Any symbol you hold that isn't in `targets` (and isn't transient) gets an implicit 0% target — the rebalancer will recommend selling it.
+This gives you automated token refresh without ever storing live credentials in the public repo.
 
-**Norbert's Gambit fee:** `norberts_gambit_fee_cad` controls the estimated trading cost used when reporting currency conversion needs.
+---
 
-**Drift trade threshold:** `drift_trade_threshold_pct` controls how far a symbol must drift from target before the rebalancer will act on it. The allocation tables also use this same threshold when showing `OK`, `OVER`, and `UNDER`. For example, `0.5` means a symbol at `+0.4%` or `-0.4%` drift is treated as within tolerance.
+## Configuration
 
-## Project Structure
+Your real configuration lives in the private state repo at:
 
+```text
+config/targets.yaml
 ```
+
+Use `config/targets.example.yaml` in this public repo as the starting point.
+
+Key fields:
+
+- `targets` — static target allocations
+- `fx_target_rules` — exchange-rate-driven target logic
+- `transient_symbols` — symbols to exclude temporarily from trading
+- `norberts_gambit_fee_cad` — estimated fee used in conversion suggestions
+- `drift_trade_threshold_pct` — minimum drift before the rebalancer acts
+
+### Notes
+
+- **Transient symbols:** useful for DLR.TO / DLR.U.TO during Norbert's Gambit
+- **Unknown holdings:** any non-transient symbol missing from targets gets an implicit 0% target
+- **Target totals:** static targets plus enabled FX-derived targets should sum to about 100%
+
+---
+
+## Project structure
+
+```text
 investment-rebalancer/
-├── .gitignore                      # Ignore local / generated files
 ├── config/
-│   └── targets.yaml              # Target allocations
+│   └── targets.example.yaml
 ├── data/
-│   └── portfolio_history.json    # Portfolio value history for ATH tracking
+│   └── portfolio_history.example.jsonl
 ├── tokens/
-│   ├── jeff_token.json            # Jeff's Questrade refresh token
-│   └── eunee_token.json           # Eunee's Questrade refresh token
+│   └── token.example.json
+├── templates/
+│   └── private-state-repo/
+│       ├── cleanup-runs.yml
+│       └── portfolio_sync.yml
 ├── src/
-│   ├── questrade_client.py        # Questrade API wrapper
-│   ├── portfolio.py               # Portfolio aggregation & accuracy
-│   ├── rebalancer.py              # Public rebalancer API
-│   ├── rebalancer_core.py         # Shared rebalance state & helpers
-│   ├── rebalancer_steps.py        # Sell / buy / sweep phases
-│   ├── rebalancer_netting.py      # Final trade netting
-│   ├── rebalancer_reconcile.py    # Post-processing trim of excess sell funding
-│   ├── rebalancer_simulation.py   # Projected post-trade allocations
-│   ├── rules.py                   # Trade placement rules engine
-│   ├── currency.py                # USD/CAD exchange rate & Norbert's Gambit
-│   ├── funding.py                 # Shared fee-aware funding / conversion helpers
-│   ├── report_builder.py          # Assembles report data for the CLI
-│   ├── history.py                 # Portfolio history / all-time high tracking
-│   └── display.py                 # Rich terminal output
-├── .github/workflows/
-│   ├── portfolio_sync.yml         # Twice-daily portfolio sync (token refresh + history snapshot)
-│   └── cleanup-runs.yml           # Monthly cleanup of old GitHub Actions runs
-├── main.py                        # Entry point
+│   ├── questrade_client.py
+│   ├── history.py
+│   ├── paths.py
+│   └── ...
+├── main.py
 └── requirements.txt
 ```
 
-## GitHub Actions
+---
 
-- **`portfolio_sync.yml`** runs twice daily (3:00 AM and 3:00 PM PDT) to keep Questrade OAuth tokens fresh and snapshot the portfolio value for ATH tracking. The Questrade API goes offline periodically, so an alert issue is only created if syncs fail for more than 48 consecutive hours.
-- **`cleanup-runs.yml`** runs monthly to delete older GitHub Actions workflow runs, keeping the most recent history while reducing Actions clutter.
+## Local sync behavior
 
-When running locally, `python main.py` automatically pulls the latest tokens from the remote before connecting to Questrade, and pushes the refreshed tokens and updated portfolio history back when done.
+When you run:
 
-## ⚠️ Security
+```bash
+python main.py
+```
 
-This repo stores Questrade refresh tokens in `tokens/`. **Keep this repository PRIVATE.** The tokens are committed to the repo so GitHub Actions can refresh them automatically.
+the app will:
 
-## Accuracy Score
+1. `git pull --ff-only` in your private state repo
+2. run the rebalancer
+3. refresh any rotated tokens
+4. update portfolio history
+5. commit and push `tokens/` and `data/` in the private state repo
+
+That keeps:
+
+- your Windows machine
+- your Mac
+- and your private GitHub Actions workflow
+
+all aligned on the latest token state.
+
+---
+
+## Security notes
+
+- Never commit live Questrade tokens to the public repo
+- Keep your real `targets.yaml` in the private state repo if you consider it personal data
+- Keep `portfolio_history.json` in the private state repo
+- If you are converting an old private repo into a public one, do **not** rely only on deleting files from the latest commit — clean or replace the git history first
+
+---
+
+## Troubleshooting
+
+### `REBALANCER_STATE_DIR is not set`
+
+Set the environment variable and restart your terminal.
+
+### `Private state repo is missing required directory 'tokens/'`
+
+Create the expected folder structure in your private state repo:
+
+```text
+config/
+data/
+tokens/
+```
+
+### `Missing config file .../config/targets.yaml`
+
+Copy `config/targets.example.yaml` from this repo into your private state repo as `config/targets.yaml`.
+
+### Local run worked but push failed
+
+Your tokens may have rotated locally without being pushed upstream. Push the private state repo manually before running from another machine or waiting for GitHub Actions.
+
+---
+
+## Accuracy score
 
 The accuracy score is calculated as:
 
-```
+```text
 Accuracy = 100% - (sum of absolute drifts / 2)
 ```
 

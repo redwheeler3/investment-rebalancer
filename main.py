@@ -12,7 +12,6 @@ Usage:
 import subprocess
 import sys
 import yaml
-from pathlib import Path
 
 # Ensure UTF-8 output on Windows (prevents UnicodeEncodeError with Rich)
 if sys.platform == "win32":
@@ -27,13 +26,8 @@ from src.report_builder import build_report_data
 from src.display import display_full_report, console
 from src.currency import get_usd_to_cad_rate, fetch_dlr_quotes
 from src.history import record_value
+from src.paths import get_config_dir, get_state_root, get_tokens_dir
 from src.target_resolver import resolve_targets
-
-
-# Paths
-ROOT = Path(__file__).parent
-TOKENS_DIR = ROOT / "tokens"
-CONFIG_DIR = ROOT / "config"
 
 
 def load_config() -> tuple:
@@ -48,7 +42,13 @@ def load_config() -> tuple:
             drift_trade_threshold_pct float,
         ).
     """
-    targets_path = CONFIG_DIR / "targets.yaml"
+    targets_path = get_config_dir() / "targets.yaml"
+    if not targets_path.exists():
+        raise FileNotFoundError(
+            f"Missing config file at '{targets_path}'. "
+            "Create it in your private state repo. See README.md for the required layout."
+        )
+
     with open(targets_path, "r") as f:
         data = yaml.safe_load(f)
 
@@ -84,10 +84,10 @@ def run_scheduled_sync():
     and snapshots the current portfolio value for ATH tracking.
     GitHub Actions handles committing and pushing the updated files.
     """
-    token_files = list(TOKENS_DIR.glob("*_token.json"))
+    token_files = list(get_tokens_dir().glob("*_token.json"))
 
     if not token_files:
-        print("ERROR: No token files found in tokens/")
+        print("ERROR: No token files found in your private state repo's tokens/ directory")
         sys.exit(1)
 
     all_ok = True
@@ -124,9 +124,10 @@ def _connect_clients() -> list:
     """Connect to all configured Questrade accounts."""
     console.print("  [dim]Connecting to Questrade...[/dim]")
     clients = []
+    tokens_dir = get_tokens_dir()
 
     for name, filename in [("Jeff", "jeff_token.json"), ("Eunee", "eunee_token.json")]:
-        token_path = TOKENS_DIR / filename
+        token_path = tokens_dir / filename
         if token_path.exists():
             try:
                 clients.append(QuestradeClient(str(token_path), name))
@@ -135,7 +136,10 @@ def _connect_clients() -> list:
                 console.print(f"  [red]✗ {name} connection failed: {e}[/red]")
 
     if not clients:
-        console.print("[red]ERROR: No Questrade connections established. Check your tokens.[/red]")
+        console.print(
+            "[red]ERROR: No Questrade connections established. "
+            "Check the tokens in your private state repo.[/red]"
+        )
         sys.exit(1)
 
     return clients
@@ -243,13 +247,14 @@ def run_rebalancer():
 
 
 def _pull_latest():
-    """Pull the latest tokens and data from remote before running locally.
+    """Pull the latest private state from remote before running locally.
     Uses --ff-only so it only applies clean fast-forwards; warns and continues on failure."""
-    console.print("  [dim]Syncing with remote...[/dim]")
+    state_root = get_state_root()
+    console.print(f"  [dim]Syncing private state repo: {state_root}[/dim]")
     try:
         result = subprocess.run(
             ["git", "pull", "--ff-only"],
-            cwd=str(ROOT), capture_output=True, text=True,
+            cwd=str(state_root), capture_output=True, text=True,
         )
         if result.returncode == 0:
             if "Already up to date." in result.stdout:
@@ -263,20 +268,21 @@ def _pull_latest():
 
 
 def _push_synced_files():
-    """Commit and push tokens + portfolio history so GitHub Actions stays in sync.
+    """Commit and push tokens + portfolio history so local runs and automation stay in sync.
     Questrade uses single-use refresh tokens (token rotation), so every run
     invalidates the old token. Portfolio history is also pushed so ATH
     tracking is shared between local runs and GitHub Actions."""
+    state_root = get_state_root()
     try:
         # Check if there are changes to push (tokens or data)
         result = subprocess.run(
             ["git", "diff", "--quiet", "tokens/", "data/"],
-            cwd=str(ROOT), capture_output=True,
+            cwd=str(state_root), capture_output=True,
         )
         # Also check for untracked files in data/ (first run)
         untracked = subprocess.run(
             ["git", "ls-files", "--others", "--exclude-standard", "data/"],
-            cwd=str(ROOT), capture_output=True, text=True,
+            cwd=str(state_root), capture_output=True, text=True,
         )
         if result.returncode == 0 and not untracked.stdout.strip():
             console.print("\n  [dim]No local changes to push[/dim]")
@@ -284,28 +290,29 @@ def _push_synced_files():
 
         subprocess.run(
             ["git", "add", "tokens/", "data/"],
-            cwd=str(ROOT), check=True, capture_output=True,
+            cwd=str(state_root), check=True, capture_output=True,
         )
         subprocess.run(
             ["git", "commit", "-m", "🔄 Auto-sync tokens and portfolio history"],
-            cwd=str(ROOT), check=True, capture_output=True,
+            cwd=str(state_root), check=True, capture_output=True,
         )
         subprocess.run(
             ["git", "push"],
-            cwd=str(ROOT), check=True, capture_output=True,
+            cwd=str(state_root), check=True, capture_output=True,
         )
-        console.print("\n  [green]✓[/green] [dim]Pushed updated tokens and portfolio history to remote[/dim]")
+        console.print("\n  [green]✓[/green] [dim]Pushed updated private state to remote[/dim]")
     except FileNotFoundError:
-        console.print("\n  [yellow]⚠ git not found — remember to push files manually[/yellow]")
+        console.print("\n  [yellow]⚠ git not found — remember to push your private state repo manually[/yellow]")
     except subprocess.CalledProcessError:
-        console.print("\n  [yellow]⚠ Could not auto-push — remember to push manually[/yellow]")
+        console.print("\n  [yellow]⚠ Could not auto-push — remember to push your private state repo manually[/yellow]")
 
 
 def main():
     """Entry point."""
     if "--sync" in sys.argv:
-        # Scheduled sync mode (GitHub Actions): refresh tokens + snapshot portfolio.
-        # GitHub Actions handles its own git commit/push in the workflow,
+        # Scheduled sync mode (private repo GitHub Actions):
+        # refresh tokens + snapshot portfolio. The private repo workflow
+        # handles its own git commit/push,
         # so we don't call _push_synced_files() here.
         run_scheduled_sync()
     else:

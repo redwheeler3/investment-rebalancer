@@ -8,12 +8,9 @@ One entry per day — multiple runs on the same day overwrite with the latest va
 
 import json
 from datetime import date
-from pathlib import Path
 from dataclasses import dataclass
 
-
-# History file path (relative to project root)
-HISTORY_FILE = Path(__file__).parent.parent / "data" / "portfolio_history.json"
+from src.paths import get_history_file
 
 
 @dataclass
@@ -174,10 +171,11 @@ def _load_history() -> list:
 
     Each line: {"date":"2026-04-14","value":156432.50}
     """
-    if not HISTORY_FILE.exists():
+    history_file = get_history_file()
+    if not history_file.exists():
         return []
     try:
-        with open(HISTORY_FILE, "r") as f:
+        with open(history_file, "r") as f:
             content = f.read().strip()
         if not content:
             return []
@@ -199,7 +197,8 @@ def _load_history() -> list:
 
 def _save_history(history: list) -> None:
     """Save history as JSONL (one JSON object per line). Creates data/ if needed."""
-    HISTORY_FILE.parent.mkdir(parents=True, exist_ok=True)
-    with open(HISTORY_FILE, "w") as f:
+    history_file = get_history_file()
+    history_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(history_file, "w") as f:
         for entry in history:
             f.write(json.dumps(entry, separators=(",", ":")) + "\n")

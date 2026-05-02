@@ -1,0 +1,36 @@
+# Example target allocation percentages for the combined portfolio.
+# Static targets plus any enabled FX-derived targets should sum to 100%
+# after resolution.
+# Cash targets use currency codes (CAD, USD).
+
+targets:
+  CAD: 0.0
+  USD: 0.0
+  XIC.TO: 20.0
+  XEF.TO: 20.0
+  XEC.TO: 10.0
+  ZAG.TO: 20.0
+
+# FX-derived targets.
+# This example keeps a combined 30% allocation shared between a USD ETF and
+# a CAD-hedged ETF, and shifts the split as USD/CAD changes.
+fx_target_rules:
+  ivv_vsp:
+    enabled: true
+    usd_symbol: IVV
+    cad_symbol: VSP.TO
+    total_target_pct: 30.0
+    min_usd_to_cad_rate: 1.0
+    max_usd_to_cad_rate: 1.5
+    target_rounding_decimals: 0
+
+# Transient symbols — temporarily excluded from rebalancing.
+transient_symbols:
+  - DLR.TO
+  - DLR.U.TO
+
+# Trading fee for Norbert's Gambit: $9.99 commission + 5% GST.
+norberts_gambit_fee_cad: 10.49
+
+# Only generate trades for symbols whose absolute drift is at least this %.
+drift_trade_threshold_pct: 0.5

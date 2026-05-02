@@ -24,5 +24,12 @@ Thumbs.db
 # Local temporary working files
 temp/
 
-# NOTE: tokens/ is NOT ignored — it must be in the repo for GitHub Actions.
-# Keep this repo PRIVATE!
+# Private state files belong in a separate private state repo.
+config/targets.yaml
+data/portfolio_history.json
+tokens/*.json
+
+# Public examples/templates should remain tracked.
+!config/targets.example.yaml
+!data/portfolio_history.example.jsonl
+!tokens/token.example.json
