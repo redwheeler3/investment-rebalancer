@@ -86,6 +86,10 @@ Public repo: investment-rebalancer/
 └── requirements.txt
 
 Private repo: investment-rebalancer-state/
+├── .github/
+│   └── workflows/
+│       ├── cleanup-runs.yml
+│       └── portfolio_sync.yml
 ├── config/
 │   └── settings.yaml
 ├── data/
@@ -137,6 +141,14 @@ investment-rebalancer-state/
 ├── config/
 ├── data/
 └── tokens/
+```
+
+If you plan to use the GitHub Actions automation described below, you will also
+add this later in the private repo:
+
+```text
+.github/
+└── workflows/
 ```
 
 ### 4. Add your private settings
@@ -276,12 +288,45 @@ The recommended automation model is simple:
 - **public repo** = code and public-safe examples
 - **private repo** = your state and scheduled workflows
 
-This repo includes workflow templates you can copy into your private state repo:
+This repo includes **workflow template files** you can copy into your private
+state repo:
 
 ```text
 templates/private-state-repo/portfolio_sync.yml
 templates/private-state-repo/cleanup-runs.yml
 ```
+
+Copy them into your private repo at:
+
+```text
+investment-rebalancer-state/
+└── .github/
+    └── workflows/
+        ├── portfolio_sync.yml
+        └── cleanup-runs.yml
+```
+
+Before using `portfolio_sync.yml`, open the copied file and replace:
+
+```text
+<PUBLIC_REPO_OWNER>/<PUBLIC_REPO_NAME>
+```
+
+with the actual GitHub owner/name of this public code repository, for example:
+
+```text
+redwheeler3/investment-rebalancer
+```
+
+What each workflow is for:
+
+- `portfolio_sync.yml` — a template for the private repo's main sync workflow;
+  after you replace the public repo owner/name, it can run on a schedule or
+  manually, refresh tokens, snapshot portfolio value/history, and commit any
+  updated private-state files back to the private repo
+- `cleanup-runs.yml` — a template for a small maintenance workflow that runs
+  monthly to delete old GitHub Actions workflow runs so the private repo's
+  Actions history stays tidy
 
 ### How the private workflow works
 
