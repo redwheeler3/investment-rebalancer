@@ -25,7 +25,7 @@ config, and portfolio history. The app reads that private state through one
 explicit environment variable, `REBALANCER_STATE_DIR`, so local runs and GitHub
 Actions both operate against the same source of truth.
 
-> Keep code public and reusable, while keeping broker credentials and rotating state private and fully automated.
+> TL;DR: Keep code public and reusable, while keeping broker credentials and rotating state private and fully automated.
 
 ---
 
@@ -442,3 +442,9 @@ Accuracy = 100% - (sum of absolute drifts / 2)
 - **98%+** = very close to target
 - **95-98%** = minor drift, probably fine
 - **<95%** = rebalance recommended
+
+---
+
+## License
+
+This project is licensed under the **Apache License 2.0**. See [LICENSE](LICENSE).
