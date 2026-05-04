@@ -265,28 +265,11 @@ python main.py
 
 ---
 
-## Scheduled sync mode
-
-For automation, the app also supports:
-
-```bash
-python main.py --sync
-```
-
-This mode:
-
-- refreshes all token files in the private state repo
-- snapshots the current portfolio value for history / ATH tracking
-- expects the surrounding GitHub Actions workflow to commit and push the updated private state
-
----
-
 ## Private repo GitHub Actions setup
 
-The recommended automation model is simple:
-
-- **public repo** = code and public-safe examples
-- **private repo** = your state and scheduled workflows
+For automation, the app supports a `--sync` mode that refreshes all token files,
+snapshots the current portfolio value, and exits — expecting the surrounding
+workflow to commit and push the updated state.
 
 This repo includes **workflow template files** you can copy into your private
 state repo:
@@ -342,56 +325,21 @@ This gives you automated token refresh without ever storing live credentials in 
 
 ## Configuration
 
-Your real configuration lives in the private state repo at:
-
-```text
-config/settings.yaml
-```
-
-Use `config/settings.example.yaml` in this public repo as the starting point.
+Your real configuration lives in `config/settings.yaml` in the private state
+repo. Use `config/settings.example.yaml` in this public repo as the starting
+point.
 
 Key fields:
 
-- `targets` — static target allocations
+- `targets` — static target allocations (should sum to ~100% with FX rules)
 - `accounts` — token filenames, display labels, and optional account-type overrides
 - `fx_target_rules` — exchange-rate-driven target logic
 - `transient_symbols` — symbols to exclude temporarily from trading
 - `norberts_gambit_fee_cad` — estimated fee used in conversion suggestions
 - `drift_trade_threshold_pct` — minimum drift before the rebalancer acts
 
-### Notes
-
-- **Transient symbols:** useful for DLR.TO / DLR.U.TO during Norbert's Gambit
-- **Unknown holdings:** any non-transient symbol missing from targets gets an implicit 0% target
-- **Target totals:** static targets plus enabled FX-derived targets should sum to about 100%
-- **Account labels:** the `accounts:` section in private config controls token filenames,
-  report labels, and optional account-type display overrides
-
----
-
-## Local sync behavior
-
-When you run:
-
-```bash
-python main.py
-```
-
-the app will:
-
-1. `git pull --ff-only` in your private state repo
-2. run the rebalancer
-3. refresh any rotated tokens
-4. update portfolio history
-5. commit and push `tokens/` and `data/` in the private state repo
-
-That keeps:
-
-- your Windows machine
-- your Mac
-- and your private GitHub Actions workflow
-
-all aligned on the latest token state.
+Any non-transient symbol you hold that isn't in `targets` gets an implicit 0%
+target and will be recommended for sale.
 
 ---
 
