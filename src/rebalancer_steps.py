@@ -6,6 +6,7 @@ rebalancing algorithm.
 
 import math
 
+from src.rebalancer_deployment import build_cross_currency_buy, build_same_currency_buy
 from src.rebalancer_core import (
     RebalanceState,
     deduct_buy,
@@ -20,47 +21,6 @@ from src.rules import (
     effective_qty,
     find_accounts_for_symbol,
 )
-
-
-def sweep_candidates(state: RebalanceState, acct, currency: str, max_price: float = None) -> list:
-    """Find buyable underweight positions in an account for the given currency."""
-    candidates = []
-    tolerance_pct = state.drift_trade_threshold_pct
-    for pos in acct.positions:
-        if pos.currency != currency or pos.quantity <= 0:
-            continue
-        if pos.symbol in state.transient_symbols:
-            continue
-        if state.targets.get(pos.symbol, 0) <= 0 and pos.symbol not in ("CAD", "USD"):
-            continue
-
-        holding = state.holdings_view.get(pos.symbol)
-        if not holding:
-            continue
-
-        ask_price_native = holding.ask_price or pos.current_price
-        if ask_price_native <= 0:
-            continue
-        if max_price is not None and ask_price_native > max_price:
-            continue
-
-        drift_pct = state.effective_drift.get(pos.symbol, 0)
-        if drift_pct >= -tolerance_pct:
-            continue
-        candidates.append((pos.symbol, drift_pct, ask_price_native))
-
-    candidates.sort(key=lambda item: item[1])
-    return candidates
-
-
-def is_effectively_single_currency_account(state: RebalanceState, acct) -> bool:
-    """Whether an account effectively holds only one position currency."""
-    currencies = {
-        pos.currency
-        for pos in acct.positions
-        if pos.quantity > 0 and pos.symbol not in state.transient_symbols
-    }
-    return len(currencies) == 1
 
 
 def step_sell_overweight(state: RebalanceState) -> int:
@@ -336,40 +296,22 @@ def sweep_same_currency(state: RebalanceState, acct) -> int:
 
     for currency in ["CAD", "USD"]:
         for _ in range(50):
-            acct_cash_native = state.available_cash.get(acct.number, {}).get(currency, 0)
-            if acct_cash_native <= 0:
+            trade = build_same_currency_buy(
+                acct,
+                state.available_cash,
+                state.holdings_view,
+                state.effective_drift,
+                state.transient_symbols,
+                state.total_value,
+                state.usd_to_cad_rate,
+                currency,
+                state.drift_trade_threshold_pct,
+            )
+            if trade is None:
                 break
 
-            candidates = sweep_candidates(state, acct, currency, max_price=acct_cash_native)
-            if not candidates:
-                break
-
-            best_symbol, best_drift_pct, best_ask_native = candidates[0]
-            affordable_shares = int(math.floor(acct_cash_native / best_ask_native))
-            if affordable_shares <= 0:
-                break
-
-            gap_cad = abs(best_drift_pct / 100.0) * state.total_value
-            gap_native = gap_cad / state.usd_to_cad_rate if currency == "USD" else gap_cad
-            shares = min(int(math.ceil(gap_native / best_ask_native)), affordable_shares)
-
-            if shares <= 0:
-                break
-
-            cost_native = best_ask_native * shares
-            state.available_cash[acct.number][currency] -= cost_native
-            record_trade(state, TradeRecommendation(
-                symbol=best_symbol,
-                action="BUY",
-                quantity=shares,
-                account_number=acct.number,
-                account_type=acct.account_type,
-                owner=acct.owner,
-                price=best_ask_native,
-                currency=currency,
-                estimated_value=cost_native,
-            ))
-            trade_count += shares
+            record_trade(state, trade)
+            trade_count += trade.quantity
 
     return trade_count
 
@@ -377,55 +319,26 @@ def sweep_same_currency(state: RebalanceState, acct) -> int:
 def sweep_cross_currency(state: RebalanceState, acct) -> int:
     """Convert stranded cash in the wrong currency and buy the best position."""
     trade_count = 0
-    fee_cad = state.norberts_gambit_fee_cad
-    tolerance_pct = state.drift_trade_threshold_pct
-    single_currency_account = is_effectively_single_currency_account(state, acct)
 
     for source_currency in ["CAD", "USD"]:
-        source_cash_native = state.available_cash.get(acct.number, {}).get(source_currency, 0)
-        if source_cash_native <= 0:
-            continue
-
-        target_currency = "USD" if source_currency == "CAD" else "CAD"
-        candidates = sweep_candidates(state, acct, target_currency)
-        if not candidates:
-            continue
-
-        best_symbol, best_drift_pct, best_ask_native = candidates[0]
-        if not single_currency_account and best_drift_pct >= -tolerance_pct:
-            continue
-
-        if source_currency == "CAD":
-            buying_power_native = max(0, source_cash_native - fee_cad) / state.usd_to_cad_rate
-        else:
-            buying_power_native = max(0, source_cash_native * state.usd_to_cad_rate - fee_cad)
-
-        shares = int(math.floor(buying_power_native / best_ask_native))
-        if shares <= 0:
-            continue
-
-        cost_native = shares * best_ask_native
-        if source_currency == "CAD":
-            state.available_cash[acct.number]["CAD"] -= (
-                cost_native * state.usd_to_cad_rate + fee_cad
+        for _ in range(50):
+            trade = build_cross_currency_buy(
+                acct,
+                state.available_cash,
+                state.holdings_view,
+                state.effective_drift,
+                state.transient_symbols,
+                state.total_value,
+                state.usd_to_cad_rate,
+                source_currency,
+                state.norberts_gambit_fee_cad,
+                state.drift_trade_threshold_pct,
+                note="Requires currency conversion",
             )
-        else:
-            state.available_cash[acct.number]["USD"] -= (
-                cost_native + fee_cad
-            ) / state.usd_to_cad_rate
+            if trade is None:
+                break
 
-        record_trade(state, TradeRecommendation(
-            symbol=best_symbol,
-            action="BUY",
-            quantity=shares,
-            account_number=acct.number,
-            account_type=acct.account_type,
-            owner=acct.owner,
-            price=best_ask_native,
-            currency=target_currency,
-            estimated_value=cost_native,
-            note="Requires currency conversion",
-        ))
-        trade_count += shares
+            record_trade(state, trade)
+            trade_count += trade.quantity
 
     return trade_count

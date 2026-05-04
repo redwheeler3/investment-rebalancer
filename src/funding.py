@@ -86,6 +86,155 @@ def max_cad_from_usd(
     return max(0.0, usd_available * usd_to_cad_rate - fee_cad)
 
 
+def cad_to_usd_conversion_for_target(
+    cad_available: float,
+    usd_target: float,
+    usd_to_cad_rate: float,
+    fee_cad: float,
+    dlr_quotes=None,
+) -> tuple[float, float]:
+    """Return (CAD spent incl. fee, USD received) for a CAD->USD conversion."""
+    cad_buy_price = getattr(dlr_quotes, "cad_buy_price", 0.0) if dlr_quotes else 0.0
+    usd_sell_price = getattr(dlr_quotes, "usd_sell_price", 0.0) if dlr_quotes else 0.0
+
+    if cad_buy_price > 0 and usd_sell_price > 0:
+        shares_needed = int(math.ceil(usd_target / usd_sell_price))
+        shares_affordable = int(math.floor(max(0.0, cad_available - fee_cad) / cad_buy_price))
+        shares = min(shares_needed, shares_affordable)
+        if shares <= 0:
+            return 0.0, 0.0
+        return shares * cad_buy_price + fee_cad, shares * usd_sell_price
+
+    if usd_to_cad_rate <= 0 or cad_available <= fee_cad:
+        return 0.0, 0.0
+
+    spent_cad = min(cad_available, usd_target * usd_to_cad_rate + fee_cad)
+    received_usd = max(0.0, (spent_cad - fee_cad) / usd_to_cad_rate)
+    return spent_cad, received_usd
+
+
+def usd_to_cad_conversion_for_target(
+    usd_available: float,
+    cad_target: float,
+    usd_to_cad_rate: float,
+    fee_cad: float,
+    dlr_quotes=None,
+) -> tuple[float, float]:
+    """Return (USD spent, CAD received net of fee) for a USD->CAD conversion."""
+    usd_buy_price = getattr(dlr_quotes, "usd_buy_price", 0.0) if dlr_quotes else 0.0
+    cad_sell_price = getattr(dlr_quotes, "cad_sell_price", 0.0) if dlr_quotes else 0.0
+
+    if usd_buy_price > 0 and cad_sell_price > 0:
+        shares_needed = int(math.ceil((cad_target + fee_cad) / cad_sell_price))
+        shares_affordable = int(math.floor(usd_available / usd_buy_price))
+        shares = min(shares_needed, shares_affordable)
+        if shares <= 0:
+            return 0.0, 0.0
+        return shares * usd_buy_price, max(0.0, shares * cad_sell_price - fee_cad)
+
+    if usd_to_cad_rate <= 0 or usd_available <= 0:
+        return 0.0, 0.0
+
+    usd_needed = min(usd_available, (cad_target + fee_cad) / usd_to_cad_rate)
+    received_cad = max(0.0, usd_needed * usd_to_cad_rate - fee_cad)
+    return usd_needed, received_cad
+
+
+def settle_net_cash_after_conversion(
+    net_cash: CurrencyTotals,
+    usd_to_cad_rate: float,
+    fee_cad: float,
+    dlr_quotes=None,
+    tolerance: float = FUNDING_TOLERANCE,
+) -> CurrencyTotals:
+    """Normalise CAD/USD cash after satisfying at most one currency deficit."""
+    cad = net_cash.cad
+    usd = net_cash.usd
+
+    if cad >= -tolerance and usd >= -tolerance:
+        return CurrencyTotals(cad=max(0.0, cad), usd=max(0.0, usd))
+
+    if usd < -tolerance and cad > tolerance:
+        spent_cad, received_usd = cad_to_usd_conversion_for_target(
+            cad,
+            abs(usd),
+            usd_to_cad_rate,
+            fee_cad,
+            dlr_quotes=dlr_quotes,
+        )
+        return CurrencyTotals(
+            cad=max(0.0, cad - spent_cad),
+            usd=max(0.0, usd + received_usd),
+        )
+
+    if cad < -tolerance and usd > tolerance:
+        spent_usd, received_cad = usd_to_cad_conversion_for_target(
+            usd,
+            abs(cad),
+            usd_to_cad_rate,
+            fee_cad,
+            dlr_quotes=dlr_quotes,
+        )
+        return CurrencyTotals(
+            cad=max(0.0, cad + received_cad),
+            usd=max(0.0, usd - spent_usd),
+        )
+
+    return CurrencyTotals(cad=max(0.0, cad), usd=max(0.0, usd))
+
+
+def cross_currency_buying_power(
+    source_cash: float,
+    source_currency: str,
+    usd_to_cad_rate: float,
+    fee_cad: float,
+    dlr_quotes=None,
+) -> float:
+    """Return conservative target-currency buying power from one source balance."""
+    if source_currency == "CAD":
+        return max_usd_from_cad(source_cash, usd_to_cad_rate, fee_cad, dlr_quotes)
+    if source_currency == "USD":
+        return max_cad_from_usd(source_cash, usd_to_cad_rate, fee_cad, dlr_quotes)
+    raise ValueError(f"Unsupported source currency: {source_currency}")
+
+
+def consume_cross_currency_cash(
+    cash_by_currency: dict[str, float],
+    source_currency: str,
+    target_currency: str,
+    cost_native: float,
+    usd_to_cad_rate: float,
+    fee_cad: float,
+    dlr_quotes=None,
+) -> None:
+    """Apply a cross-currency buy to a cash map conservatively."""
+    if source_currency == "CAD" and target_currency == "USD":
+        spent_cad, received_usd = cad_to_usd_conversion_for_target(
+            cash_by_currency.get("CAD", 0.0),
+            cost_native,
+            usd_to_cad_rate,
+            fee_cad,
+            dlr_quotes=dlr_quotes,
+        )
+        cash_by_currency["CAD"] = max(0.0, cash_by_currency.get("CAD", 0.0) - spent_cad)
+        cash_by_currency["USD"] = max(0.0, cash_by_currency.get("USD", 0.0) + received_usd - cost_native)
+        return
+
+    if source_currency == "USD" and target_currency == "CAD":
+        spent_usd, received_cad = usd_to_cad_conversion_for_target(
+            cash_by_currency.get("USD", 0.0),
+            cost_native,
+            usd_to_cad_rate,
+            fee_cad,
+            dlr_quotes=dlr_quotes,
+        )
+        cash_by_currency["USD"] = max(0.0, cash_by_currency.get("USD", 0.0) - spent_usd)
+        cash_by_currency["CAD"] = max(0.0, cash_by_currency.get("CAD", 0.0) + received_cad - cost_native)
+        return
+
+    raise ValueError(f"Unsupported conversion path: {source_currency} -> {target_currency}")
+
+
 def can_fund_net_cash_requirement(
     net_cash: CurrencyTotals,
     usd_to_cad_rate: float,
@@ -98,9 +247,21 @@ def can_fund_net_cash_requirement(
         return True
 
     if net_cash.usd < -tolerance and net_cash.cad > tolerance:
-        return max_usd_from_cad(net_cash.cad, usd_to_cad_rate, fee_cad, dlr_quotes) + tolerance >= abs(net_cash.usd)
+        return cross_currency_buying_power(
+            net_cash.cad,
+            "CAD",
+            usd_to_cad_rate,
+            fee_cad,
+            dlr_quotes,
+        ) + tolerance >= abs(net_cash.usd)
 
     if net_cash.cad < -tolerance and net_cash.usd > tolerance:
-        return max_cad_from_usd(net_cash.usd, usd_to_cad_rate, fee_cad, dlr_quotes) + tolerance >= abs(net_cash.cad)
+        return cross_currency_buying_power(
+            net_cash.usd,
+            "USD",
+            usd_to_cad_rate,
+            fee_cad,
+            dlr_quotes,
+        ) + tolerance >= abs(net_cash.cad)
 
     return False
