@@ -49,6 +49,71 @@ Actions both operate against the same source of truth.
 
 ---
 
+## Rebalancing rules
+
+The rebalancer is intentionally opinionated. The current planner is built around
+these portfolio rules:
+
+1. **Treat all accounts as one household portfolio**
+   - Drift is measured at the total-portfolio level, not per account.
+
+2. **Sell overweight positions and buy underweight positions**
+   - The planner starts with symbols whose drift is materially away from target.
+
+3. **Use a drift threshold to avoid tiny starter trades**
+   - The configured `drift_trade_threshold_pct` is used to decide whether a
+     symbol is overweight or underweight enough to begin trading.
+   - This threshold is mainly a trade-suppression rule, not a hard law of the
+     portfolio.
+
+4. **Minimize free cash whenever practical**
+   - Once meaningful trades are already happening, the planner is allowed to use
+     leftover cash more aggressively so cash does not remain stranded.
+   - This can include buying a symbol that is merely the best eligible holding
+     in an account, even if it is no longer globally underweight.
+
+5. **Only buy symbols that already exist in the account**
+   - An account's current holdings define its buyable universe.
+   - This rule is one of the main constraints that shapes the planner.
+
+6. **Prefer same-currency deployment before cross-currency deployment**
+   - If an account has useful same-currency buys available, those come before a
+     CAD/USD conversion.
+   - Cross-currency funding is still used when needed, with conservative
+     Norbert's Gambit math.
+
+7. **Allow account-constrained cash deployment, then clean up globally**
+   - If cash lands in an account that can only productively buy a limited set of
+     existing holdings, the planner may fully deploy that cash there first.
+   - If that creates excess exposure at the household level, the planner can
+     later sell that excess from another account where the proceeds can be used
+     for more useful underweight buys.
+
+8. **Avoid obviously wasteful churn**
+   - The planner tries to avoid creating trade patterns that simply undo each
+     other without improving drift or reducing idle cash.
+
+9. **Use whole-share, real-side pricing**
+   - Sells use bid pricing.
+   - Buys use ask pricing.
+   - Trades are sized in whole shares only.
+
+10. **Treat unknown symbols as implicit 0% targets**
+    - If a holding is not in the target map, it is still eligible to be sold.
+
+11. **Respect transient/excluded symbols**
+    - Symbols such as `DLR.TO` / `DLR.U.TO` can be temporarily excluded from
+      rebalancing while a Norbert's Gambit is in flight.
+
+This rule set is meant to reflect the practical objective of the project:
+
+- improve household drift toward target,
+- keep idle cash low,
+- respect account-level holding constraints,
+- and make the trade plan realistic for manual execution.
+
+---
+
 ## Why Norbert's Gambit is part of this workflow
 
 Questrade users often prefer **Norbert's Gambit** for larger CAD/USD conversions

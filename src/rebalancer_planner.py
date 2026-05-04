@@ -1,12 +1,20 @@
 """Portfolio rebalancing planner.
 
-Organizes the rebalance logic around a few explicit ideas:
+This planner is designed around the household rules documented in the README:
 
-- a unified household portfolio with current drifts,
-- a trade plan that accumulates recommendations,
-- a cash ledger that tracks per-account funding,
-- starter trades for symbols outside the drift threshold,
-- residual cash deployment to minimize stranded cash.
+- measure drift at the unified household-portfolio level,
+- use the drift threshold to suppress small *starter* trades,
+- only buy symbols that already exist in the destination account,
+- prefer same-currency deployment before cross-currency deployment,
+- minimize stranded cash after meaningful trades have started,
+- and allow account-constrained cash deployment even if that temporarily creates
+  excess exposure that must later be cleaned up elsewhere.
+
+In practice, that means the planner has two layers:
+
+1. starter trades that react to materially overweight / underweight symbols, and
+2. residual cash deployment that tries to keep available cash low while still
+   respecting each account's buyable universe.
 """
 
 from __future__ import annotations
