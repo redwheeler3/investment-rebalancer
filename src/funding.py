@@ -1,7 +1,8 @@
-"""Shared funding and currency-capacity helpers.
+"""Currency conversion math and account cash helpers.
 
-This module centralizes the conservative cash/conversion math used by both the
-trade reconciler and the currency-conversion planner.
+Provides conservative Norbert's Gambit sizing, cross-currency buying power
+calculations, and per-account cash impact tracking used by the planner and
+the currency-needs report.
 """
 
 import math
@@ -11,9 +12,6 @@ from dataclasses import dataclass
 def to_cad(value: float, currency: str, usd_to_cad_rate: float) -> float:
     """Convert a value to CAD."""
     return value * usd_to_cad_rate if currency == "USD" else value
-
-
-FUNDING_TOLERANCE = 0.01
 
 
 @dataclass
@@ -145,49 +143,6 @@ def usd_to_cad_conversion_for_target(
     return usd_needed, received_cad
 
 
-def settle_net_cash_after_conversion(
-    net_cash: CurrencyTotals,
-    usd_to_cad_rate: float,
-    fee_cad: float,
-    dlr_quotes=None,
-    tolerance: float = FUNDING_TOLERANCE,
-) -> CurrencyTotals:
-    """Normalise CAD/USD cash after satisfying at most one currency deficit."""
-    cad = net_cash.cad
-    usd = net_cash.usd
-
-    if cad >= -tolerance and usd >= -tolerance:
-        return CurrencyTotals(cad=max(0.0, cad), usd=max(0.0, usd))
-
-    if usd < -tolerance and cad > tolerance:
-        spent_cad, received_usd = cad_to_usd_conversion_for_target(
-            cad,
-            abs(usd),
-            usd_to_cad_rate,
-            fee_cad,
-            dlr_quotes=dlr_quotes,
-        )
-        return CurrencyTotals(
-            cad=max(0.0, cad - spent_cad),
-            usd=max(0.0, usd + received_usd),
-        )
-
-    if cad < -tolerance and usd > tolerance:
-        spent_usd, received_cad = usd_to_cad_conversion_for_target(
-            usd,
-            abs(cad),
-            usd_to_cad_rate,
-            fee_cad,
-            dlr_quotes=dlr_quotes,
-        )
-        return CurrencyTotals(
-            cad=max(0.0, cad + received_cad),
-            usd=max(0.0, usd - spent_usd),
-        )
-
-    return CurrencyTotals(cad=max(0.0, cad), usd=max(0.0, usd))
-
-
 def cross_currency_buying_power(
     source_cash: float,
     source_currency: str,
@@ -240,33 +195,3 @@ def consume_cross_currency_cash(
     raise ValueError(f"Unsupported conversion path: {source_currency} -> {target_currency}")
 
 
-def can_fund_net_cash_requirement(
-    net_cash: CurrencyTotals,
-    usd_to_cad_rate: float,
-    fee_cad: float,
-    dlr_quotes=None,
-    tolerance: float = FUNDING_TOLERANCE,
-) -> bool:
-    """Whether an account can fund its net needs with at most one conversion."""
-    if net_cash.cad >= -tolerance and net_cash.usd >= -tolerance:
-        return True
-
-    if net_cash.usd < -tolerance and net_cash.cad > tolerance:
-        return cross_currency_buying_power(
-            net_cash.cad,
-            "CAD",
-            usd_to_cad_rate,
-            fee_cad,
-            dlr_quotes,
-        ) + tolerance >= abs(net_cash.usd)
-
-    if net_cash.cad < -tolerance and net_cash.usd > tolerance:
-        return cross_currency_buying_power(
-            net_cash.usd,
-            "USD",
-            usd_to_cad_rate,
-            fee_cad,
-            dlr_quotes,
-        ) + tolerance >= abs(net_cash.cad)
-
-    return False

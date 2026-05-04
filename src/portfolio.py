@@ -1,8 +1,9 @@
 """
-Portfolio aggregation module.
+Portfolio data model and allocation math.
 
-Collects positions and balances from all accounts across all Questrade logins
-and builds a unified portfolio view.
+Collects positions and balances from all accounts across all Questrade logins,
+builds a unified portfolio view, calculates allocation percentages and drift,
+and projects what the portfolio would look like after a set of trades.
 """
 
 from dataclasses import dataclass, field

@@ -4,17 +4,19 @@ This planner is designed around the household rules documented in the README:
 
 - measure drift at the unified household-portfolio level,
 - use the drift threshold to suppress small *starter* trades,
+- sell overweight symbols and buy underweight symbols,
 - only buy symbols that already exist in the destination account,
 - prefer same-currency deployment before cross-currency deployment,
 - minimize stranded cash after meaningful trades have started,
-- and allow account-constrained cash deployment even if that temporarily creates
-  excess exposure that must later be cleaned up elsewhere.
+- and allow account-constrained cash deployment (buy the best available symbol
+  in an account to avoid leaving cash idle, even if that symbol is not globally
+  underweight).
 
-In practice, that means the planner has two layers:
+The planner runs in iterative rounds with two layers per round:
 
 1. starter trades that react to materially overweight / underweight symbols, and
-2. residual cash deployment that tries to keep available cash low while still
-   respecting each account's buyable universe.
+2. residual cash deployment that spends remaining cash on the best available
+   holdings in each account.
 """
 
 from __future__ import annotations
@@ -28,7 +30,6 @@ from src.rebalancer_reconcile import (
     build_cross_currency_buy,
     build_same_currency_buy,
     net_trades,
-    trim_excess_sell_funding,
 )
 from src.models import DEFAULT_DRIFT_TRADE_THRESHOLD_PCT, TradeRecommendation
 
@@ -230,17 +231,7 @@ class RebalancePlanner:
             if starter_changes == 0:
                 break
 
-        trades = self.plan.netted_trades()
-        return trim_excess_sell_funding(
-            self.portfolio,
-            trades,
-            self.targets,
-            self.usd_to_cad_rate,
-            self.fee_cad,
-            self.drift_trade_threshold_pct,
-            dlr_quotes=self.dlr_quotes,
-            hidden_symbols=self.hidden_symbols,
-        )
+        return self.plan.netted_trades()
 
     def _sell_overweight_starters(self) -> int:
         count = 0

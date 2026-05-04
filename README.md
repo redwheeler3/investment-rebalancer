@@ -44,7 +44,6 @@ Actions both operate against the same source of truth.
 - **Configurable Drift Trade Threshold** — Only acts on positions that drift beyond your chosen threshold
 - **Tolerance-Aware Status Display** — Marks symbols as `OK`, `OVER`, or `UNDER`
 - **Conservative FX Funding** — Uses conservative DLR bid/ask math for Norbert's Gambit sizing
-- **Sell Trimming Reconciliation** — Trims excess sells when possible
 - **Automatic Portfolio Sync** — Designed to run with GitHub Actions from a private state repo
 
 ---
@@ -114,6 +113,159 @@ This rule set is meant to reflect the practical objective of the project:
 
 ---
 
+## Sample output
+
+```
+  Syncing private state repo: /Users/you/Documents/investment-rebalancer-state
+  Remote is up to date — no changes pulled
+  Loading configuration...
+  Connecting to Questrade...
+  ✓ Alice connected
+  ✓ Bob connected
+  Fetching USD/CAD exchange rate...
+  USD/CAD rate: 1.3591
+  Building portfolio...
+  Fetching market quotes (bid/ask)...
+  Fetching DLR quotes...
+  DLR.TO bid/ask: $13.79 / $13.79 | DLR.U.TO bid/ask: $10.15 / $10.15
+  Calculating trades...
+
+╔═══════════════════════════════════════════╗
+║ PORTFOLIO REBALANCER  —  2026-05-04 00:47 ║
+╚═══════════════════════════════════════════╝
+
+  Accuracy Score:          97.6%  →  99.9%
+  All-Time High:           $842,180.52 (2026-05-02)  ▼ 0.0%
+  Portfolio Value:         $842,180.52  ▲ +$0.00 (+0.0%)
+
+╭─────────────────────── Year-to-Date Portfolio Value ───────────────────────╮
+│ $842K |                                                                 ░░ │
+│       |                                                                ░░░ │
+│       |                                                             ░░ ░░░ │
+│       |                                                             ░░ ░░░ │
+│       |                                                         ░░  ░░░░░░ │
+│ $832K |                                                         ░░ ░░░░░░░ │
+│       |                                                         ░░░░░░░░░░ │
+│       |                                                        ░░░░░░░░░░░ │
+│       |                                                        ░░░░░░░░░░░ │
+│ $822K |                                                        ░░░░░░░░░░░ │
+│       |                                                        ░░░░░░░░░░░ │
+│       |                                                        ░░░░░░░░░░░ │
+│       |                                                        ░░░░░░░░░░░ │
+│       |                                                        ░░░░░░░░░░░ │
+│ $812K |                                                       ░░░░░░░░░░░░ │
+│       +---------------+--------------+----------------+--------------+--   │
+│        Jan 01       Feb 01         Mar 01           Apr 01         May 01  │
+│                                                                            │
+│ Latest $842,180.52                                                         │
+│ Low $812,430.18                                                            │
+│ High $842,180.52                                                           │
+╰────────────────────────────────────────────────────────────────────────────╯
+
+                  Portfolio Holdings
+╭──────────┬────────┬────────────────┬───────────────╮
+│ Symbol   │ Shares │          Price │   Value (CAD) │
+├──────────┼────────┼────────────────┼───────────────┤
+│ VFV      │    312 │      US$148.22 │    $62,812.41 │
+│ XEF.TO   │  2,840 │         $38.42 │   $109,112.80 │
+│ XEC.TO   │  1,620 │         $31.05 │    $50,301.00 │
+│ ZAG.TO   │ 14,780 │         $10.85 │   $160,363.00 │
+│ VUN.TO   │  3,182 │         $62.18 │   $197,816.76 │
+│ XBB.TO   │  4,320 │         $28.94 │   $125,020.80 │
+│ QQQ      │    146 │      US$512.30 │   $101,611.14 │
+├──────────┼────────┼────────────────┼───────────────┤
+│ Cash CAD │        │                │       $182.37 │
+│ Cash USD │        │      US$612.40 │       $832.24 │
+├──────────┼────────┼────────────────┼───────────────┤
+│ Total    │        │ USD/CAD 1.3591 │   $842,180.52 │
+╰──────────┴────────┴────────────────┴───────────────╯
+
+                                Account Summary
+╭───────┬────────┬──────────┬────────────┬──────────┬─────────────┬────────────╮
+│ Owner │ Type   │ Number   │ Total (CAD)│ Cash CAD │    Cash USD │ Positions  │
+├───────┼────────┼──────────┼────────────┼──────────┼─────────────┼────────────┤
+│ Alice │ TFSA   │ 12345678 │ $298,410.… │   $42.18 │   US$612.40 │ 3 (VFV,    │
+│       │        │          │            │          │             │  QQQ,      │
+│       │        │          │            │          │             │  ZAG.TO)   │
+│ Alice │ RRSP   │ 23456789 │ $241,520.… │   $68.32 │     US$0.00 │ 3 (XEF.TO, │
+│       │        │          │            │          │             │  VUN.TO,   │
+│       │        │          │            │          │             │  XBB.TO)   │
+│ Bob   │ Margin │ 34567890 │ $302,250.… │   $71.87 │     US$0.00 │ 4 (VUN.TO, │
+│       │        │          │            │          │             │  XEF.TO,   │
+│       │        │          │            │          │             │  XEC.TO,   │
+│       │        │          │            │          │             │  ZAG.TO)   │
+├───────┼────────┼──────────┼────────────┼──────────┼─────────────┼────────────┤
+│ Total │        │          │ $842,180.… │  $182.37 │   US$612.40 │ $842,180.… │
+╰───────┴────────┴──────────┴────────────┴──────────┴─────────────┴────────────╯
+
+           Current vs Target Allocation
+╭─────────┬──────────┬───────────┬───────┬────────╮
+│ Symbol  │ Target % │ Current % │ Drift │ Status │
+├─────────┼──────────┼───────────┼───────┼────────┤
+│ VFV     │     8.0% │      7.5% │ -0.5% │ UNDER  │
+│ XEC.TO  │     6.0% │      6.0% │ +0.0% │   OK   │
+│ ZAG.TO  │    19.0% │     19.0% │ +0.0% │   OK   │
+│ XEF.TO  │    13.0% │     13.0% │ +0.0% │   OK   │
+│ VUN.TO  │    23.0% │     23.5% │ +0.5% │   OK   │
+│ QQQ     │    12.0% │     12.1% │ +0.1% │   OK   │
+│ XBB.TO  │    15.0% │     14.8% │ -0.2% │   OK   │
+├─────────┼──────────┼───────────┼───────┼────────┤
+│ CAD     │     2.0% │      2.0% │ +0.0% │   OK   │
+│ USD     │     2.0% │      2.1% │ +0.1% │   OK   │
+╰─────────┴──────────┴───────────┴───────┴────────╯
+
+                               Recommended Trades
+╭─────────┬────────┬─────┬───────────┬─────────────┬─────────────┬─────────────╮
+│ Symbol  │ Action │ Qty │     Price │  Est. Value │ Account     │ Note        │
+├─────────┼────────┼─────┼───────────┼─────────────┼─────────────┼─────────────┤
+│ VUN.TO  │  SELL  │  68 │    $62.18 │   $4,228.24 │ Bob Margin  │             │
+│         │        │     │           │             │ (34567890)  │             │
+│ VFV     │  BUY   │  28 │ US$148.22 │ US$4,150.16 │ Alice TFSA  │ Requires    │
+│         │        │     │           │             │ (12345678)  │ currency    │
+│         │        │     │           │             │             │ conversion  │
+│ XBB.TO  │  BUY   │  42 │    $28.94 │   $1,215.48 │ Alice RRSP  │ Residual    │
+│         │        │     │           │             │ (23456789)  │ cash        │
+│         │        │     │           │             │             │ deployment  │
+│ XEC.TO  │  BUY   │  18 │    $31.05 │     $558.90 │ Bob Margin  │ Residual    │
+│         │        │     │           │             │ (34567890)  │ cash        │
+│         │        │     │           │             │             │ deployment  │
+╰─────────┴────────┴─────┴───────────┴─────────────┴─────────────┴─────────────╯
+
+                    Currency Conversions (Norbert's Gambit)
+╭─────────────────┬────────────┬────────┬────────┬───────────┬─────────────────╮
+│ Account         │ Direction  │ Buy    │ Shares │ DLR Price │   Amount (incl. │
+│                 │            │        │        │           │            fee) │
+├─────────────────┼────────────┼────────┼────────┼───────────┼─────────────────┤
+│ Alice TFSA      │ CAD -> USD │ DLR.TO │    302 │    $13.79 │   $4,174.07 CAD │
+│ (12345678)      │            │        │        │           │  -> US$3,065.30 │
+│                 │            │        │        │           │             USD │
+╰─────────────────┴────────────┴────────┴────────┴───────────┴─────────────────╯
+
+         Projected Allocation (After Trades)
+╭─────────┬──────────┬─────────────┬───────┬────────╮
+│ Symbol  │ Target % │ Projected % │ Drift │ Status │
+├─────────┼──────────┼─────────────┼───────┼────────┤
+│ VFV     │     8.0% │        8.0% │ +0.0% │   OK   │
+│ XEC.TO  │     6.0% │        6.1% │ +0.1% │   OK   │
+│ ZAG.TO  │    19.0% │       19.0% │ +0.0% │   OK   │
+│ XEF.TO  │    13.0% │       13.0% │ +0.0% │   OK   │
+│ VUN.TO  │    23.0% │       23.0% │ +0.0% │   OK   │
+│ QQQ     │    12.0% │       12.1% │ +0.1% │   OK   │
+│ XBB.TO  │    15.0% │       15.0% │ +0.0% │   OK   │
+├─────────┼──────────┼─────────────┼───────┼────────┤
+│ CAD     │     2.0% │        1.9% │ -0.1% │   OK   │
+│ USD     │     2.0% │        1.9% │ -0.1% │   OK   │
+╰─────────┴──────────┴─────────────┴───────┴────────╯
+
+  ✓ Pushed updated private state to remote
+```
+
+The report shows your current drift, recommends specific trades to bring the
+portfolio back toward target, and sizes any required Norbert's Gambit currency
+conversions with DLR share counts.
+
+---
+
 ## Why Norbert's Gambit is part of this workflow
 
 Questrade users often prefer **Norbert's Gambit** for larger CAD/USD conversions
@@ -175,7 +327,7 @@ The private repo contains the live state the app reads through
 | `main.py` | CLI entry point — loads config, connects clients, orchestrates the run |
 | `src/portfolio.py` | Data model (positions, accounts, holdings), allocation math, and trade projection |
 | `src/rebalancer_planner.py` | Core decision engine — decides what to trade and which accounts to use |
-| `src/rebalancer_reconcile.py` | Trade plan cleanup — netting, sell-trimming, and residual cash deployment |
+| `src/rebalancer_reconcile.py` | Trade plan helpers — netting offsetting trades and deploying cash into buys |
 | `src/models.py` | Shared data types (`TradeRecommendation`, `TransientAlert`) and constants |
 | `src/funding.py` | Currency conversion math (Norbert's Gambit sizing, cross-currency capacity) |
 | `src/currency.py` | Live FX rate fetching and DLR quote retrieval |
