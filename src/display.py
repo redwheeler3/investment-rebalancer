@@ -43,6 +43,22 @@ def _format_shares(quantity: float) -> str:
     return f"{int(quantity):,}" if quantity == int(quantity) else f"{quantity:,.2f}"
 
 
+def _format_signed_change(change: float, pct: float) -> str:
+    """Format a signed change with matching arrow, color, and percentage."""
+    if change >= 0:
+        color = "green"
+        arrow = "▲"
+        sign = "+"
+    else:
+        color = "red"
+        arrow = "▼"
+        sign = "-"
+
+    return (
+        f"[{color}]{arrow} {sign}${abs(change):,.2f} ({sign}{abs(pct):.1f}%)[/{color}]"
+    )
+
+
 def _format_account_label(owner: str, account_type: str, account_number: str) -> str:
     """Format a standard account label used across multiple tables."""
     return f"{owner} {account_type} ({account_number})"
@@ -163,23 +179,29 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
     console.print()
 
 
-def display_all_time_high(ath):
+def display_all_time_high(ath, portfolio_value: float):
     """Display the all-time high portfolio value with drawdown indicator."""
     if ath is None:
         return
 
+    ath_change = portfolio_value - ath.value
+    ath_change_pct = 0.0 if ath.value == 0 else (ath_change / ath.value) * 100.0
+
     if ath.is_new_ath:
         console.print(
             f"  [bold]All-Time High:[/bold]           "
-            f"[bold green]${ath.value:,.2f}[/bold green]  "
-            f"[green]🎉 NEW ATH (today!)[/green]"
+            f"[default]${ath.value:,.2f}[/default]  "
+            f"[green]🎉 NEW ATH (today!)[/green]  "
+            f"[default]({ath.date})[/default]"
         )
-    else:
-        console.print(
-            f"  [bold]All-Time High:[/bold]           "
-            f"${ath.value:,.2f} ({ath.date})  "
-            f"[yellow]▼ {ath.drawdown_pct:.1f}%[/yellow]"
-        )
+        return
+
+    console.print(
+        f"  [bold]All-Time High:[/bold]           "
+        f"[default]${ath.value:,.2f}[/default]  "
+        f"{_format_signed_change(ath_change, ath_change_pct)}  "
+        f"[default]({ath.date})[/default]"
+    )
 
 
 def display_daily_change(daily_change, portfolio_value: float):
@@ -193,19 +215,10 @@ def display_daily_change(daily_change, portfolio_value: float):
         change = daily_change.change_dollars
         pct = daily_change.change_pct
 
-        if change >= 0:
-            color = "green"
-            arrow = "▲"
-            sign = "+"
-        else:
-            color = "red"
-            arrow = "▼"
-            sign = "-"
-
         console.print(
             f"  [bold]Portfolio Value:[/bold]         "
             f"[default]${portfolio_value:,.2f}[/default]  "
-            f"[{color}]{arrow} {sign}${abs(change):,.2f} ({sign}{abs(pct):.1f}%)[/{color}]"
+            f"{_format_signed_change(change, pct)}"
         )
     console.print()
 
@@ -445,9 +458,9 @@ def display_year_to_date_chart(history_points: list, console_height: int | None 
 def display_accuracy(current_accuracy: float, projected_accuracy: float = None):
     """Display the portfolio accuracy score."""
     # Color based on accuracy
-    if current_accuracy >= 98:
+    if current_accuracy > 95:
         color = "green"
-    elif current_accuracy >= 95:
+    elif current_accuracy >= 90:
         color = "yellow"
     else:
         color = "red"
@@ -455,9 +468,9 @@ def display_accuracy(current_accuracy: float, projected_accuracy: float = None):
     console.print(f"  [bold]Accuracy Score:[/bold]          [{color}]{current_accuracy:.1f}%[/{color}]", end="")
 
     if projected_accuracy is not None:
-        if projected_accuracy >= 98:
+        if projected_accuracy > 95:
             proj_color = "green"
-        elif projected_accuracy >= 95:
+        elif projected_accuracy >= 90:
             proj_color = "yellow"
         else:
             proj_color = "red"
@@ -765,7 +778,7 @@ def display_full_report(
     """Display the complete rebalancing report."""
     display_header()
     display_accuracy(accuracy, projected_accuracy)
-    display_all_time_high(all_time_high)
+    display_all_time_high(all_time_high, portfolio.total_value_cad)
     display_daily_change(daily_change, portfolio.total_value_cad)
     display_year_to_date_chart(ytd_history or [])
     display_holdings_summary(portfolio, usd_to_cad_rate)

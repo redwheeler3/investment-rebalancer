@@ -135,7 +135,7 @@ This rule set is meant to reflect the practical objective of the project:
 ╚═══════════════════════════════════════════╝
 
   Accuracy Score:          97.6%  →  99.9%
-  All-Time High:           $842,180.52 (2026-05-02)  ▼ 0.0%
+  All-Time High:           $842,180.52  ▼ -$0.00 (-0.0%) (2026-05-02)
   Portfolio Value:         $842,180.52  ▲ +$0.00 (+0.0%)
 
 ╭─────────────────────── Year-to-Date Portfolio Value ───────────────────────╮
@@ -622,9 +622,9 @@ Accuracy = 100% - (sum of absolute drifts / 2)
 ```
 
 - **100%** = perfectly balanced
-- **98%+** = very close to target
-- **95-98%** = minor drift, probably fine
-- **<95%** = rebalance recommended
+- **>95%** = green, very close to target
+- **90-95%** = yellow, rebalance recommended
+- **<90%** = red, rebalance is urgent
 
 ---
 
