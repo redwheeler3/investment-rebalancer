@@ -1,85 +1,19 @@
-"""Trade plan helpers: netting and cash deployment.
+"""Residual cash deployment helpers.
 
-Provides utilities used by the planner for finalizing trade lists:
+Builds buy trades from available cash after the planner's main sell/buy passes:
 
-- **Netting** — collapse offsetting buys/sells for the same (symbol, account)
-- **Deployment** — build buy trades from available cash (same- or cross-currency)
+- **underweight_candidates** — find account-local underweight holdings in a currency
+- **build_same_currency_buy** — build one buy trade funded by same-currency cash
+- **build_cross_currency_buy** — build one buy trade funded by cross-currency conversion
 """
 
 import math
 
-from src.funding import (
+from src.fx_math import (
     consume_cross_currency_cash,
     cross_currency_buying_power,
 )
 from src.models import TradeRecommendation
-
-
-# ══════════════════════════════════════════════════════════════════
-# Trade netting
-# ══════════════════════════════════════════════════════════════════
-
-
-def net_trades(all_trades: list) -> list:
-    """Net buys and sells for the same (symbol, account) into a single trade."""
-    position_map = {}  # (symbol, account_number) -> list of trades
-    for trade in all_trades:
-        key = (trade.symbol, trade.account_number)
-        position_map.setdefault(key, []).append(trade)
-
-    final_trades = []
-    for (symbol, account_number), trades_list in position_map.items():
-        total_buy_qty = 0
-        total_sell_qty = 0
-        buy_price = 0
-        sell_price = 0
-        template = trades_list[0]
-        buy_note = ""
-        sell_note = ""
-
-        for trade in trades_list:
-            if trade.action == "BUY":
-                total_buy_qty += trade.quantity
-                buy_price = trade.price
-                if trade.note and not buy_note:
-                    buy_note = trade.note
-            else:
-                total_sell_qty += trade.quantity
-                sell_price = trade.price
-                if trade.note and not sell_note:
-                    sell_note = trade.note
-
-        net_quantity = total_buy_qty - total_sell_qty
-        if net_quantity > 0:
-            price = buy_price if buy_price > 0 else template.price
-            final_trades.append(TradeRecommendation(
-                symbol=symbol,
-                action="BUY",
-                quantity=net_quantity,
-                account_number=account_number,
-                account_type=template.account_type,
-                owner=template.owner,
-                price=price,
-                currency=template.currency,
-                estimated_value=price * net_quantity,
-                note=buy_note,
-            ))
-        elif net_quantity < 0:
-            price = sell_price if sell_price > 0 else template.price
-            final_trades.append(TradeRecommendation(
-                symbol=symbol,
-                action="SELL",
-                quantity=abs(net_quantity),
-                account_number=account_number,
-                account_type=template.account_type,
-                owner=template.owner,
-                price=price,
-                currency=template.currency,
-                estimated_value=price * abs(net_quantity),
-                note=sell_note,
-            ))
-
-    return final_trades
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -275,7 +209,7 @@ def _shares_to_close_underweight(
     currency: str,
     usd_to_cad_rate: float,
 ) -> int:
-    """Return whole shares needed to close an underweight gap."""
+    """Return whole shares needed to close an underweight gap (rounds up)."""
     if total_value_cad <= 0 or price_native <= 0:
         return 0
 

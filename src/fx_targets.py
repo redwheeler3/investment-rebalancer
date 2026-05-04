@@ -1,4 +1,8 @@
-"""Helpers for resolving configurable target-allocation rules."""
+"""FX-based target allocation rules.
+
+Dynamically splits target allocations between CAD/USD fund pairs
+based on the current exchange rate (configured via fx_target_rules in settings.yaml).
+"""
 
 
 def _to_float(rule_name: str, field_name: str, value) -> float:

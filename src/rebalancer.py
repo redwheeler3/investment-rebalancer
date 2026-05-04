@@ -1,6 +1,7 @@
-"""Portfolio rebalancing planner.
+"""Portfolio rebalancer — trade planning decisions.
 
-This planner is designed around the household rules documented in the README:
+This is the single home for rebalancing logic. It decides what trades to make
+based on the household rules documented in the README:
 
 - measure drift at the unified household-portfolio level,
 - use the drift threshold to suppress small *starter* trades,
@@ -24,17 +25,83 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from src.funding import consume_cross_currency_cash, cross_currency_buying_power, to_cad
+from src.fx_math import consume_cross_currency_cash, cross_currency_buying_power, to_cad
 from src.portfolio import get_current_allocations, get_drifts, get_holdings_view, simulate_rebalance
-from src.rebalancer_reconcile import (
+from src.cash_deploy import (
     build_cross_currency_buy,
     build_same_currency_buy,
-    net_trades,
 )
 from src.models import DEFAULT_DRIFT_TRADE_THRESHOLD_PCT, TradeRecommendation
 
 # Maximum optimisation rounds before stopping
 MAX_ROUNDS = 10
+
+
+# ══════════════════════════════════════════════════════════════════
+# Trade netting
+# ══════════════════════════════════════════════════════════════════
+
+
+def net_trades(all_trades: list) -> list:
+    """Net buys and sells for the same (symbol, account) into a single trade."""
+    position_map = {}  # (symbol, account_number) -> list of trades
+    for trade in all_trades:
+        key = (trade.symbol, trade.account_number)
+        position_map.setdefault(key, []).append(trade)
+
+    final_trades = []
+    for (symbol, account_number), trades_list in position_map.items():
+        total_buy_qty = 0
+        total_sell_qty = 0
+        buy_price = 0
+        sell_price = 0
+        template = trades_list[0]
+        buy_note = ""
+        sell_note = ""
+
+        for trade in trades_list:
+            if trade.action == "BUY":
+                total_buy_qty += trade.quantity
+                buy_price = trade.price
+                if trade.note and not buy_note:
+                    buy_note = trade.note
+            else:
+                total_sell_qty += trade.quantity
+                sell_price = trade.price
+                if trade.note and not sell_note:
+                    sell_note = trade.note
+
+        net_quantity = total_buy_qty - total_sell_qty
+        if net_quantity > 0:
+            price = buy_price if buy_price > 0 else template.price
+            final_trades.append(TradeRecommendation(
+                symbol=symbol,
+                action="BUY",
+                quantity=net_quantity,
+                account_number=account_number,
+                account_type=template.account_type,
+                owner=template.owner,
+                price=price,
+                currency=template.currency,
+                estimated_value=price * net_quantity,
+                note=buy_note,
+            ))
+        elif net_quantity < 0:
+            price = sell_price if sell_price > 0 else template.price
+            final_trades.append(TradeRecommendation(
+                symbol=symbol,
+                action="SELL",
+                quantity=abs(net_quantity),
+                account_number=account_number,
+                account_type=template.account_type,
+                owner=template.owner,
+                price=price,
+                currency=template.currency,
+                estimated_value=price * abs(net_quantity),
+                note=sell_note,
+            ))
+
+    return final_trades
 
 
 def calculate_trades(
@@ -43,7 +110,6 @@ def calculate_trades(
     usd_to_cad_rate: float,
     norberts_gambit_fee_cad: float = 10.49,
     drift_trade_threshold_pct: float = DEFAULT_DRIFT_TRADE_THRESHOLD_PCT,
-    existing_only: bool = True,
     transient_symbols: set | None = None,
     dlr_quotes=None,
 ) -> list:
@@ -60,7 +126,6 @@ def calculate_trades(
         usd_to_cad_rate=usd_to_cad_rate,
         fee_cad=norberts_gambit_fee_cad,
         drift_trade_threshold_pct=drift_trade_threshold_pct,
-        existing_only=existing_only,
         hidden_symbols=transient_symbols,
         dlr_quotes=dlr_quotes,
     )
@@ -190,7 +255,6 @@ class RebalancePlanner:
     usd_to_cad_rate: float
     fee_cad: float
     drift_trade_threshold_pct: float
-    existing_only: bool = True
     hidden_symbols: set[str] = field(default_factory=set)
     dlr_quotes: object | None = None
     holdings_view: dict = field(init=False)
@@ -342,10 +406,7 @@ class RebalancePlanner:
         return trades_added
 
     def _eligible_buy_accounts(self, symbol: str, currency: str) -> list:
-        if self.existing_only:
-            accounts = find_accounts_for_symbol(symbol, self.portfolio.accounts)
-        else:
-            accounts = list(self.portfolio.accounts)
+        accounts = find_accounts_for_symbol(symbol, self.portfolio.accounts)
 
         def sort_key(account):
             same_currency = self.ledger.same_currency_buying_power(account.number, currency)

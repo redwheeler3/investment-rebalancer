@@ -326,12 +326,13 @@ The private repo contains the live state the app reads through
 |------|---------|
 | `main.py` | CLI entry point — loads config, connects clients, orchestrates the run |
 | `src/portfolio.py` | Data model (positions, accounts, holdings), allocation math, and trade projection |
-| `src/rebalancer_planner.py` | Core decision engine — decides what to trade and which accounts to use |
-| `src/rebalancer_reconcile.py` | Trade plan helpers — netting offsetting trades and deploying cash into buys |
+| `src/rebalancer.py` | Core decision engine — decides what to trade and which accounts to use |
+| `src/cash_deploy.py` | Residual cash deployment — builds buy trades from leftover cash |
 | `src/models.py` | Shared data types (`TradeRecommendation`, `TransientAlert`) and constants |
-| `src/funding.py` | Currency conversion math (Norbert's Gambit sizing, cross-currency capacity) |
-| `src/currency.py` | Live FX rate fetching and DLR quote retrieval |
-| `src/target_resolver.py` | Resolves FX-based target rules into a flat target map |
+| `src/fx_math.py` | Currency conversion math (Norbert's Gambit sizing, cross-currency capacity) |
+| `src/exchange_rate.py` | Live USD/CAD rate fetching and DLR quote retrieval |
+| `src/fx_conversions.py` | Post-rebalance DLR trade planning (Norbert's Gambit execution) |
+| `src/fx_targets.py` | Resolves FX-based target allocation rules from config |
 | `src/report_builder.py` | Assembles all report data (trades, projections, history) for display |
 | `src/display.py` | Terminal rendering with Rich (tables, charts, formatting) |
 | `src/history.py` | Portfolio value history — ATH tracking, daily change, YTD chart data |

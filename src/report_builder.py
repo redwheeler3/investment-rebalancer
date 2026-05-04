@@ -1,12 +1,12 @@
-"""Report assembly helpers.
+"""Report assembly — pure calculation.
 
-Builds the high-level report data structure from an already-priced portfolio,
-without mixing that logic into the CLI entrypoint.
+Builds the high-level report data structure from an already-priced portfolio.
+No side effects: history recording is handled by the caller (main.py).
 """
 
 from dataclasses import dataclass, field
 
-from src.currency import CurrencyConversion, calculate_currency_needs
+from src.fx_conversions import CurrencyConversion, calculate_currency_needs
 from src.history import (
     AllTimeHigh,
     DailyChange,
@@ -14,10 +14,9 @@ from src.history import (
     get_all_time_high,
     get_daily_change,
     get_year_to_date_history,
-    record_value,
 )
 from src.portfolio import AllocationSnapshot, simulate_rebalance
-from src.rebalancer_planner import calculate_trades
+from src.rebalancer import calculate_trades
 from src.models import TradeRecommendation, TransientAlert, get_transient_status
 
 
@@ -63,7 +62,6 @@ def build_report_data(
         usd_to_cad_rate,
         norberts_gambit_fee_cad,
         drift_trade_threshold_pct,
-        existing_only=True,
         transient_symbols=hidden_symbols,
         dlr_quotes=dlr_quotes,
     )
@@ -86,7 +84,6 @@ def build_report_data(
             hidden_symbols=hidden_symbols,
         )
 
-    record_value(portfolio.total_value_cad)
     all_time_high = get_all_time_high(current_value=portfolio.total_value_cad)
     daily_change_data = get_daily_change(current_value=portfolio.total_value_cad)
     ytd_history = get_year_to_date_history()
