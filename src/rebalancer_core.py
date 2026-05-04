@@ -1,18 +1,14 @@
-"""Core rebalancer state and shared helpers.
+"""Small shared constants and math helpers for the rebalancer.
 
-This module holds the immutable tuning constants plus the low-level state and
-cash/drift helpers used by the rebalancing steps.
+The previous mutable-state engine has been replaced by the clearer planner in
+``rebalancer_planner.py``. This module now keeps only the constants and basic
+value-conversion helpers that are still shared across the planner and related
+modules.
 """
 
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
-from typing import TYPE_CHECKING
-
-if TYPE_CHECKING:
-    from src.portfolio import PortfolioSummary
-    from src.rules import TradeRecommendation
 
 
 # Default minimum absolute drift before a symbol is eligible for trading
@@ -22,92 +18,18 @@ DEFAULT_DRIFT_TRADE_THRESHOLD_PCT = 0.1
 MAX_ROUNDS = 10
 
 
-@dataclass
-class RebalanceState:
-    """Mutable state passed through all rebalance steps."""
-
-    portfolio: PortfolioSummary
-    targets: dict[str, float]
-    usd_to_cad_rate: float
-    norberts_gambit_fee_cad: float
-    drift_trade_threshold_pct: float
-    transient_symbols: set[str]
-    total_value: float
-    holdings_view: dict = field(default_factory=dict)   # symbol -> HoldingSummary
-    available_cash: dict[str, dict[str, float]] = field(default_factory=dict)
-    effective_drift: dict[str, float] = field(default_factory=dict)
-    position_deltas: dict[tuple[str, str], int] = field(default_factory=dict)
-    all_trades: list[TradeRecommendation] = field(default_factory=list)
-
-
 def to_cad(value: float, currency: str, usd_to_cad_rate: float) -> float:
     """Convert a value to CAD."""
     return value * usd_to_cad_rate if currency == "USD" else value
 
 
-def apply_trade_to_drift(state: RebalanceState, symbol: str, value_cad: float, action: str):
-    """Update effective drift after a trade."""
-    pct = (value_cad / state.total_value) * 100.0
-    if action == "SELL":
-        state.effective_drift[symbol] = state.effective_drift.get(symbol, 0) - pct
-    else:
-        state.effective_drift[symbol] = state.effective_drift.get(symbol, 0) + pct
-
-
-def effective_cash(state: RebalanceState, acct_number: str, buy_currency: str) -> float:
-    """Total buying power: native cash + convertible from other currency."""
-    fee = state.norberts_gambit_fee_cad
-    native_cash = max(0, state.available_cash.get(acct_number, {}).get(buy_currency, 0))
-    if buy_currency == "USD":
-        cash_cad_native = max(0, state.available_cash.get(acct_number, {}).get("CAD", 0))
-        convertible_cash = max(0, cash_cad_native - fee) / state.usd_to_cad_rate
-    else:
-        cash_usd_native = max(0, state.available_cash.get(acct_number, {}).get("USD", 0))
-        convertible_cash = max(0, cash_usd_native * state.usd_to_cad_rate - fee)
-    return native_cash + convertible_cash
-
-
-def deduct_buy(state: RebalanceState, acct_number: str, cost_native: float, currency: str) -> bool:
-    """Deduct a buy cost: native currency first, then convert remainder.
-
-    Returns True if cross-currency conversion was needed.
-    """
-    fee = state.norberts_gambit_fee_cad
-    native_cash = max(0, state.available_cash.get(acct_number, {}).get(currency, 0))
-    if native_cash >= cost_native:
-        state.available_cash[acct_number][currency] -= cost_native
-        return False
-
-    remainder_native = cost_native - native_cash
-    state.available_cash[acct_number][currency] = 0
-    if currency == "USD":
-        state.available_cash[acct_number]["CAD"] -= (
-            remainder_native * state.usd_to_cad_rate + fee
-        )
-    else:
-        state.available_cash[acct_number]["USD"] -= (
-            remainder_native + fee
-        ) / state.usd_to_cad_rate
-    return True
-
-
-def shares_for_drift(state: RebalanceState, drift_pct: float, price_native: float, currency: str) -> int:
+def shares_for_drift(total_value_cad: float, drift_pct: float, price_native: float, currency: str, usd_to_cad_rate: float) -> int:
     """Calculate whole shares needed to close a drift gap."""
-    gap_cad = abs(drift_pct / 100.0) * state.total_value
-    gap_native = gap_cad / state.usd_to_cad_rate if currency == "USD" else gap_cad
+    gap_cad = abs(drift_pct / 100.0) * total_value_cad
+    gap_native = gap_cad / usd_to_cad_rate if currency == "USD" else gap_cad
     shares = int(math.floor(gap_native / price_native))
     if shares == 0:
-        one_share_cad = to_cad(price_native, currency, state.usd_to_cad_rate)
+        one_share_cad = to_cad(price_native, currency, usd_to_cad_rate)
         if one_share_cad < 2 * gap_cad:
             shares = 1
     return shares
-
-
-def record_trade(state: RebalanceState, trade):
-    """Append a trade and update drift + position deltas."""
-    state.all_trades.append(trade)
-    value_cad = to_cad(trade.estimated_value, trade.currency, state.usd_to_cad_rate)
-    apply_trade_to_drift(state, trade.symbol, value_cad, trade.action)
-    key = (trade.account_number, trade.symbol)
-    delta = -trade.quantity if trade.action == "SELL" else trade.quantity
-    state.position_deltas[key] = state.position_deltas.get(key, 0) + delta
