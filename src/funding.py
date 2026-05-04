@@ -8,6 +8,11 @@ import math
 from dataclasses import dataclass
 
 
+def to_cad(value: float, currency: str, usd_to_cad_rate: float) -> float:
+    """Convert a value to CAD."""
+    return value * usd_to_cad_rate if currency == "USD" else value
+
+
 FUNDING_TOLERANCE = 0.01
 
 

@@ -103,6 +103,24 @@ The public repo contains code, docs, examples, and workflow templates.
 The private repo contains the live state the app reads through
 `REBALANCER_STATE_DIR`.
 
+### Source modules
+
+| File | Purpose |
+|------|---------|
+| `main.py` | CLI entry point — loads config, connects clients, orchestrates the run |
+| `src/portfolio.py` | Data model (positions, accounts, holdings), allocation math, and trade projection |
+| `src/rebalancer_planner.py` | Core decision engine — decides what to trade and which accounts to use |
+| `src/rebalancer_reconcile.py` | Trade plan cleanup — netting, sell-trimming, and residual cash deployment |
+| `src/models.py` | Shared data types (`TradeRecommendation`, `TransientAlert`) and constants |
+| `src/funding.py` | Currency conversion math (Norbert's Gambit sizing, cross-currency capacity) |
+| `src/currency.py` | Live FX rate fetching and DLR quote retrieval |
+| `src/target_resolver.py` | Resolves FX-based target rules into a flat target map |
+| `src/report_builder.py` | Assembles all report data (trades, projections, history) for display |
+| `src/display.py` | Terminal rendering with Rich (tables, charts, formatting) |
+| `src/history.py` | Portfolio value history — ATH tracking, daily change, YTD chart data |
+| `src/questrade_client.py` | Questrade API client (OAuth token rotation, positions, quotes) |
+| `src/paths.py` | Resolves private state repo paths from `REBALANCER_STATE_DIR` |
+
 ---
 
 ## Quick start

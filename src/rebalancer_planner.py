@@ -1,7 +1,6 @@
-"""Clear planning model for portfolio rebalancing.
+"""Portfolio rebalancing planner.
 
-This module prioritizes readability over micro-optimised mutation flows.
-It organizes the rebalance logic around a few explicit ideas:
+Organizes the rebalance logic around a few explicit ideas:
 
 - a unified household portfolio with current drifts,
 - a trade plan that accumulates recommendations,
@@ -15,17 +14,21 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from src.funding import consume_cross_currency_cash, cross_currency_buying_power
-from src.portfolio import get_current_allocations, get_drifts, get_holdings_view
-from src.rebalancer_core import DEFAULT_DRIFT_TRADE_THRESHOLD_PCT, MAX_ROUNDS, to_cad
-from src.rebalancer_deployment import build_cross_currency_buy, build_same_currency_buy
-from src.rebalancer_netting import net_trades
-from src.rebalancer_reconcile import trim_excess_sell_funding
-from src.rebalancer_simulation import simulate_rebalance
-from src.rules import TradeRecommendation, allocate_sell, find_accounts_for_symbol, get_position_quantity
+from src.funding import consume_cross_currency_cash, cross_currency_buying_power, to_cad
+from src.portfolio import get_current_allocations, get_drifts, get_holdings_view, simulate_rebalance
+from src.rebalancer_reconcile import (
+    build_cross_currency_buy,
+    build_same_currency_buy,
+    net_trades,
+    trim_excess_sell_funding,
+)
+from src.models import DEFAULT_DRIFT_TRADE_THRESHOLD_PCT, TradeRecommendation
+
+# Maximum optimisation rounds before stopping
+MAX_ROUNDS = 10
 
 
-def calculate_trades_with_planner(
+def calculate_trades(
     portfolio,
     targets: dict,
     usd_to_cad_rate: float,
@@ -35,7 +38,7 @@ def calculate_trades_with_planner(
     transient_symbols: set | None = None,
     dlr_quotes=None,
 ) -> list:
-    """Build a rebalance plan using a clearer planning model."""
+    """Calculate rebalancing trades for the portfolio."""
     if transient_symbols is None:
         transient_symbols = set()
 
@@ -75,10 +78,6 @@ class TradePlan:
         if self._netted_cache is None:
             self._netted_cache = net_trades(self.trades)
         return list(self._netted_cache)
-
-    def replace_with_netted(self) -> None:
-        self.trades = self.netted_trades()
-        self._invalidate()
 
     def projected_snapshot(self):
         if self._snapshot_cache is None:
@@ -703,3 +702,127 @@ def max_sellable_without_crossing_target(
         return 0
 
     return int(math.floor((drift_pct + 1e-9) / per_share_drift_pct))
+
+
+# ══════════════════════════════════════════════════════════════════
+# Sell allocation — decides which accounts to sell from
+# ══════════════════════════════════════════════════════════════════
+
+
+def find_accounts_for_symbol(symbol: str, accounts: list) -> list:
+    """Find all accounts that currently hold a given symbol."""
+    matching = []
+    for acct in accounts:
+        for pos in acct.positions:
+            if pos.symbol == symbol and pos.quantity > 0:
+                matching.append(acct)
+                break
+    return matching
+
+
+def get_position_quantity(account, symbol: str) -> float:
+    """Get the quantity of a symbol held in an account."""
+    for pos in account.positions:
+        if pos.symbol == symbol:
+            return pos.quantity
+    return 0.0
+
+
+def _effective_qty(account, symbol: str, position_deltas: dict) -> int:
+    """Get the effective quantity accounting for trades already planned."""
+    original = int(get_position_quantity(account, symbol))
+    delta = position_deltas.get((account.number, symbol), 0)
+    return max(0, original + delta)
+
+
+def _has_underweight_alternatives(
+    acct,
+    sell_symbol: str,
+    effective_drift: dict,
+    transient_symbols: set,
+    drift_trade_threshold_pct: float,
+) -> bool:
+    """Check if proceeds from selling can be redeployed into underweight positions."""
+    for pos in acct.positions:
+        if pos.symbol == sell_symbol or pos.quantity <= 0:
+            continue
+        if pos.symbol in transient_symbols:
+            continue
+        if effective_drift.get(pos.symbol, 0) < -drift_trade_threshold_pct:
+            return True
+    return False
+
+
+def allocate_sell(
+    symbol: str,
+    total_shares: int,
+    price: float,
+    currency: str,
+    accounts: list,
+    effective_drift: dict = None,
+    transient_symbols: set = None,
+    drift_trade_threshold_pct: float = DEFAULT_DRIFT_TRADE_THRESHOLD_PCT,
+    position_deltas: dict = None,
+) -> list:
+    """Allocate a SELL order across accounts.
+
+    Strategy:
+    - Only sell from accounts that hold the symbol
+    - Prefer accounts with underweight alternatives (cash can be redeployed)
+    - Among equally ranked accounts, sell from the largest position first
+    - Uses effective quantities (adjusted for prior-round trades) to prevent
+      over-selling beyond what an account actually has available.
+    """
+    if total_shares <= 0:
+        return []
+
+    if effective_drift is None:
+        effective_drift = {}
+    if transient_symbols is None:
+        transient_symbols = set()
+    if position_deltas is None:
+        position_deltas = {}
+
+    holders = find_accounts_for_symbol(symbol, accounts)
+    if not holders:
+        return []
+
+    holders.sort(
+        key=lambda a: (
+            1 if _has_underweight_alternatives(
+                a,
+                symbol,
+                effective_drift,
+                transient_symbols,
+                drift_trade_threshold_pct,
+            ) else 0,
+            _effective_qty(a, symbol, position_deltas),
+        ),
+        reverse=True,
+    )
+
+    trades = []
+    remaining = total_shares
+
+    for acct in holders:
+        if remaining <= 0:
+            break
+
+        held = _effective_qty(acct, symbol, position_deltas)
+        shares_to_sell = min(remaining, held)
+
+        if shares_to_sell > 0:
+            trades.append(TradeRecommendation(
+                symbol=symbol,
+                action="SELL",
+                quantity=shares_to_sell,
+                account_number=acct.number,
+                account_type=acct.account_type,
+                owner=acct.owner,
+                price=price,
+                currency=currency,
+                estimated_value=price * shares_to_sell,
+            ))
+            remaining -= shares_to_sell
+
+    return trades
