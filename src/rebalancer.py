@@ -104,6 +104,11 @@ def net_trades(all_trades: list) -> list:
     return final_trades
 
 
+# ══════════════════════════════════════════════════════════════════
+# Public API
+# ══════════════════════════════════════════════════════════════════
+
+
 def calculate_trades(
     portfolio,
     targets: dict,
@@ -130,6 +135,11 @@ def calculate_trades(
         dlr_quotes=dlr_quotes,
     )
     return planner.build()
+
+
+# ══════════════════════════════════════════════════════════════════
+# Planning state
+# ══════════════════════════════════════════════════════════════════
 
 
 @dataclass
@@ -244,6 +254,11 @@ class CashLedger:
             dlr_quotes=dlr_quotes,
         )
         return True
+
+
+# ══════════════════════════════════════════════════════════════════
+# Planner engine
+# ══════════════════════════════════════════════════════════════════
 
 
 @dataclass
@@ -721,6 +736,11 @@ class RebalancePlanner:
 
             if not made_trade:
                 break
+
+
+# ══════════════════════════════════════════════════════════════════
+# Sizing math
+# ══════════════════════════════════════════════════════════════════
 
 
 def shares_for_drift_gap(
