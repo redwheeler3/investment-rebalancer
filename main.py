@@ -24,9 +24,10 @@ from src.questrade_client import QuestradeClient
 from src.portfolio import build_portfolio, fetch_quotes_for_holdings
 from src.report_builder import build_report_data
 from src.display import display_full_report, console
-from src.exchange_rate import get_usd_to_cad_rate, fetch_dlr_quotes
+from src.fx_rate import get_usd_to_cad_rate, fetch_dlr_quotes
 from src.history import record_value
 from src.paths import get_config_dir, get_state_root, get_tokens_dir
+from src.fx_targets import resolve_targets
 from src.fx_targets import resolve_targets
 
 
@@ -281,6 +282,7 @@ def run_rebalancer():
         usd_to_cad_rate,
         dlr_quotes,
     )
+    record_value(portfolio.total_value_cad)
     record_value(portfolio.total_value_cad)
     _render_report(
         portfolio,

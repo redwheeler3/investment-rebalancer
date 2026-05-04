@@ -10,7 +10,11 @@ import math
 from dataclasses import dataclass
 
 from src.fx_math import build_account_trade_impacts, net_account_cash
+<<<<<<< HEAD
 from src.exchange_rate import DlrQuotes, empty_dlr_quotes
+=======
+from src.fx_rate import DlrQuotes, empty_dlr_quotes
+>>>>>>> 95d68d0 (Refactor: rename and reorganize src/ modules for clarity)
 
 
 @dataclass
