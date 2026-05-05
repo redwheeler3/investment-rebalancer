@@ -25,9 +25,12 @@ from src.portfolio import build_portfolio, fetch_quotes_for_holdings
 from src.report_builder import build_report_data
 from src.display import display_full_report, console
 from src.fx_rate import get_usd_to_cad_rate, fetch_dlr_quotes
+from src.fx_conversions import calculate_currency_needs
 from src.history import record_value
 from src.paths import get_config_dir, get_state_root, get_tokens_dir
 from src.fx_targets import resolve_targets
+from src.models import get_transient_status
+from src.rebalancer import calculate_trades
 
 
 def load_config() -> tuple:
@@ -271,15 +274,35 @@ def run_rebalancer():
     portfolio = _build_priced_portfolio(clients, usd_to_cad_rate)
     dlr_quotes = _fetch_dlr_quotes(clients[0])
 
+    transient_status = get_transient_status(portfolio, transient_symbols)
+    hidden_symbols = transient_status["symbols"]
+    transient_alerts = transient_status["alerts"]
+
     console.print("  [dim]Calculating trades...[/dim]")
+    trades = calculate_trades(
+        portfolio,
+        resolved_targets,
+        usd_to_cad_rate,
+        norberts_gambit_fee_cad,
+        drift_trade_threshold_pct,
+        transient_symbols=hidden_symbols,
+        dlr_quotes=dlr_quotes,
+    )
+    currency_conversions = calculate_currency_needs(
+        trades,
+        portfolio.accounts,
+        usd_to_cad_rate,
+        dlr_quotes,
+        norberts_gambit_fee_cad,
+    )
     report = build_report_data(
         portfolio,
         resolved_targets,
-        transient_symbols,
-        norberts_gambit_fee_cad,
-        drift_trade_threshold_pct,
         usd_to_cad_rate,
-        dlr_quotes,
+        trades,
+        currency_conversions,
+        transient_alerts,
+        hidden_symbols,
     )
     record_value(portfolio.total_value_cad)
     record_value(portfolio.total_value_cad)

@@ -6,7 +6,7 @@ No side effects: history recording is handled by the caller (main.py).
 
 from dataclasses import dataclass, field
 
-from src.fx_conversions import CurrencyConversion, calculate_currency_needs
+from src.fx_conversions import CurrencyConversion
 from src.history import (
     AllTimeHigh,
     DailyChange,
@@ -16,8 +16,7 @@ from src.history import (
     get_year_to_date_history,
 )
 from src.portfolio import AllocationSnapshot, simulate_rebalance
-from src.rebalancer import calculate_trades
-from src.models import TradeRecommendation, TransientAlert, get_transient_status
+from src.models import TradeRecommendation, TransientAlert
 
 
 @dataclass
@@ -37,41 +36,20 @@ class RebalanceReportData:
 def build_report_data(
     portfolio,
     targets: dict,
-    transient_symbols: list,
-    norberts_gambit_fee_cad: float,
-    drift_trade_threshold_pct: float,
     usd_to_cad_rate: float,
-    dlr_quotes,
+    trades: list[TradeRecommendation],
+    currency_conversions: list[CurrencyConversion],
+    transient_alerts: list[TransientAlert],
+    hidden_symbols: set[str],
 ) -> RebalanceReportData:
     """Calculate all report inputs from the current portfolio state."""
     from src.portfolio import build_allocation_snapshot
-
-    transient_status = get_transient_status(portfolio, transient_symbols)
-    hidden_symbols = transient_status["symbols"]
 
     current_snapshot = build_allocation_snapshot(
         portfolio,
         targets,
         usd_to_cad_rate,
         excluded_symbols=hidden_symbols,
-    )
-
-    trades = calculate_trades(
-        portfolio,
-        targets,
-        usd_to_cad_rate,
-        norberts_gambit_fee_cad,
-        drift_trade_threshold_pct,
-        transient_symbols=hidden_symbols,
-        dlr_quotes=dlr_quotes,
-    )
-
-    currency_conversions = calculate_currency_needs(
-        trades,
-        portfolio.accounts,
-        usd_to_cad_rate,
-        dlr_quotes,
-        norberts_gambit_fee_cad,
     )
 
     projected_snapshot = None
@@ -90,7 +68,7 @@ def build_report_data(
 
     return RebalanceReportData(
         current=current_snapshot,
-        transient_alerts=transient_status["alerts"],
+        transient_alerts=transient_alerts,
         trades=trades,
         currency_conversions=currency_conversions,
         projected=projected_snapshot,
