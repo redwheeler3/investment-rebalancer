@@ -239,7 +239,6 @@ def _render_report(
         portfolio=portfolio,
         current_allocations=report.current.allocations,
         targets=targets,
-        drifts=report.current.drifts,
         accuracy=report.current.accuracy,
         trades=report.trades,
         currency_conversions=report.currency_conversions,

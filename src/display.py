@@ -536,7 +536,6 @@ def _display_allocation_table(
 def display_allocations(
     current_allocations: dict,
     targets: dict,
-    drifts: dict,
     tolerance_pct: float,
 ):
     """Display current vs target allocation table, sorted by drift ascending."""
@@ -762,7 +761,6 @@ def display_full_report(
     portfolio,
     current_allocations: dict,
     targets: dict,
-    drifts: dict,
     accuracy: float,
     trades: list,
     currency_conversions: list,
@@ -783,7 +781,7 @@ def display_full_report(
     display_year_to_date_chart(ytd_history or [])
     display_holdings_summary(portfolio, usd_to_cad_rate)
     display_account_summary(portfolio.accounts, usd_to_cad_rate)
-    display_allocations(current_allocations, targets, drifts, drift_trade_threshold_pct)
+    display_allocations(current_allocations, targets, drift_trade_threshold_pct)
     display_transient_alerts(transient_alerts)
     display_trades(trades)
     display_currency_conversions(currency_conversions)

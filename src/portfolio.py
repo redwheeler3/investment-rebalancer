@@ -151,14 +151,11 @@ def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
 
         symbol_currency_map = {}
         if symbol_ids:
-            try:
-                for symbol_data in client.get_symbols(sorted(symbol_ids)):
-                    symbol_id = int(_coerce_numeric(symbol_data.get("symbolId", 0), default=0.0))
-                    currency = _normalize_currency(symbol_data.get("currency"))
-                    if symbol_id > 0 and currency:
-                        symbol_currency_map[symbol_id] = currency
-            except Exception:
-                pass
+            for symbol_data in client.get_symbols(sorted(symbol_ids)):
+                symbol_id = int(_coerce_numeric(symbol_data.get("symbolId", 0), default=0.0))
+                currency = _normalize_currency(symbol_data.get("currency"))
+                if symbol_id > 0 and currency:
+                    symbol_currency_map[symbol_id] = currency
 
         for acct in accounts:
             acct_number = acct["number"]
@@ -369,22 +366,14 @@ def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
     symbol_ids = list(symbol_id_map.keys())
     client = clients[0]
 
-    try:
-        quotes = client.get_quote(symbol_ids)
-        for quote in quotes:
-            symbol = quote.get("symbol", "")
-            if symbol in portfolio.holdings:
-                bid = quote.get("bidPrice") or quote.get("lastTradePrice", 0)
-                ask = quote.get("askPrice") or quote.get("lastTradePrice", 0)
-                last = quote.get("lastTradePrice", 0)
-
-                # Use last trade price as fallback if bid/ask is 0 or None
-                holding = portfolio.holdings[symbol]
-                holding.bid_price = bid if bid and bid > 0 else last
-                holding.ask_price = ask if ask and ask > 0 else last
-                holding.current_price = last if last and last > 0 else holding.current_price
-    except Exception as e:
-        print(f"  Warning: Could not fetch quotes: {e}")
+    quotes = client.get_quote(symbol_ids)
+    for quote in quotes:
+        symbol = quote.get("symbol", "")
+        if symbol in portfolio.holdings:
+            holding = portfolio.holdings[symbol]
+            holding.bid_price = float(quote.get("bidPrice") or 0)
+            holding.ask_price = float(quote.get("askPrice") or 0)
+            holding.current_price = float(quote.get("lastTradePrice") or 0) or holding.current_price
 
 
 def get_current_allocations(portfolio: PortfolioSummary, usd_to_cad_rate: float, excluded_symbols: set = None) -> dict:
