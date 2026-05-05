@@ -28,7 +28,6 @@ from src.fx_rate import get_usd_to_cad_rate, fetch_dlr_quotes
 from src.history import record_value
 from src.paths import get_config_dir, get_state_root, get_tokens_dir
 from src.fx_targets import resolve_targets
-from src.fx_targets import resolve_targets
 
 
 def load_config() -> tuple:
