@@ -481,7 +481,8 @@ def simulate_rebalance(
     for trade in trades:
         trade_price_cad = trade.price * usd_to_cad_rate if trade.currency == "USD" else trade.price
         trade_value_cad = trade_price_cad * trade.quantity
-        uses_conversion = "currency conversion" in (trade.note or "").lower()
+        normalized_note = (trade.note or "").lower()
+        uses_conversion = "requires fx" in normalized_note
 
         if trade.action == "BUY":
             projected_holdings_value_cad[trade.symbol] = (

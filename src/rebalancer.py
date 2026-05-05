@@ -478,7 +478,7 @@ class RebalancePlanner:
             price=ask_price_native,
             currency=currency,
             estimated_value=cost_native,
-            note="Requires currency conversion" if converted else "",
+            note="Underweight buy (requires FX)" if converted else "Underweight buy",
         ))
         return quantity
 
@@ -621,7 +621,7 @@ class RebalancePlanner:
             price=ask_price_native,
             currency=currency,
             estimated_value=cost_native,
-            note="Cash deployment fallback",
+            note="Best available buy",
         )
 
     def _build_cash_minimizing_cross_currency_buy(self, acct, source_currency: str, drifts: dict[str, float]):
@@ -668,7 +668,7 @@ class RebalancePlanner:
             price=ask_price_native,
             currency=target_currency,
             estimated_value=cost_native,
-            note="Requires currency conversion; cash deployment fallback" if converted else "Cash deployment fallback",
+            note="Best available buy (requires FX)" if converted else "Best available buy",
         )
 
     def _deploy_residual_cash(self) -> None:
@@ -690,7 +690,7 @@ class RebalancePlanner:
                             self.usd_to_cad_rate,
                             currency,
                             0.0,
-                            note="Residual cash deployment",
+                            note="Leftover cash buy",
                         )
                         if trade is None:
                             trade = self._build_cash_minimizing_same_currency_buy(
@@ -718,7 +718,7 @@ class RebalancePlanner:
                             source_currency,
                             self.fee_cad,
                             0.0,
-                            note="Requires currency conversion; residual cash deployment",
+                            note="Leftover cash buy (requires FX)",
                             dlr_quotes=self.dlr_quotes,
                         )
                         if trade is None:
@@ -902,6 +902,7 @@ def allocate_sell(
                 price=price,
                 currency=currency,
                 estimated_value=price * shares_to_sell,
+                note="Overweight sell",
             ))
             remaining -= shares_to_sell
 
