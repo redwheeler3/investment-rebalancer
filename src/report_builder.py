@@ -28,7 +28,7 @@ class RebalanceReportData:
     trades: list[TradeRecommendation]
     currency_conversions: list[CurrencyConversion]
     projected: AllocationSnapshot | None = None
-    all_time_high: AllTimeHigh | None = None
+    all_time_high: AllTimeHigh = None
     daily_change: DailyChange | None = None
     ytd_history: list[HistoryPoint] = field(default_factory=list)
 
@@ -64,7 +64,7 @@ def build_report_data(
 
     all_time_high = get_all_time_high(current_value=portfolio.total_value_cad)
     daily_change_data = get_daily_change(current_value=portfolio.total_value_cad)
-    ytd_history = get_year_to_date_history()
+    ytd_history = get_year_to_date_history(current_value=portfolio.total_value_cad)
 
     return RebalanceReportData(
         current=current_snapshot,

@@ -295,7 +295,6 @@ def run_rebalancer():
         dlr_quotes,
         norberts_gambit_fee_cad,
     )
-    record_value(portfolio.total_value_cad)
     report = build_report_data(
         portfolio,
         resolved_targets,
@@ -305,6 +304,7 @@ def run_rebalancer():
         transient_alerts,
         hidden_symbols,
     )
+    record_value(portfolio.total_value_cad)
     _render_report(
         portfolio,
         resolved_targets,

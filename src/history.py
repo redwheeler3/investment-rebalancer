@@ -68,37 +68,47 @@ def record_value(total_value_cad: float) -> None:
     _save_history(history)
 
 
-def get_all_time_high(current_value: float = None) -> AllTimeHigh | None:
+def get_all_time_high(current_value: float) -> AllTimeHigh:
     """
-    Calculate the all-time high from recorded history.
+    Calculate the all-time high, considering both recorded history and
+    the live portfolio value.
+
+    The live current_value is compared directly against the historical max,
+    so this function works correctly regardless of whether today's value
+    has been written to the history file yet.
 
     Args:
-        current_value: If provided, used to calculate drawdown from ATH.
+        current_value: Today's live portfolio value in CAD.
 
     Returns:
-        AllTimeHigh with the peak value and date, or None if no history exists.
+        AllTimeHigh with the peak value, date, and drawdown from ATH.
     """
     history = _load_history()
-    if not history:
-        return None
-
-    # Find the entry with the highest value
-    best = max(history, key=lambda e: e["value"])
-
     today = date.today().isoformat()
-    is_new_ath = best["date"] == today
-    drawdown_pct = 0.0
 
-    if current_value is not None and best["value"] > 0:
-        drawdown_pct = ((current_value - best["value"]) / best["value"]) * 100.0
-        # Drawdown is negative when below ATH, 0 at ATH
-        drawdown_pct = min(0.0, drawdown_pct)
+    # Find the historical best (if any)
+    if history:
+        best = max(history, key=lambda e: e["value"])
+        historical_max = best["value"]
+        historical_date = best["date"]
+    else:
+        historical_max = 0.0
+        historical_date = today
+
+    # Determine ATH: is today's live value >= the historical max?
+    if current_value >= historical_max:
+        return AllTimeHigh(
+            value=current_value,
+            date=today,
+            is_new_ath=True,
+            drawdown_pct=0.0,
+        )
 
     return AllTimeHigh(
-        value=best["value"],
-        date=best["date"],
-        is_new_ath=is_new_ath,
-        drawdown_pct=drawdown_pct,
+        value=historical_max,
+        date=historical_date,
+        is_new_ath=False,
+        drawdown_pct=((current_value - historical_max) / historical_max) * 100.0,
     )
 
 
@@ -138,12 +148,15 @@ def get_daily_change(current_value: float) -> DailyChange | None:
     )
 
 
-def get_year_to_date_history(today: date | None = None) -> list[HistoryPoint]:
+def get_year_to_date_history(current_value: float) -> list[HistoryPoint]:
     """Return recorded portfolio values from Jan 1 of the current year through today.
+
+    Today's entry always uses the live current_value so the chart reflects
+    the current portfolio state regardless of history file contents.
 
     Missing dates are not synthesized; only recorded values are returned.
     """
-    today = today or date.today()
+    today = date.today()
     start_of_year = date(today.year, 1, 1)
 
     latest_by_day: dict[date, float] = {}
@@ -156,6 +169,9 @@ def get_year_to_date_history(today: date | None = None) -> list[HistoryPoint]:
 
         if start_of_year <= entry_date <= today:
             latest_by_day[entry_date] = entry_value
+
+    # Always use the live value for today
+    latest_by_day[today] = current_value
 
     return [
         HistoryPoint(date=entry_date, value=latest_by_day[entry_date])
