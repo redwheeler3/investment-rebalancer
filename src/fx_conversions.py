@@ -10,7 +10,7 @@ import math
 from dataclasses import dataclass
 
 from src.fx_math import build_account_trade_impacts, net_account_cash
-from src.fx_rate import DlrQuotes, empty_dlr_quotes
+from src.fx_rate import DlrQuotes
 
 
 @dataclass
@@ -126,7 +126,7 @@ def calculate_currency_needs(
     trades: list,
     accounts: list,
     usd_to_cad_rate: float,
-    dlr_quotes: DlrQuotes | None = None,
+    dlr_quotes: DlrQuotes,
     norberts_gambit_fee_cad: float = 10.49,
 ) -> list:
     """
@@ -150,7 +150,9 @@ def calculate_currency_needs(
         List of CurrencyConversion objects with per-account conversion details.
     """
     if dlr_quotes is None:
-        dlr_quotes = empty_dlr_quotes()
+        raise RuntimeError(
+            "DLR quotes are required for currency conversion planning."
+        )
 
     cad_buy_price = dlr_quotes.cad_buy_price
     cad_sell_price = dlr_quotes.cad_sell_price

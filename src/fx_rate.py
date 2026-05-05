@@ -1,11 +1,10 @@
 """
 Exchange rate fetching and DLR quote data.
 
-Fetches the live USD/CAD exchange rate from multiple sources and provides
+Fetches the USD/CAD exchange rate from Questrade DLR quotes and provides
 DLR.TO/DLR.U.TO quote data used for Norbert's Gambit calculations.
 """
 
-import requests
 from dataclasses import dataclass
 
 
@@ -124,72 +123,24 @@ def _get_rate_from_dlr(client) -> float | None:
     return fetch_dlr_quotes(client).exchange_rate
 
 
-def empty_dlr_quotes() -> DlrQuotes:
-    """Return an empty DLR quote bundle for offline/fallback scenarios."""
-    return DlrQuotes(
-        cad_bid_price=0.0,
-        cad_ask_price=0.0,
-        usd_bid_price=0.0,
-        usd_ask_price=0.0,
-        exchange_rate=None,
-    )
-
-
 def get_usd_to_cad_rate(client=None) -> float:
     """
-    Get the current USD to CAD exchange rate.
-
-    Tries multiple sources in order of accuracy:
-    1. Questrade market data (DLR.TO / DLR.U.TO ratio) — real-time market rate
-    2. exchangerate-api.com — free, updated daily
-    3. Bank of Canada Valet API — official daily rate
-    4. Hardcoded 1.36 fallback
+    Get the current USD to CAD exchange rate from Questrade DLR quotes.
 
     Args:
-        client: Optional QuestradeClient instance for real-time market rate.
+        client: QuestradeClient instance for real-time market rate.
 
     Returns:
         USD to CAD exchange rate (e.g., 1.37 means 1 USD = 1.37 CAD).
     """
-    # Primary: derive rate from DLR.TO (CAD) / DLR.U.TO (USD) via Questrade
-    if client is not None:
-        try:
-            rate = _get_rate_from_dlr(client)
-            if rate:
-                return rate
-        except Exception:
-            pass
-
-    # Fallback 1: free exchange rate API (daily rates)
-    try:
-        resp = requests.get(
-            "https://api.exchangerate-api.com/v4/latest/USD",
-            timeout=10,
+    if client is None:
+        raise RuntimeError(
+            "A Questrade client is required to derive USD/CAD from DLR quotes."
         )
-        resp.raise_for_status()
-        data = resp.json()
-        rate = data["rates"].get("CAD")
-        if rate:
-            return float(rate)
-    except Exception:
-        pass
 
-    # Fallback 2: Bank of Canada Valet API (official daily rate)
-    try:
-        resp = requests.get(
-            "https://www.bankofcanada.ca/valet/observations/FXUSDCAD/json?recent=1",
-            timeout=10,
+    rate = _get_rate_from_dlr(client)
+    if rate is None:
+        raise RuntimeError(
+            "Could not derive a live USD/CAD exchange rate from Questrade DLR quotes."
         )
-        resp.raise_for_status()
-        data = resp.json()
-        observations = data.get("observations", [])
-        if observations:
-            rate = observations[-1].get("FXUSDCAD", {}).get("v")
-            if rate:
-                return float(rate)
-    except Exception:
-        pass
-
-    # Last resort fallback
-    print("WARNING: Could not fetch live exchange rate. Using fallback rate of 1.36")
-    return 1.36
+    return rate

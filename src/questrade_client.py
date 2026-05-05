@@ -143,6 +143,22 @@ class QuestradeClient:
         data = self._get(f"v1/markets/quotes", params={"ids": ids_str})
         return data.get("quotes", [])
 
+    def get_symbols(self, symbol_ids: list) -> list:
+        """
+        Get symbol metadata for a list of Questrade symbol IDs.
+
+        Args:
+            symbol_ids: List of Questrade internal symbol IDs.
+
+        Returns:
+            List of symbol dictionaries including metadata such as currency.
+        """
+        if not symbol_ids:
+            return []
+        ids_str = ",".join(str(sid) for sid in symbol_ids)
+        data = self._get("v1/symbols", params={"ids": ids_str})
+        return data.get("symbols", [])
+
     def search_symbol(self, symbol: str) -> list:
         """
         Search for a symbol to get its Questrade symbol ID.

@@ -20,6 +20,27 @@ def _coerce_numeric(value, default: float = 0.0) -> float:
         return default
 
 
+def _normalize_currency(value) -> str | None:
+    """Normalize API currency values to CAD/USD when possible."""
+    if not value:
+        return None
+
+    normalized = str(value).strip().upper()
+    return normalized if normalized in {"CAD", "USD"} else None
+
+
+def _resolve_position_currency(pos: dict, symbol_id: int, symbol: str, symbol_currency_map: dict[int, str]) -> str:
+    """Require Questrade-provided currency data for each position."""
+    currency = _normalize_currency(pos.get("currency")) or symbol_currency_map.get(symbol_id)
+    if currency:
+        return currency
+
+    raise RuntimeError(
+        f"Could not determine currency for symbol '{symbol}' (symbolId={symbol_id}) from Questrade data. "
+        "Stopping rather than guessing from the symbol name."
+    )
+
+
 @dataclass
 class Position:
     """A single position in a specific account."""
@@ -117,6 +138,28 @@ def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
     for client in clients:
         accounts = client.get_accounts()
 
+        raw_positions_by_account = {}
+        symbol_ids = set()
+        for acct in accounts:
+            acct_number = acct["number"]
+            raw_positions = client.get_positions(acct_number)
+            raw_positions_by_account[acct_number] = raw_positions
+            for pos in raw_positions:
+                symbol_id = int(_coerce_numeric(pos.get("symbolId", 0), default=0.0))
+                if symbol_id > 0:
+                    symbol_ids.add(symbol_id)
+
+        symbol_currency_map = {}
+        if symbol_ids:
+            try:
+                for symbol_data in client.get_symbols(sorted(symbol_ids)):
+                    symbol_id = int(_coerce_numeric(symbol_data.get("symbolId", 0), default=0.0))
+                    currency = _normalize_currency(symbol_data.get("currency"))
+                    if symbol_id > 0 and currency:
+                        symbol_currency_map[symbol_id] = currency
+            except Exception:
+                pass
+
         for acct in accounts:
             acct_number = acct["number"]
             acct_type = acct["type"]
@@ -143,7 +186,7 @@ def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
                     cash_usd = _coerce_numeric(bal.get("cash", 0.0))
 
             # Get positions
-            raw_positions = client.get_positions(acct_number)
+            raw_positions = raw_positions_by_account.get(acct_number, [])
             positions = []
 
             for pos in raw_positions:
@@ -157,9 +200,12 @@ def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
                 if quantity == 0 and market_value == 0:
                     continue
 
-                # Determine currency from the symbol
-                # .TO symbols are CAD, while non-.TO symbols are typically USD
-                currency = "CAD" if symbol.endswith(".TO") else "USD"
+                currency = _resolve_position_currency(
+                    pos,
+                    symbol_id,
+                    symbol,
+                    symbol_currency_map,
+                )
 
                 position = Position(
                     symbol=symbol,
