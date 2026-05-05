@@ -113,15 +113,12 @@ def calculate_trades(
     portfolio,
     targets: dict,
     usd_to_cad_rate: float,
-    norberts_gambit_fee_cad: float = 10.49,
-    drift_trade_threshold_pct: float = DEFAULT_DRIFT_TRADE_THRESHOLD_PCT,
-    transient_symbols: set | None = None,
-    dlr_quotes=None,
+    norberts_gambit_fee_cad: float,
+    drift_trade_threshold_pct: float,
+    transient_symbols: set,
+    dlr_quotes,
 ) -> list:
     """Calculate rebalancing trades for the portfolio."""
-    if transient_symbols is None:
-        transient_symbols = set()
-
     if portfolio.total_value_cad == 0:
         return []
 
@@ -839,10 +836,10 @@ def allocate_sell(
     price: float,
     currency: str,
     accounts: list,
-    effective_drift: dict = None,
-    transient_symbols: set = None,
-    drift_trade_threshold_pct: float = DEFAULT_DRIFT_TRADE_THRESHOLD_PCT,
-    position_deltas: dict = None,
+    effective_drift: dict,
+    transient_symbols: set,
+    drift_trade_threshold_pct: float,
+    position_deltas: dict,
 ) -> list:
     """Allocate a SELL order across accounts.
 
@@ -855,13 +852,6 @@ def allocate_sell(
     """
     if total_shares <= 0:
         return []
-
-    if effective_drift is None:
-        effective_drift = {}
-    if transient_symbols is None:
-        transient_symbols = set()
-    if position_deltas is None:
-        position_deltas = {}
 
     holders = find_accounts_for_symbol(symbol, accounts)
     if not holders:

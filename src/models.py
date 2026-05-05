@@ -35,7 +35,7 @@ class TransientAlert:
     note: str
 
 
-def get_transient_status(portfolio, transient_symbols: list = None) -> dict:
+def get_transient_status(portfolio, transient_symbols: list) -> dict:
     """
     Identify which transient symbols are actually held and build alerts.
 

@@ -77,19 +77,11 @@ def _resolve_fx_split_rule(rule_name: str, rule: dict, targets: dict, usd_to_cad
     targets[cad_symbol] = cad_target_pct
 
 
-def resolve_targets(base_targets: dict, fx_target_rules: dict | None, usd_to_cad_rate: float) -> dict:
+def resolve_targets(base_targets: dict, fx_target_rules: dict, usd_to_cad_rate: float) -> dict:
     """Resolve a final flat target map from static targets and FX-based rules."""
-    targets = dict(base_targets or {})
-
-    if not fx_target_rules:
-        return targets
-
-    if not isinstance(fx_target_rules, dict):
-        raise ValueError("fx_target_rules must be a mapping of rule names to rule config")
+    targets = dict(base_targets)
 
     for rule_name, rule in fx_target_rules.items():
-        if not isinstance(rule, dict):
-            raise ValueError(f"fx_target_rules.{rule_name} must be a mapping")
         if not rule.get("enabled", False):
             continue
         _resolve_fx_split_rule(rule_name, rule, targets, usd_to_cad_rate)

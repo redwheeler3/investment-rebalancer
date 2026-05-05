@@ -297,15 +297,13 @@ def get_account_total_value_cad(account: AccountInfo, usd_to_cad_rate: float) ->
     )
 
 
-def get_holdings_view(portfolio: PortfolioSummary, excluded_symbols: set = None) -> dict:
-    """Return a holdings view, optionally excluding specific symbols.
+def get_holdings_view(portfolio: PortfolioSummary, excluded_symbols: set) -> dict:
+    """Return a holdings view, excluding specific symbols.
 
     The portfolio keeps one canonical holdings map. Callers that need a
     filtered view for rebalancing or allocation tables should request it
     explicitly instead of mutating portfolio state.
     """
-    if not excluded_symbols:
-        return portfolio.holdings
     return {
         symbol: data
         for symbol, data in portfolio.holdings.items()
