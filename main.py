@@ -305,7 +305,6 @@ def run_rebalancer():
         hidden_symbols,
     )
     record_value(portfolio.total_value_cad)
-    record_value(portfolio.total_value_cad)
     _render_report(
         portfolio,
         resolved_targets,
