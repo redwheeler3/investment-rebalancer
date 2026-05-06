@@ -199,6 +199,7 @@ def build_cross_currency_buy(
         currency=target_currency,
         estimated_value=cost_native,
         note=note,
+        requires_fx=True,
     )
 
 

@@ -10,14 +10,8 @@ from dataclasses import dataclass, field
 
 
 def _coerce_numeric(value, default: float = 0.0) -> float:
-    """Normalize API numeric fields so None/missing values don't break math."""
-    if value is None:
-        return default
-
-    try:
-        return float(value)
-    except (TypeError, ValueError):
-        return default
+    """Convert an API field to float, defaulting to 0.0 for None."""
+    return float(value) if value is not None else default
 
 
 def _normalize_currency(value) -> str | None:
@@ -375,17 +369,7 @@ def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
 
 
 def get_current_allocations(portfolio: PortfolioSummary, usd_to_cad_rate: float, excluded_symbols: set = None) -> dict:
-    """
-    Calculate current allocation percentages for each holding.
-
-    Args:
-        portfolio: The aggregated portfolio summary.
-        usd_to_cad_rate: Current USD/CAD exchange rate.
-
-    Returns:
-        Dictionary mapping symbol -> current percentage of total portfolio.
-        Includes "CAD" and "USD" entries for cash positions.
-    """
+    """Calculate current allocation percentages for each holding (includes CAD/USD cash entries)."""
     holdings_value_cad = {symbol: data.value_cad for symbol, data in portfolio.holdings.items()}
     return calculate_allocations_for_values(
         holdings_value_cad=holdings_value_cad,
@@ -424,16 +408,7 @@ def calculate_accuracy(current_allocations: dict, targets: dict) -> float:
 
 
 def get_drifts(current_allocations: dict, targets: dict) -> dict:
-    """
-    Calculate drift for each symbol (current - target).
-
-    Args:
-        current_allocations: Current allocation percentages by symbol.
-        targets: Target allocation percentages by symbol.
-
-    Returns:
-        Dictionary mapping symbol -> drift percentage.
-    """
+    """Calculate drift for each symbol (current % - target %)."""
     all_symbols = current_allocations.keys() | targets.keys()
     return {
         s: current_allocations.get(s, 0.0) - targets.get(s, 0.0)
@@ -506,14 +481,13 @@ def simulate_rebalance(
     for trade in trades:
         trade_price_cad = trade.price * usd_to_cad_rate if trade.currency == "USD" else trade.price
         trade_value_cad = trade_price_cad * trade.quantity
-        normalized_note = (trade.note or "").lower()
-        uses_conversion = "requires fx" in normalized_note
 
         if trade.action == "BUY":
             projected_holdings_value_cad[trade.symbol] = (
                 projected_holdings_value_cad.get(trade.symbol, 0.0) + trade_value_cad
             )
-            if uses_conversion:
+            if trade.requires_fx:
+                # Funded by converting the other currency
                 if trade.currency == "USD":
                     projected_cash_cad -= trade.estimated_value * usd_to_cad_rate
                 else:

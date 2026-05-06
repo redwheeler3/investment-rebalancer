@@ -476,6 +476,7 @@ class RebalancePlanner:
             currency=currency,
             estimated_value=cost_native,
             note="Underweight buy (requires FX)" if converted else "Underweight buy",
+            requires_fx=converted,
         ))
         return quantity
 
@@ -666,6 +667,7 @@ class RebalancePlanner:
             currency=target_currency,
             estimated_value=cost_native,
             note="Best available buy (requires FX)" if converted else "Best available buy",
+            requires_fx=converted,
         )
 
     def _deploy_residual_cash(self) -> None:

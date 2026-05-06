@@ -16,7 +16,8 @@ class TradeRecommendation:
     price: float
     currency: str
     estimated_value: float  # price * quantity in native currency
-    note: str = ""  # Optional note (e.g., currency conversion needed)
+    note: str = ""
+    requires_fx: bool = False  # True if funded via cross-currency conversion
 
 
 @dataclass
