@@ -85,7 +85,7 @@ def load_config() -> tuple:
 
     targets = data.get("targets", {})
     transient_symbols = data.get("transient_symbols", [])
-    norberts_gambit_fee_cad = data.get("norberts_gambit_fee_cad", 10.49)
+    norberts_gambit_fee_cad = data.get("norberts_gambit_fee_cad", 0.0)
     fx_target_rules = data.get("fx_target_rules", {})
     drift_trade_threshold_pct = float(data.get("drift_trade_threshold_pct", 0.1))
 
