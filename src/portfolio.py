@@ -386,11 +386,7 @@ def get_current_allocations(portfolio: PortfolioSummary, usd_to_cad_rate: float,
         Dictionary mapping symbol -> current percentage of total portfolio.
         Includes "CAD" and "USD" entries for cash positions.
     """
-    holdings_value_cad = {
-        symbol: holding.value_cad
-        for symbol, data in portfolio.holdings.items()
-        for holding in [data]
-    }
+    holdings_value_cad = {symbol: data.value_cad for symbol, data in portfolio.holdings.items()}
     return calculate_allocations_for_values(
         holdings_value_cad=holdings_value_cad,
         total_value_cad=portfolio.total_value_cad,
@@ -477,11 +473,7 @@ def build_allocation_snapshot(
     excluded_symbols: set = None,
 ) -> AllocationSnapshot:
     """Build allocations, drifts, and accuracy from a portfolio."""
-    holdings_value_cad = {
-        symbol: holding.value_cad
-        for symbol, data in portfolio.holdings.items()
-        for holding in [data]
-    }
+    holdings_value_cad = {symbol: data.value_cad for symbol, data in portfolio.holdings.items()}
     return build_allocation_snapshot_from_values(
         holdings_value_cad=holdings_value_cad,
         cash_cad_total=portfolio.cash_cad_total,

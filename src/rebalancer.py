@@ -31,7 +31,7 @@ from src.cash_deploy import (
     build_cross_currency_buy,
     build_same_currency_buy,
 )
-from src.models import DEFAULT_DRIFT_TRADE_THRESHOLD_PCT, TradeRecommendation
+from src.models import TradeRecommendation
 
 # Maximum optimisation rounds before stopping
 MAX_ROUNDS = 10

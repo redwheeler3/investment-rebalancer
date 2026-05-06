@@ -3,10 +3,6 @@
 from dataclasses import dataclass
 
 
-# Default minimum absolute drift before a symbol is eligible for trading
-DEFAULT_DRIFT_TRADE_THRESHOLD_PCT = 0.1
-
-
 @dataclass
 class TradeRecommendation:
     """A recommended trade to execute."""
