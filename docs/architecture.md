@@ -89,6 +89,66 @@ usd_target_pct = round(total_target_pct - cad_target_pct, rounding_decimals)
 
 When USD is expensive (rate near max), more allocation goes to the CAD fund. When USD is cheap, more goes to the USD fund. The targets dynamically adapt to make currency conversion worthwhile.
 
+### Deep Dive: FX Target Resolution
+
+The FX target system is one of the more subtle design decisions. Instead of manually adjusting your allocation split between Canadian and US funds when the exchange rate changes, the app does it automatically.
+
+#### The Problem It Solves
+
+Say you want 74% of your portfolio in "S&P 500 exposure" — split between a Canadian-listed ETF (VSP.TO) and a US-listed one (IVV). The optimal split depends on the exchange rate:
+
+- When USD is expensive (1.45 CAD/USD), you'd prefer to hold more VSP.TO (no conversion needed)
+- When USD is cheap (1.20 CAD/USD), you'd prefer more IVV (get US exposure at a discount)
+- In between, blend proportionally
+
+#### How It Works (With Numbers)
+
+```yaml
+# In settings.yaml:
+fx_target_rules:
+  sp500_split:
+    enabled: true
+    cad_symbol: VSP.TO
+    usd_symbol: IVV
+    total_target_pct: 74.0
+    min_usd_to_cad_rate: 1.20
+    max_usd_to_cad_rate: 1.50
+    target_rounding_decimals: 2
+```
+
+At runtime with USD/CAD = 1.36:
+
+```python
+clamped_rate = clamp(1.36, 1.20, 1.50) = 1.36
+cad_fraction = (1.36 - 1.20) / (1.50 - 1.20) = 0.16 / 0.30 = 0.5333
+cad_target_pct = round(74.0 * 0.5333, 2) = 39.47%  → VSP.TO
+usd_target_pct = round(74.0 - 39.47, 2) = 34.53%   → IVV
+```
+
+At USD/CAD = 1.45 (near max):
+```
+cad_fraction = (1.45 - 1.20) / (1.50 - 1.20) = 0.8333
+VSP.TO → 61.67%, IVV → 12.33%
+```
+
+At USD/CAD = 1.22 (near min):
+```
+cad_fraction = (1.22 - 1.20) / (1.50 - 1.20) = 0.0667
+VSP.TO → 4.93%, IVV → 69.07%
+```
+
+#### Why Clamping Matters
+
+Without clamping, a rate of 1.10 would produce negative CAD fractions. The `_clamp` ensures the rate stays within the configured range — outside that range, the allocation pins to one extreme.
+
+#### Validation Rules
+
+The resolver enforces several safety rules:
+- `usd_symbol` and `cad_symbol` must not also appear in the static `targets` (prevents double-counting)
+- `max_rate > min_rate` (prevents division by zero)
+- `total_target_pct >= 0` (no negative allocations)
+- Both symbols must be defined (no partial rules)
+
 ---
 
 ## Stage 2: Authentication (`questrade_client.py`)
@@ -248,6 +308,57 @@ def max_usd_from_cad(cad_available, usd_to_cad_rate, fee_cad, dlr_quotes):
 
 All conversions are **conservative** (worst-case pricing) so recommendations are always achievable.
 
+### Deep Dive: The Norbert's Gambit Pipeline
+
+Currency conversion appears in three separate stages, each with a distinct responsibility:
+
+#### Stage 1: During Rebalancing (Conservative Estimation)
+
+The `CashLedger.fund_buy()` and `cross_currency_buying_power()` functions estimate how much target currency you can get from source currency. This uses **conservative** DLR pricing — the ask (buy) price for the source leg and the bid (sell) price for the target leg:
+
+```python
+# "How much USD can I get from $60,000 CAD?"
+usable_cad = $60,000 - $10.49 fee = $59,989.51
+shares = floor($59,989.51 / $13.79)  = 4,350 DLR.TO shares  (pay ask)
+usd_received = 4,350 × $10.15        = US$44,152.50          (receive bid)
+```
+
+This is intentionally pessimistic so that recommended trades are always achievable at current market prices.
+
+#### Stage 2: Post-Rebalance Conversion Planning (`fx_conversions.py`)
+
+After all trades are finalized, this module calculates the *exact* DLR share counts needed for each account:
+
+```python
+# Per-account logic:
+net_cash = account.cash - trade_costs + trade_proceeds
+if net_cash.usd < 0 and net_cash.cad > 0:
+    # Need to convert CAD → USD
+    shares_needed = ceil(usd_shortfall / usd_sell_price)    # Minimum shares to cover
+    shares_affordable = floor((cad_surplus - fee) / cad_buy_price)  # Max we can buy
+    dlr_shares = min(shares_needed, shares_affordable)
+```
+
+#### Stage 3: Sweep Logic (Same Module)
+
+After required conversions are planned, the sweep detects leftover cash in the "wrong" currency:
+
+```python
+# If all positions are USD but we have leftover CAD:
+pos_currencies = {p.currency for p in acct.positions if p.quantity > 0}
+if pos_currencies == {"USD"} and remaining_cad > fee:
+    # Sweep: convert the rest too
+    sweep_shares = floor((remaining_cad - fee) / cad_buy_price)
+```
+
+The sweep augments an existing conversion if one was already planned (no extra fee), or creates a standalone conversion if needed.
+
+#### Why Three Stages?
+
+1. **Stage 1** needs to be fast and pessimistic — it's called inside tight loops during planning
+2. **Stage 2** runs once, after trades are final — it can be exact
+3. **Stage 3** is an optimization — it catches edge cases the planner couldn't handle (because the planner works with projected cash, not actual post-trade cash flows)
+
 ---
 
 ## Stage 5: Report & Display (`report_builder.py` → `history.py` → `display.py`)
@@ -301,209 +412,6 @@ for y in range(first_drawn_row + 1, chart_height):
 ```
 
 The chart auto-sizes to fill the terminal and picks month-start labels that don't overlap.
-
----
-
-## Deep Dive: FX Target Resolution
-
-The FX target system is one of the more subtle design decisions. Instead of manually adjusting your allocation split between Canadian and US funds when the exchange rate changes, the app does it automatically.
-
-### The Problem It Solves
-
-Say you want 74% of your portfolio in "S&P 500 exposure" — split between a Canadian-listed ETF (VSP.TO) and a US-listed one (IVV). The optimal split depends on the exchange rate:
-
-- When USD is expensive (1.45 CAD/USD), you'd prefer to hold more VSP.TO (no conversion needed)
-- When USD is cheap (1.20 CAD/USD), you'd prefer more IVV (get US exposure at a discount)
-- In between, blend proportionally
-
-### How It Works (With Numbers)
-
-```yaml
-# In settings.yaml:
-fx_target_rules:
-  sp500_split:
-    enabled: true
-    cad_symbol: VSP.TO
-    usd_symbol: IVV
-    total_target_pct: 74.0
-    min_usd_to_cad_rate: 1.20
-    max_usd_to_cad_rate: 1.50
-    target_rounding_decimals: 2
-```
-
-At runtime with USD/CAD = 1.36:
-
-```python
-clamped_rate = clamp(1.36, 1.20, 1.50) = 1.36
-cad_fraction = (1.36 - 1.20) / (1.50 - 1.20) = 0.16 / 0.30 = 0.5333
-cad_target_pct = round(74.0 * 0.5333, 2) = 39.47%  → VSP.TO
-usd_target_pct = round(74.0 - 39.47, 2) = 34.53%   → IVV
-```
-
-At USD/CAD = 1.45 (near max):
-```
-cad_fraction = (1.45 - 1.20) / (1.50 - 1.20) = 0.8333
-VSP.TO → 61.67%, IVV → 12.33%
-```
-
-At USD/CAD = 1.22 (near min):
-```
-cad_fraction = (1.22 - 1.20) / (1.50 - 1.20) = 0.0667
-VSP.TO → 4.93%, IVV → 69.07%
-```
-
-### Why Clamping Matters
-
-Without clamping, a rate of 1.10 would produce negative CAD fractions. The `_clamp` ensures the rate stays within the configured range — outside that range, the allocation pins to one extreme.
-
-### Validation Rules
-
-The resolver enforces several safety rules:
-- `usd_symbol` and `cad_symbol` must not also appear in the static `targets` (prevents double-counting)
-- `max_rate > min_rate` (prevents division by zero)
-- `total_target_pct >= 0` (no negative allocations)
-- Both symbols must be defined (no partial rules)
-
----
-
-## Deep Dive: The Norbert's Gambit Pipeline
-
-Currency conversion appears in three separate stages, each with a distinct responsibility:
-
-### Stage 1: During Rebalancing (Conservative Estimation)
-
-The `CashLedger.fund_buy()` and `cross_currency_buying_power()` functions estimate how much target currency you can get from source currency. This uses **conservative** DLR pricing — the ask (buy) price for the source leg and the bid (sell) price for the target leg:
-
-```python
-# "How much USD can I get from $60,000 CAD?"
-usable_cad = $60,000 - $10.49 fee = $59,989.51
-shares = floor($59,989.51 / $13.79)  = 4,350 DLR.TO shares  (pay ask)
-usd_received = 4,350 × $10.15        = US$44,152.50          (receive bid)
-```
-
-This is intentionally pessimistic so that recommended trades are always achievable at current market prices.
-
-### Stage 2: Post-Rebalance Conversion Planning (`fx_conversions.py`)
-
-After all trades are finalized, this module calculates the *exact* DLR share counts needed for each account:
-
-```python
-# Per-account logic:
-net_cash = account.cash - trade_costs + trade_proceeds
-if net_cash.usd < 0 and net_cash.cad > 0:
-    # Need to convert CAD → USD
-    shares_needed = ceil(usd_shortfall / usd_sell_price)    # Minimum shares to cover
-    shares_affordable = floor((cad_surplus - fee) / cad_buy_price)  # Max we can buy
-    dlr_shares = min(shares_needed, shares_affordable)
-```
-
-### Stage 3: Sweep Logic (Same Module)
-
-After required conversions are planned, the sweep detects leftover cash in the "wrong" currency:
-
-```python
-# If all positions are USD but we have leftover CAD:
-pos_currencies = {p.currency for p in acct.positions if p.quantity > 0}
-if pos_currencies == {"USD"} and remaining_cad > fee:
-    # Sweep: convert the rest too
-    sweep_shares = floor((remaining_cad - fee) / cad_buy_price)
-```
-
-The sweep augments an existing conversion if one was already planned (no extra fee), or creates a standalone conversion if needed.
-
-### Why Three Stages?
-
-1. **Stage 1** needs to be fast and pessimistic — it's called inside tight loops during planning
-2. **Stage 2** runs once, after trades are final — it can be exact
-3. **Stage 3** is an optimization — it catches edge cases the planner couldn't handle (because the planner works with projected cash, not actual post-trade cash flows)
-
----
-
-## Deep Dive: Portfolio Projection (`simulate_rebalance`)
-
-The `TradePlan` needs to answer "if we executed all these trades, what would the portfolio look like?" This is how `simulate_rebalance` works:
-
-### The Core Logic
-
-```python
-def simulate_rebalance(portfolio, trades, targets, usd_to_cad_rate, hidden_symbols):
-    # Start with current portfolio values
-    projected_holdings_value_cad = {symbol: holding.value_cad for ...}
-    projected_cash_cad = portfolio.cash_cad_total
-    projected_cash_usd = portfolio.cash_usd_total
-
-    for trade in trades:
-        trade_value_cad = price_in_cad × quantity
-
-        if trade.action == "BUY":
-            projected_holdings_value_cad[symbol] += trade_value_cad
-            # Deduct cash based on funding source
-            if trade.requires_fx:
-                # Deducted from the OTHER currency
-                ...
-            else:
-                # Deducted from same currency
-                ...
-        elif trade.action == "SELL":
-            projected_holdings_value_cad[symbol] -= trade_value_cad
-            # Credit cash in native currency
-            ...
-```
-
-### The Negative Cash Correction
-
-A subtle but important detail — after applying all trades, cash can go negative due to rounding and estimation differences:
-
-```python
-if projected_cash_cad < 0:
-    projected_cash_usd += projected_cash_cad / usd_to_cad_rate
-    projected_cash_cad = 0
-if projected_cash_usd < 0:
-    projected_cash_cad += projected_cash_usd * usd_to_cad_rate
-    projected_cash_usd = 0
-```
-
-This accounts for the implicit cross-currency flows that happen during FX-funded buys. The projection treats negative cash as "will be covered by the other currency," which matches what actually happens during Norbert's Gambit.
-
-### Why This Matters for the Planner
-
-`TradePlan.drifts()` calls `simulate_rebalance` every time the planner needs to check "where are we now?" after previous trades. The accuracy of this projection determines whether the planner makes good decisions in subsequent rounds. If the projection were wrong, the planner might:
-- Keep selling an already-underweight symbol
-- Not buy enough of a symbol that's still underweight
-- Create oscillating buy/sell cycles that never converge
-
----
-
-## Deep Dive: The Cache Invalidation Pattern
-
-The `TradePlan` uses a deliberate invalidation-on-mutation pattern that balances performance with correctness:
-
-```python
-def add_trade(self, trade):
-    self.trades.append(trade)
-    self._invalidate()           # Blow away all cached projections
-
-def _invalidate(self):
-    self._netted_cache = None    # Trade netting must be recomputed
-    self._snapshot_cache = None  # Portfolio projection must be recomputed
-```
-
-### Why Not Incremental Updates?
-
-You might think "just apply the delta to the cached snapshot." But:
-
-1. **Netting changes the picture:** Adding a BUY trade might cancel a previous SELL, changing the net quantity and thus the projected value in a non-obvious way.
-2. **Drift is percentage-based:** Adding a trade changes the total portfolio value (cash moves), which changes ALL drift percentages — not just the symbol you traded.
-3. **Cross-currency effects:** An FX-funded buy changes both CAD and USD cash projections, which ripple into CAD/USD drift calculations.
-
-Full recomputation from netted trades is the only way to get a consistent picture. The caching ensures this only happens when the trade list actually changes.
-
-### Call Frequency
-
-In a typical run with 5-8 symbols and 3 accounts:
-- `drifts()` is called ~20-30 times per round
-- `add_trade()` is called ~8-12 times per round
-- So caching saves ~10-20 redundant `simulate_rebalance` calls per round
 
 ---
 

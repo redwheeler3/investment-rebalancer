@@ -481,6 +481,90 @@ class TradePlan:
 
 **Why cache?** `drifts()` is called many times per round (once per symbol being evaluated). Rerunning `simulate_rebalance` each time would be expensive. The cache makes repeated calls O(1) until the next trade is added.
 
+### Deep Dive: Portfolio Projection (`simulate_rebalance`)
+
+The `TradePlan` needs to answer "if we executed all these trades, what would the portfolio look like?" This is how `simulate_rebalance` works:
+
+#### The Core Logic
+
+```python
+def simulate_rebalance(portfolio, trades, targets, usd_to_cad_rate, hidden_symbols):
+    # Start with current portfolio values
+    projected_holdings_value_cad = {symbol: holding.value_cad for ...}
+    projected_cash_cad = portfolio.cash_cad_total
+    projected_cash_usd = portfolio.cash_usd_total
+
+    for trade in trades:
+        trade_value_cad = price_in_cad × quantity
+
+        if trade.action == "BUY":
+            projected_holdings_value_cad[symbol] += trade_value_cad
+            # Deduct cash based on funding source
+            if trade.requires_fx:
+                # Deducted from the OTHER currency
+                ...
+            else:
+                # Deducted from same currency
+                ...
+        elif trade.action == "SELL":
+            projected_holdings_value_cad[symbol] -= trade_value_cad
+            # Credit cash in native currency
+            ...
+```
+
+#### The Negative Cash Correction
+
+A subtle but important detail — after applying all trades, cash can go negative due to rounding and estimation differences:
+
+```python
+if projected_cash_cad < 0:
+    projected_cash_usd += projected_cash_cad / usd_to_cad_rate
+    projected_cash_cad = 0
+if projected_cash_usd < 0:
+    projected_cash_cad += projected_cash_usd * usd_to_cad_rate
+    projected_cash_usd = 0
+```
+
+This accounts for the implicit cross-currency flows that happen during FX-funded buys. The projection treats negative cash as "will be covered by the other currency," which matches what actually happens during Norbert's Gambit.
+
+#### Why This Matters for the Planner
+
+`TradePlan.drifts()` calls `simulate_rebalance` every time the planner needs to check "where are we now?" after previous trades. The accuracy of this projection determines whether the planner makes good decisions in subsequent rounds. If the projection were wrong, the planner might:
+- Keep selling an already-underweight symbol
+- Not buy enough of a symbol that's still underweight
+- Create oscillating buy/sell cycles that never converge
+
+### Deep Dive: The Cache Invalidation Pattern
+
+The `TradePlan` uses a deliberate invalidation-on-mutation pattern that balances performance with correctness:
+
+```python
+def add_trade(self, trade):
+    self.trades.append(trade)
+    self._invalidate()           # Blow away all cached projections
+
+def _invalidate(self):
+    self._netted_cache = None    # Trade netting must be recomputed
+    self._snapshot_cache = None  # Portfolio projection must be recomputed
+```
+
+#### Why Not Incremental Updates?
+
+You might think "just apply the delta to the cached snapshot." But:
+
+1. **Netting changes the picture:** Adding a BUY trade might cancel a previous SELL, changing the net quantity and thus the projected value in a non-obvious way.
+2. **Drift is percentage-based:** Adding a trade changes the total portfolio value (cash moves), which changes ALL drift percentages — not just the symbol you traded.
+3. **Cross-currency effects:** An FX-funded buy changes both CAD and USD cash projections, which ripple into CAD/USD drift calculations.
+
+Full recomputation from netted trades is the only way to get a consistent picture. The caching ensures this only happens when the trade list actually changes.
+
+#### Call Frequency
+
+In a typical run with 5-8 symbols and 3 accounts:
+- `drifts()` is called ~20-30 times per round
+- `add_trade()` is called ~8-12 times per round
+- So caching saves ~10-20 redundant `simulate_rebalance` calls per round
+
 ---
 
 ## The `CashLedger` State Object
