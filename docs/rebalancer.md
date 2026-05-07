@@ -4,6 +4,24 @@ How `src/rebalancer.py` decides what to buy, sell, and where — following the a
 
 ---
 
+## Rebalancing Rules
+
+The planner is built around these rules (defined in the project README). They're referenced throughout the scenarios below as "Rule N":
+
+1. **Treat all accounts as one household portfolio** — Drift is measured at the total-portfolio level, not per account.
+2. **Sell overweight positions and buy underweight positions** — The planner starts with symbols whose drift is materially away from target.
+3. **Use a drift threshold to avoid tiny starter trades** — The configured `drift_trade_threshold_pct` suppresses trades for symbols that are only slightly off target.
+4. **Minimize free cash whenever practical** — Once meaningful trades are already happening, leftover cash is deployed aggressively so it doesn't remain stranded.
+5. **Only buy symbols that already exist in the account** — An account's current holdings define its buyable universe.
+6. **Prefer same-currency deployment before cross-currency deployment** — Same-currency buys come before CAD/USD conversion. Cross-currency funding is still used when needed.
+7. **Allow account-constrained cash deployment, then clean up globally** — If cash lands in an account with limited options, deploy it there first. If that creates excess exposure, sell the excess from another account where proceeds can fund underweight buys.
+8. **Avoid obviously wasteful churn** — Don't create trade patterns that undo each other without improving drift or reducing idle cash.
+9. **Use whole-share, real-side pricing** — Sells use bid pricing. Buys use ask pricing. Whole shares only.
+10. **Treat unknown symbols as implicit 0% targets** — Holdings not in the target map are eligible to be sold.
+11. **Respect transient/excluded symbols** — Symbols like `DLR.TO` / `DLR.U.TO` can be temporarily excluded while a Norbert's Gambit is in flight.
+
+---
+
 ## Design Philosophy
 
 The rebalancer operates at the **household level** — it sees all accounts as one portfolio, measures drift against unified targets, then figures out which specific accounts to trade in. This matches how a family thinks about allocation ("we want 53% in Canadian S&P 500") without being constrained by per-account limitations.
@@ -711,10 +729,11 @@ These scenarios demonstrate how the planner handles complex situations that aris
 **Setup:** You contribute $100,000 CAD to an RRSP that holds only one position — a US-listed ETF (e.g., QQQ). The rest of the portfolio across other accounts is roughly balanced.
 
 **Why this is tricky:**
-- Rule 5 says "only buy symbols that already exist in the account"
+- Rule 5 ("Only buy symbols that already exist in the account") constrains the buyable universe
 - The account's only buyable symbol is USD-denominated
 - The cash is CAD
 - Buying $100K worth of QQQ in this one account would massively overshoot the household target for QQQ
+- But since QQQ is the *only* option in this account, the cash is effectively trapped there
 
 **What the planner does:**
 
@@ -726,6 +745,12 @@ Initial state:
     Cash CAD: $100,000
     Cash USD: $0
   
+  Account "Bob Margin" (acct_B):
+    QQQ: 45 shares @ US$512 = ~$31,334 (in CAD)
+    VUN.TO: 2,000 shares @ $62.18
+    XEF.TO: 1,500 shares @ $38.42
+    Cash CAD: $200, Cash USD: $0
+
   Household drift:
     QQQ: -0.2% (roughly on target before the deposit)
     → After deposit inflates total to ~$1M, QQQ is now -1.4% underweight
@@ -742,7 +767,7 @@ Round 1 — Layer 2 (Buys):
   → total_buying_power includes cross-currency:
       $100,000 CAD → ~US$73,000 (after Norbert's Gambit math)
   → affordable = floor($73,000 / $512) = 142 shares
-  → quantity = min(20, 142) = 20 shares
+  → quantity = min(20, 142) = 20 shares   ← capped at drift gap!
   → fund_buy: native USD ($0) < cost → convert from CAD
   → BUY 20 QQQ in acct_A (requires FX)
   → Ledger deducts ~$14,000 CAD equivalent
@@ -759,40 +784,76 @@ Round 1 — Layer 3 (Residual Cash):
     → Buys as many QQQ shares as the remaining CAD can fund via FX
     → BUY ~120 QQQ in acct_A (best available buy, requires FX)
   
-  After this: QQQ is now ~+11% OVERWEIGHT at the household level!
-  But the cash is deployed. Rule 7 allows this.
+  After this: acct_A's CAD is fully deployed. QQQ is now massively
+  OVERWEIGHT at the household level. But the cash-minimizing rule
+  (Rule 7: "Allow account-constrained cash deployment, then clean up globally")
+  demanded it — there's nowhere else for the money to go.
 
 Round 2 — Layer 1 (Sells):
-  QQQ drift is now +11% — massively overweight
-  → shares_for_drift_gap($1M, 11%, US$512, "USD", 1.36) = 158 shares
+  QQQ drift is now ~+8% — massively overweight
+  → shares_for_drift_gap($1M, 8%, US$512, "USD", 1.36) = ~115 shares
   → allocate_sell: Which accounts hold QQQ?
       acct_A has ~280 shares (original 140 + 140 just bought)
       acct_B has 45 shares
   → Sorting: acct_A has underweight alternatives? No (only QQQ)
               acct_B has underweight alternatives? Yes (holds VUN.TO, XEF.TO)
-  → acct_B ranks first! Sell 45 from acct_B
-  → Still need 113 more → sell 113 from acct_A
-  → SELL 45 QQQ in acct_B, SELL 113 QQQ in acct_A
+  → acct_B ranks first! Sell 45 from acct_B (all it has)
+  → Still need ~70 more → sell 70 from acct_A
+  → SELL 45 QQQ in acct_B, SELL 70 QQQ in acct_A
 
 Round 2 — Layer 2 (Buys):
   acct_B now has ~US$23,000 from the QQQ sale
-  VUN.TO is underweight → BUY VUN.TO in acct_B
-  XEF.TO is underweight → BUY XEF.TO in acct_B
-  ... proceeds redeployed into underweight positions
+  VUN.TO is underweight → BUY VUN.TO in acct_B (requires FX: USD→CAD)
+  XEF.TO is underweight → BUY XEF.TO in acct_B (requires FX: USD→CAD)
+  acct_B's USD proceeds redeployed into underweight CAD positions
 
-Trade netting:
-  acct_A: bought 140 QQQ then sold 113 = NET BUY 27 QQQ
-  acct_B: sold 45 QQQ, bought VUN.TO + XEF.TO
+  acct_A has ~US$35,840 from its QQQ sale. But QQQ is at target now.
+  No underweight symbol exists in acct_A → Layer 2 does nothing for acct_A.
+
+Round 2 — Layer 3 (Residual Cash):
+  acct_A has ~US$35,840 sitting idle from the sell!
+  build_same_currency_buy: QQQ is USD, check if underweight... drift ≈ 0, not < 0 → skip
+  _build_cash_minimizing_same_currency_buy:
+    → QQQ is the "best available" (only USD symbol in acct_A)
+    → BUY ~70 QQQ in acct_A (best available buy)
+  
+  ⚠️ This is the critical step the scenario hinges on:
+  The sell proceeds from acct_A STAY in acct_A (ledger is per-account).
+  Since QQQ is the only option, the cash immediately gets redeployed
+  back into QQQ. The sell and re-buy cancel each other out in netting!
+
+Subsequent rounds (3–10):
+  The algorithm oscillates: QQQ is overweight → sell from acct_A →
+  proceeds stay in acct_A → re-buy QQQ → still overweight → repeat.
+  
+  But trade netting collapses every sell+re-buy pair into nothing.
+  The only REAL change was Round 2's sell of 45 QQQ from acct_B
+  (those proceeds went into VUN.TO/XEF.TO and stayed there).
+
+Trade netting (final output):
+  acct_A: BUY 20 + BUY 120 + (SELL 70 + BUY 70) × N = NET BUY ~140 QQQ
+            ↑ The sell/re-buy pairs cancel out!
+  acct_B: NET SELL 45 QQQ, NET BUY VUN.TO + XEF.TO
 
 Final result:
-  The $100K CAD was effectively:
-  - Partially converted to USD and invested in QQQ (in acct_A)
-  - Partially "transferred" by selling QQQ from acct_B
-  - Those proceeds rebalanced other positions in acct_B
-  - Net effect: portfolio drifts back toward target across the household
+  acct_A ends up FULL of QQQ with minimal cash:
+  - Original 140 shares + ~140 new shares ≈ 280 QQQ total
+  - The entire $100K CAD was converted to USD and deployed into QQQ
+  - This is the only possible outcome given the account constraint
+
+  acct_B contributes to household rebalancing:
+  - Sold all 45 QQQ (reducing household QQQ overweight slightly)
+  - Bought underweight VUN.TO + XEF.TO with the proceeds
+
+  Household QQQ is still overweight (~+6%) after all trades.
+  The algorithm cannot fix this further because:
+  1. acct_A's cash is "trapped" — any sell produces USD that just
+     gets re-invested into QQQ (only option in that account)
+  2. Cash cannot move between accounts
+  3. The only relief valve was acct_B's 45 shares
 ```
 
-**Key insight:** The planner uses the constrained account (only holds QQQ) as a "pass-through" — it buys what it can, overshoots, then the overweight sell in Round 2 liberates cash in other accounts that have better options. Trade netting ensures the final recommendation is clean.
+**Key insight:** Cash deposited into a single-symbol account is effectively "trapped" in that symbol. The planner cannot move money between accounts — it can only trade within each account's ledger. When QQQ is sold from acct_A, the USD proceeds stay in acct_A's ledger and get immediately redeployed into QQQ (the only option). The sell-then-rebuy is a no-op that trade netting collapses. The real rebalancing comes from *other* accounts that hold QQQ plus alternatives — selling their QQQ and buying underweight stuff instead.
 
 ---
 
@@ -841,42 +902,33 @@ Round 1 — Layer 2 (Buys):
   → Remaining 4 shares unfilled this round
 
   After this buy, recalculate drifts:
-  VUN.TO is now -0.7% (selling 205 shares pushed it underweight!)
-  QQQ is now -0.3% (closer to target but not done)
-
-  VUN.TO now underweight → eligible for buying
-  → _eligible_buy_accounts: acct_A holds VUN.TO + has CAD cash? Only $150...
-  → Not enough to buy — skipped this round
+  VUN.TO is now ~0% (floor rounding left it marginally positive: +0.004%)
+  QQQ is now -0.3% (closer to target but not fully closed)
 
 Round 1 — Layer 3 (Residual Cash):
-  acct_B has small leftover CAD from VUN.TO sale minus QQQ conversion
-  → build_same_currency_buy: VUN.TO is underweight, buy 1-2 shares back
-  → Interesting! We just sold VUN.TO and now we're buying some back.
-  → But trade netting will handle this: 205 sold - 2 bought back = net 203 sold
+  acct_B has small leftover CAD from VUN.TO sale minus QQQ conversion cost
+  → build_same_currency_buy: VUN.TO at +0.004% is NOT underweight → skip
+  → _build_cash_minimizing_same_currency_buy:
+      → VUN.TO (+0.004%) and XEF.TO (+0.1%) are both buyable
+      → VUN.TO has lowest drift → "best available"
+      → BUY 2 VUN.TO in acct_B ("Best available buy")
+  → Leftover is too small for another share → done
 
 Round 2 — Layer 1 (Sells):
-  Nothing overweight enough anymore
-
-Round 2 — Layer 2 (Buys):
-  VUN.TO still slightly underweight (-0.5%)
-  → shares_for_drift_gap($850K, -0.5%, $62.18, CAD) = 68 shares
-  → _eligible_buy_accounts: acct_A holds VUN.TO, has $150 CAD (not enough)
-      acct_B holds VUN.TO, has some leftover CAD
-  → Between both accounts, buy what's affordable
-  → BUY 2 VUN.TO in acct_B (leftover cash)
-  → acct_A can't contribute meaningfully
+  Nothing overweight enough (all drifts < threshold)
+  → 0 changes → loop exits
 
 Trade netting:
-  acct_B VUN.TO: SOLD 205 + BOUGHT 4 = NET SELL 201 VUN.TO
+  acct_B VUN.TO: SOLD 205 + BOUGHT 2 = NET SELL 203 VUN.TO
   acct_B QQQ: NET BUY 18 QQQ
   Everything else: pass-through
 
 Final trades presented to user:
-  SELL 201 VUN.TO in Bob Margin
+  SELL 203 VUN.TO in Bob Margin
   BUY 18 QQQ in Bob Margin (requires currency conversion)
 ```
 
-**Key insight:** The sell of VUN.TO funded the QQQ buy in the same account. VUN.TO went from overweight to slightly underweight — but because cash was limited in accounts that hold VUN.TO, the planner couldn't fully buy it back elsewhere. The trade netting collapses the "sold 205, bought back 4" into a clean "sell 201." The user never sees the intermediate back-and-forth.
+**Key insight:** The sell of VUN.TO funded the QQQ buy in the same account via CAD→USD conversion. After the sell, VUN.TO lands at essentially 0% drift (the `floor()` rounding guarantees a tiny undershoot, never overshoot). The small leftover CAD in the account gets re-invested into VUN.TO as a "best available buy" — trade netting then collapses "sold 205, bought back 2" into a clean "sell 203." The user never sees the intermediate back-and-forth.
 
 ---
 
@@ -923,46 +975,80 @@ Round 1 — Layer 1 (Sells):
 
   VUN.TO +0.8% overweight
   → 96 shares to sell
-  → SELL 96 VUN.TO from acct_B (largest position)
-  → $5,969 CAD in acct_B
+  → allocate_sell: acct_B has 2,000 VUN.TO + underweight ZAG.TO (-2.1%)
+                   acct_A has 500 VUN.TO + no underweight alternatives
+  → acct_B ranks first (has underweight alternatives where proceeds can go)
+  → SELL 96 VUN.TO from acct_B → $5,969 CAD in acct_B
 
 Round 1 — Layer 2 (Buys):
-  ZAG.TO is -2.1% underweight
-  → 1,452 shares needed
-  → _eligible_buy_accounts: acct_B has ZAG.TO + $6,049 CAD
-                             acct_C has ZAG.TO + $24,042 CAD
-  → acct_C has more cash → fills first
-  → BUY 1,452 ZAG.TO split across acct_C and acct_B
+  ZAG.TO is -2.1% underweight (most underweight → first in queue)
+  → shares_for_drift_gap($750K, -2.1%, $10.85, CAD) = 1,451 shares
+  → _eligible_buy_accounts: acct_C has ZAG.TO + ~$24,004 CAD (from XEF.TO sell)
+                             acct_B has ZAG.TO + ~$6,049 CAD (from VUN.TO sell)
+  → acct_C has more same-currency cash → fills first
+  → _buy_in_account(acct_C): affordable = floor($24,004 / $10.85) = 2,212
+      → quantity = min(1,451, 2,212) = 1,451 — capped at drift gap
+      → BUY 1,451 ZAG.TO in acct_C (same-currency, no FX)
+      → Ledger: acct_C CAD reduced to ~$8,261
+  → remaining = 0 → ZAG.TO fully filled from acct_C alone
 
   QQQ is -1.9% underweight
-  → 20 shares needed
-  → _eligible_buy_accounts: acct_C holds QQQ
-  → _buy_in_account: remaining CAD in acct_C after ZAG.TO buys?
-  → If not enough: _raise_cash_in_account
-      → Candidates in acct_C: XEF.TO is still slightly overweight after sell
-      → DISPLACEMENT SELL: sell more XEF.TO from acct_C to fund QQQ
-  → Conversion CAD → USD via Norbert's Gambit
-  → BUY 20 QQQ in acct_C (requires FX)
+  → shares_for_drift_gap($750K, -1.9%, US$512, USD, 1.36) = 20 shares
+  → _eligible_buy_accounts: only acct_C holds QQQ
+  → _buy_in_account(acct_C):
+      total_buying_power = US$200 native + convertible from ~$8,261 CAD ≈ US$6,200
+      affordable = floor($6,200 / $512) = 12 shares
+      quantity = min(20, 12) = 12  ← limited by available cash!
+      _raise_cash_in_account: looks for same-currency (USD) overweight
+        positions in acct_C — none exist (only CAD positions). No help.
+      → BUY 12 QQQ in acct_C (requires FX)
+      → Remaining 8 shares unfilled (no more accounts hold QQQ)
 
 Round 1 — Layer 3 (Residual Cash):
-  Tiny amounts left in each account
-  → Various 1-2 share "leftover cash buy" trades
+  acct_B still has ~$6,049 CAD (VUN.TO sell proceeds not yet spent)
+  → build_same_currency_buy: ZAG.TO at ~0% is NOT underweight → skip
+  → _build_cash_minimizing_same_currency_buy:
+      ZAG.TO (~0%) is "best available" in acct_B (lowest drift)
+      → BUY ~557 ZAG.TO in acct_B ("Best available buy")
+  → This pushes ZAG.TO to ~+0.8% overweight at the household level!
+
+  acct_C has tiny leftover → mop-up trades
+
+Round 2 — Layer 1 (Sells):
+  ZAG.TO is now +0.8% overweight (> threshold)
+  → shares_for_drift_gap($750K, 0.8%, $10.85, CAD) = ~553 shares to sell
+  → allocate_sell: acct_C has 7,451 ZAG.TO + underweight QQQ (-0.7%)!
+                   acct_B has 5,557 ZAG.TO + no underweight alternatives
+  → acct_C ranks first (has QQQ as underweight alternative)
+  → SELL ~553 ZAG.TO from acct_C → ~$6,000 CAD in acct_C
+
+Round 2 — Layer 2 (Buys):
+  QQQ is still underweight (~-0.7%)
+  → _eligible_buy_accounts: acct_C holds QQQ + now has ~$6,000 CAD
+  → total_buying_power ≈ US$4,400 → affordable = 8 more QQQ
+  → BUY 8 QQQ in acct_C (requires FX)
+  → QQQ drift now ~0%
+
+Round 2 onwards: all drifts < threshold → converged.
 
 The cascade:
-  1. XEF.TO sell in acct_C → cash freed
-  2. Cash funds ZAG.TO buy in acct_C AND acct_B
-  3. VUN.TO sell in acct_B → cash for more ZAG.TO in acct_B
-  4. Displacement sell of XEF.TO in acct_C → funds QQQ buy (with FX)
-  5. A single overweight triggered useful trades in all three accounts
+  1. XEF.TO sell from acct_C (has QQQ as underweight alternative) → $24K CAD
+  2. VUN.TO sell from acct_B (has ZAG.TO as underweight alternative) → $6K CAD
+  3. ZAG.TO buy in acct_C consumes most of the XEF.TO proceeds (Layer 2)
+  4. Remaining CAD in acct_C → 12 QQQ (cross-currency, Layer 2)
+  5. acct_B's $6K → ZAG.TO "best available" buy (Layer 3) → overshoots ZAG.TO
+  6. Round 2: ZAG.TO overweight → sell from acct_C (has QQQ alternative)
+  7. Those proceeds fund 8 more QQQ in acct_C → QQQ gap fully closed!
+  8. The $6K effectively "routed through" ZAG.TO in acct_B → acct_C → QQQ
 ```
 
-**Key insight:** The `_has_underweight_alternatives` sort in `allocate_sell` is what makes this work elegantly. By selling XEF.TO from the account that *also holds underweight QQQ*, the proceeds can be immediately redeployed within that same account — even though QQQ requires a currency conversion. The planner routes cash where it can do the most good.
+**Key insight:** No cash moves between accounts — each account acts independently. But *household-level drift measurement* acts as the coordination signal that makes independent per-account decisions produce a globally coherent result. acct_B buys ZAG.TO because that's its only option (Rule 4). This changes the household drift for ZAG.TO, which Round 2 picks up. acct_C then sells its own ZAG.TO because the household says it's overweight and acct_C has a better use for the proceeds (underweight QQQ). Neither account "knows about" the other — they're both just reacting to the same shared drift numbers. The emergent result is that acct_B ends up holding more ZAG.TO and acct_C ends up holding more QQQ, and the QQQ gap gets fully closed across two rounds. This is why the iterative multi-round design matters: Round 1's "best available" overshoot creates a signal that Round 2 can act on.
 
 ---
 
 ### Scenario 4: The "Best Available" Fallback — No Good Options, But Cash Must Move
 
-**Setup:** An account holds only two CAD symbols. Both are at or above target. But the account received $2,000 CAD from a dividend or prior sell. There's nothing underweight to buy — but leaving cash idle violates Rule 4.
+**Setup:** An account holds only two CAD symbols. Both are at or above target. But the account received $2,000 CAD from a dividend or prior sell. There's nothing underweight to buy — but leaving cash idle violates Rule 4 ("Minimize free cash whenever practical").
 
 ```
 Account "Bob RRSP":
@@ -1045,12 +1131,12 @@ Post-trade planning (fx_conversions.py):
 
 | Scenario | Primary Rules Exercised |
 |----------|------------------------|
-| 1. Large cash deposit (single USD stock) | Rule 5 (only buy existing), Rule 7 (constrained deploy + global cleanup), Rule 4 (minimize cash) |
-| 2. Displacement sell cascade | Rule 2 (sell overweight/buy underweight), Rule 5 (account constraints), Rule 8 (netting avoids churn) |
-| 3. Multi-account chain reaction | Rule 1 (household-level drift), Rule 5 (per-account buyable universe), Rule 6 (same-currency first) |
-| 4. Best available fallback | Rule 4 (minimize cash), Rule 5 (only existing holdings) |
-| 5. Trade netting | Rule 8 (avoid wasteful churn) |
-| 6. Cross-currency sweep | Rule 4 (minimize cash), Rule 6 (prefer same-currency, then convert) |
+| 1. Large cash deposit (single USD stock) | Rule 5 ("Only buy symbols that already exist in the account"), Rule 7 ("Allow account-constrained cash deployment, then clean up globally"), Rule 4 ("Minimize free cash whenever practical") |
+| 2. Displacement sell cascade | Rule 2 ("Sell overweight positions and buy underweight positions"), Rule 5 ("Only buy symbols that already exist in the account"), Rule 8 ("Avoid obviously wasteful churn") |
+| 3. Multi-account chain reaction | Rule 1 ("Treat all accounts as one household portfolio"), Rule 5 ("Only buy symbols that already exist in the account"), Rule 6 ("Prefer same-currency deployment before cross-currency deployment") |
+| 4. Best available fallback | Rule 4 ("Minimize free cash whenever practical"), Rule 5 ("Only buy symbols that already exist in the account") |
+| 5. Trade netting | Rule 8 ("Avoid obviously wasteful churn") |
+| 6. Cross-currency sweep | Rule 4 ("Minimize free cash whenever practical"), Rule 6 ("Prefer same-currency deployment before cross-currency deployment") |
 
 ---
 
