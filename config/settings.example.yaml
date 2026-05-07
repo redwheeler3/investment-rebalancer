@@ -53,5 +53,32 @@ transient_symbols:
 # Trading fee for Norbert's Gambit: $9.99 commission + 5% GST.
 norberts_gambit_fee_cad: 10.49
 
+# Tactical defensive deployment.
+# Dynamically shifts the fixed/equity allocation based on portfolio drawdown
+# from a Reference High. Deploys fixed-income assets into equities during
+# drawdowns, and rebuilds the fixed position on recovery.
+#
+# fixed_composition ratios should sum to 1.0 — they define how the fixed
+# allocation is split across instruments regardless of the total fixed %.
+#
+# deploy_thresholds trigger moving INTO equities (on the way down).
+# recovery_thresholds trigger rebuilding fixed position (on the way up).
+# Both use drawdown_pct relative to the Reference High.
+tactical_deployment:
+  enabled: false
+  baseline_equity_pct: 80.0
+  fixed_composition:
+    ZMMK.TO: 0.50    # Money market
+    XSH.TO: 0.25     # Canadian short-term corporate bonds
+    XIGS.TO: 0.25    # US short-term corporate bonds
+  deploy_thresholds:
+    - { drawdown_pct: -10.0, fixed_pct: 15.0 }
+    - { drawdown_pct: -20.0, fixed_pct: 10.0 }
+    - { drawdown_pct: -30.0, fixed_pct: 5.0 }
+  recovery_thresholds:
+    - { drawdown_pct: -15.0, fixed_pct: 10.0 }
+    - { drawdown_pct: -5.0, fixed_pct: 15.0 }
+    - { drawdown_pct: 5.0, fixed_pct: 20.0 }
+
 # Only generate trades for symbols whose absolute drift is at least this %.
 drift_trade_threshold_pct: 0.5

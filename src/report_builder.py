@@ -17,6 +17,7 @@ from src.history import (
 )
 from src.portfolio import AllocationSnapshot, simulate_rebalance
 from src.models import TradeRecommendation, TransientAlert
+from src.tactical import TacticalPosture
 
 
 @dataclass
@@ -31,6 +32,7 @@ class RebalanceReportData:
     all_time_high: AllTimeHigh = None
     daily_change: DailyChange | None = None
     ytd_history: list[HistoryPoint] = field(default_factory=list)
+    tactical_posture: TacticalPosture | None = None
 
 
 def build_report_data(
@@ -41,6 +43,7 @@ def build_report_data(
     currency_conversions: list[CurrencyConversion],
     transient_alerts: list[TransientAlert],
     hidden_symbols: set[str],
+    tactical_posture: TacticalPosture | None = None,
 ) -> RebalanceReportData:
     """Calculate all report inputs from the current portfolio state."""
     from src.portfolio import build_allocation_snapshot
@@ -75,4 +78,5 @@ def build_report_data(
         all_time_high=all_time_high,
         daily_change=daily_change_data,
         ytd_history=ytd_history,
+        tactical_posture=tactical_posture,
     )

@@ -44,6 +44,7 @@ Actions both operate against the same source of truth.
 - **Configurable Drift Trade Threshold** — Only acts on positions that drift beyond your chosen threshold
 - **Tolerance-Aware Status Display** — Marks symbols as `OK`, `OVER`, or `UNDER`
 - **Conservative FX Funding** — Uses conservative DLR bid/ask math for Norbert's Gambit sizing
+- **Tactical Defensive Deployment** — Drawdown-based regime system that deploys fixed-income assets into equities during market drops and rebuilds on recovery
 - **Automatic Portfolio Sync** — Designed to run with GitHub Actions from a private state repo
 
 ---
@@ -310,7 +311,8 @@ Private repo: investment-rebalancer-state/
 ├── config/
 │   └── settings.yaml
 ├── data/
-│   └── portfolio_history.jsonl
+│   ├── portfolio_history.jsonl
+│   └── tactical_state.json       (created automatically on first regime change)
 └── tokens/
     ├── primary_token.json
     └── secondary_token.json
@@ -336,6 +338,7 @@ The private repo contains the live state the app reads through
 | `src/report_builder.py` | Assembles all report data (trades, projections, history) for display |
 | `src/display.py` | Terminal rendering with Rich (tables, charts, formatting) |
 | `src/history.py` | Portfolio value history — ATH tracking, daily change, YTD chart data |
+| `src/tactical.py` | Tactical defensive deployment — drawdown-based dynamic target adjustment |
 | `src/questrade_client.py` | Questrade API client (OAuth token rotation, positions, quotes) |
 | `src/paths.py` | Resolves private state repo paths from `REBALANCER_STATE_DIR` |
 
@@ -559,6 +562,101 @@ This gives you automated token refresh without ever storing live credentials in 
 
 ---
 
+## Tactical defensive deployment
+
+The tactical system implements a modified 120-minus-age rule combined with a
+drawdown-based deployment plan. At baseline, the portfolio holds 80% equities
+and 20% fixed income. When the market drops, fixed-income assets are deployed
+into equities at predefined thresholds. On recovery, the fixed position is
+rebuilt.
+
+### How it works
+
+The system maintains a **Reference High** — the peak portfolio value used as
+the anchor for all drawdown calculations. At baseline, this tracks the ATH
+naturally. When deployment first triggers, the Reference High freezes and stays
+fixed until the portfolio recovers back to baseline.
+
+**Deployment thresholds** (going down from Reference High):
+
+| Drawdown | Fixed | Equity | Regime |
+|----------|-------|--------|--------|
+| 0% (baseline) | 20% | 80% | Baseline |
+| -10% | 15% | 85% | Level 1 |
+| -20% | 10% | 90% | Level 2 |
+| -30% | 5% | 95% | Level 3 |
+
+**Recovery thresholds** (on the way back up):
+
+| Recovery to | Fixed | Equity | Returns to |
+|-------------|-------|--------|------------|
+| -15% from reference | 10% | 90% | Level 2 |
+| -5% from reference | 15% | 85% | Level 1 |
+| +5% above reference | 20% | 80% | Baseline |
+
+The different thresholds on the way down vs. up (hysteresis) prevent whipsawing
+near boundaries.
+
+### Fixed-income composition
+
+The fixed allocation is split by configurable ratios across instruments:
+
+```yaml
+fixed_composition:
+  ZMMK.TO: 0.50    # Money market (50% of fixed)
+  XSH.TO: 0.25     # Canadian short-term corporate bonds (25% of fixed)
+  XIGS.TO: 0.25    # US short-term corporate bonds (25% of fixed)
+```
+
+These ratios are maintained regardless of the total fixed percentage.
+
+### Equity scaling
+
+When the fixed allocation shrinks, all equity targets scale up proportionally.
+For example, at Level 1 (85% equity, up from 80%), each equity target is
+multiplied by 85/80 = 1.0625.
+
+### Display
+
+At baseline, the tactical system is invisible — nothing extra appears in the
+report. When deployed, a panel appears showing the current regime, Reference
+High, drawdown percentage, and dollar values for the next recovery and deploy
+triggers.
+
+### State persistence
+
+Regime state is stored in `data/tactical_state.json` in the private state repo.
+The file is only written on regime transitions (a few times per year at most).
+The `--sync` mode also evaluates tactical transitions so GitHub Actions catches
+daily threshold crossings.
+
+### Configuration
+
+Add a `tactical_deployment` section to `config/settings.yaml`:
+
+```yaml
+tactical_deployment:
+  enabled: true
+  baseline_equity_pct: 80.0
+  fixed_composition:
+    ZMMK.TO: 0.50
+    XSH.TO: 0.25
+    XIGS.TO: 0.25
+  deploy_thresholds:
+    - { drawdown_pct: -10.0, fixed_pct: 15.0 }
+    - { drawdown_pct: -20.0, fixed_pct: 10.0 }
+    - { drawdown_pct: -30.0, fixed_pct: 5.0 }
+  recovery_thresholds:
+    - { drawdown_pct: -15.0, fixed_pct: 10.0 }
+    - { drawdown_pct: -5.0, fixed_pct: 15.0 }
+    - { drawdown_pct: 5.0, fixed_pct: 20.0 }
+```
+
+Symbols listed in `fixed_composition` should **not** also appear in the static
+`targets` — they are managed exclusively by the tactical system.
+
+---
+
 ## Configuration
 
 Your real configuration lives in `config/settings.yaml` in the private state
@@ -567,9 +665,10 @@ point.
 
 Key fields:
 
-- `targets` — static target allocations (should sum to ~100% with FX rules)
+- `targets` — static target allocations (should sum to ~100% with FX and tactical rules)
 - `accounts` — token filenames, display labels, and optional account-type overrides
 - `fx_target_rules` — exchange-rate-driven target logic
+- `tactical_deployment` — drawdown-based regime system for fixed/equity split (optional)
 - `transient_symbols` — symbols to exclude temporarily from trading
 - `norberts_gambit_fee_cad` — estimated fee used in conversion suggestions
 - `drift_trade_threshold_pct` — minimum drift before the rebalancer acts

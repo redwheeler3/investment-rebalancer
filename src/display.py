@@ -757,6 +757,77 @@ def display_projected_allocations(
     )
 
 
+def display_tactical_posture(tactical_posture) -> None:
+    """Display the tactical deployment panel when not at baseline.
+
+    Only renders when the portfolio is in an active deployment regime.
+    At baseline, nothing is displayed — the feature is invisible.
+    """
+    if tactical_posture is None:
+        return
+    if tactical_posture.regime == "baseline":
+        return
+
+    # Format regime label
+    regime_labels = {
+        "level_1": "Level 1",
+        "level_2": "Level 2",
+        "level_3": "Level 3",
+    }
+    regime_label = regime_labels.get(tactical_posture.regime, tactical_posture.regime)
+
+    lines = []
+    lines.append(
+        f"  [bold yellow]{regime_label}:[/bold yellow] "
+        f"{tactical_posture.fixed_pct:.0f}% fixed / {tactical_posture.equity_pct:.0f}% equity"
+    )
+    lines.append(
+        f"  [dim]Reference High:[/dim] "
+        f"${tactical_posture.reference_high:,.2f} "
+        f"[dim]({tactical_posture.reference_high_date})[/dim]"
+    )
+    lines.append(
+        f"  [dim]Current:[/dim] "
+        f"{tactical_posture.drawdown_from_reference_pct:+.1f}% from reference"
+    )
+
+    # Recovery triggers
+    if tactical_posture.next_recovery_triggers:
+        lines.append("")
+        lines.append("  [dim]Recovery triggers:[/dim]")
+        for trigger in tactical_posture.next_recovery_triggers:
+            target_label = regime_labels.get(trigger["target_regime"], trigger["target_regime"])
+            if trigger["target_regime"] == "baseline":
+                target_label = "Baseline"
+            lines.append(
+                f"    [green]→[/green] {trigger['drawdown_pct']:+.1f}% "
+                f"(${trigger['dollar_value']:,.0f}) → "
+                f"{target_label} ({trigger['fixed_pct']:.0f}% fixed)"
+            )
+
+    # Deploy trigger
+    if tactical_posture.next_deploy_trigger:
+        trigger = tactical_posture.next_deploy_trigger
+        target_label = regime_labels.get(trigger["target_regime"], trigger["target_regime"])
+        lines.append("  [dim]Deploy trigger:[/dim]")
+        lines.append(
+            f"    [red]→[/red] {trigger['drawdown_pct']:+.1f}% "
+            f"(${trigger['dollar_value']:,.0f}) → "
+            f"{target_label} ({trigger['fixed_pct']:.0f}% fixed)"
+        )
+
+    content = "\n".join(lines)
+    panel = Panel(
+        content,
+        title="[bold yellow]⚡ Tactical Deployment Active[/bold yellow]",
+        box=box.ROUNDED,
+        style="yellow",
+        expand=False,
+    )
+    console.print(panel)
+    console.print()
+
+
 def display_full_report(
     portfolio,
     current_allocations: dict,
@@ -772,12 +843,14 @@ def display_full_report(
     daily_change=None,
     ytd_history: list = None,
     drift_trade_threshold_pct: float = 0.1,
+    tactical_posture=None,
 ):
     """Display the complete rebalancing report."""
     display_header()
     display_accuracy(accuracy, projected_accuracy)
     display_all_time_high(all_time_high, portfolio.total_value_cad)
     display_daily_change(daily_change, portfolio.total_value_cad)
+    display_tactical_posture(tactical_posture)
     display_year_to_date_chart(ytd_history or [])
     display_holdings_summary(portfolio, usd_to_cad_rate)
     display_account_summary(portfolio.accounts, usd_to_cad_rate)

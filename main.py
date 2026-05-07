@@ -26,11 +26,16 @@ from src.report_builder import build_report_data
 from src.display import display_full_report, console
 from src.fx_rate import get_usd_to_cad_rate, fetch_dlr_quotes
 from src.fx_conversions import calculate_currency_needs
-from src.history import record_value
+from src.history import record_value, get_all_time_high
 from src.paths import get_config_dir, get_state_root, get_tokens_dir
 from src.fx_targets import resolve_targets
 from src.models import get_transient_status
 from src.rebalancer import calculate_trades
+from src.tactical import (
+    parse_tactical_config,
+    evaluate_tactical_posture,
+    resolve_tactical_targets,
+)
 
 
 def load_config() -> tuple:
@@ -88,6 +93,7 @@ def load_config() -> tuple:
     norberts_gambit_fee_cad = data.get("norberts_gambit_fee_cad", 0.0)
     fx_target_rules = data.get("fx_target_rules", {})
     drift_trade_threshold_pct = float(data.get("drift_trade_threshold_pct", 0.1))
+    tactical_config = parse_tactical_config(data.get("tactical_deployment", {}))
 
     return (
         accounts,
@@ -96,6 +102,7 @@ def load_config() -> tuple:
         norberts_gambit_fee_cad,
         fx_target_rules,
         drift_trade_threshold_pct,
+        tactical_config,
     )
 
 
@@ -114,6 +121,7 @@ def run_scheduled_sync():
 
     Refreshes all Questrade OAuth tokens (single rotation per token file)
     and snapshots the current portfolio value for ATH tracking.
+    Also evaluates tactical regime transitions when tactical deployment is enabled.
     GitHub Actions handles committing and pushing the updated files.
     """
     (
@@ -123,6 +131,7 @@ def run_scheduled_sync():
         _norberts_gambit_fee_cad,
         _fx_target_rules,
         _drift_trade_threshold_pct,
+        tactical_config,
     ) = load_config()
 
     all_ok = True
@@ -155,6 +164,23 @@ def run_scheduled_sync():
             portfolio = build_portfolio(clients, usd_to_cad_rate)
             record_value(portfolio.total_value_cad)
             print(f"  ✓ Portfolio value recorded: ${portfolio.total_value_cad:,.2f}")
+
+            # Evaluate tactical regime transitions (if enabled)
+            if tactical_config:
+                ath = get_all_time_high(current_value=portfolio.total_value_cad)
+                posture = evaluate_tactical_posture(
+                    current_value=portfolio.total_value_cad,
+                    ath_value=ath.value,
+                    ath_date=ath.date,
+                    config=tactical_config,
+                )
+                if posture.transition_occurred:
+                    print(
+                        f"  ⚡ Tactical regime changed: "
+                        f"{posture.previous_regime} → {posture.regime}"
+                    )
+                else:
+                    print(f"  ✓ Tactical regime: {posture.regime}")
         except Exception as e:
             print(f"  ⚠ Could not snapshot portfolio value: {e}")
 
@@ -250,6 +276,7 @@ def _render_report(
         daily_change=report.daily_change,
         ytd_history=report.ytd_history,
         drift_trade_threshold_pct=drift_trade_threshold_pct,
+        tactical_posture=report.tactical_posture,
     )
 
 
@@ -264,14 +291,30 @@ def run_rebalancer():
         norberts_gambit_fee_cad,
         fx_target_rules,
         drift_trade_threshold_pct,
+        tactical_config,
     ) = load_config()
 
     clients = _connect_clients(accounts)
     usd_to_cad_rate = _fetch_exchange_rate(clients[0])
     resolved_targets = resolve_targets(targets, fx_target_rules, usd_to_cad_rate)
-    _validate_resolved_targets(resolved_targets)
     portfolio = _build_priced_portfolio(clients, usd_to_cad_rate)
     dlr_quotes = _fetch_dlr_quotes(clients[0])
+
+    # Evaluate tactical posture and adjust targets if enabled
+    tactical_posture = None
+    if tactical_config:
+        ath = get_all_time_high(current_value=portfolio.total_value_cad)
+        tactical_posture = evaluate_tactical_posture(
+            current_value=portfolio.total_value_cad,
+            ath_value=ath.value,
+            ath_date=ath.date,
+            config=tactical_config,
+        )
+        resolved_targets = resolve_tactical_targets(
+            resolved_targets, tactical_posture, tactical_config
+        )
+
+    _validate_resolved_targets(resolved_targets)
 
     transient_status = get_transient_status(portfolio, transient_symbols)
     hidden_symbols = transient_status["symbols"]
@@ -302,6 +345,7 @@ def run_rebalancer():
         currency_conversions,
         transient_alerts,
         hidden_symbols,
+        tactical_posture=tactical_posture,
     )
     record_value(portfolio.total_value_cad)
     _render_report(

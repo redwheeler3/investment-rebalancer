@@ -420,8 +420,9 @@ The chart auto-sizes to fill the terminal and picks month-start labels that don'
 GitHub Actions runs `python main.py --sync` on a schedule. This mode:
 1. Refreshes all tokens (keeps them alive even when you don't run locally)
 2. Snapshots the portfolio value (so ATH tracking works even on days you don't check)
+3. Evaluates tactical regime transitions (so drawdown triggers are caught daily)
 
-It's a stripped-down path — no trades calculated, no display rendered. Just auth + record.
+It's a stripped-down path — no trades calculated, no display rendered. Just auth + record + tactical evaluation.
 
 ---
 
@@ -444,6 +445,7 @@ It's a stripped-down path — no trades calculated, no display rendered. Just au
 | `display.py` | Terminal rendering — Rich tables and charts |
 | `history.py` | Persistence — ATH tracking, YTD chart data |
 | `models.py` | Shared types — TradeRecommendation, TransientAlert |
+| `tactical.py` | Tactical deployment — drawdown-based dynamic target adjustment |
 | `paths.py` | File locations — private state repo discovery |
 
 ---

@@ -69,3 +69,8 @@ def get_data_dir() -> Path:
 def get_history_file() -> Path:
     """Return the canonical portfolio history file inside the private state repo."""
     return get_data_dir() / "portfolio_history.jsonl"
+
+
+def get_tactical_state_file() -> Path:
+    """Return the tactical deployment state file inside the private state repo."""
+    return get_data_dir() / "tactical_state.json"
