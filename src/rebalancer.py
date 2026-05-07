@@ -58,6 +58,7 @@ def net_trades(all_trades: list) -> list:
         template = trades_list[0]
         buy_note = ""
         sell_note = ""
+        buy_requires_fx = False
 
         for trade in trades_list:
             if trade.action == "BUY":
@@ -65,6 +66,8 @@ def net_trades(all_trades: list) -> list:
                 buy_price = trade.price
                 if trade.note and not buy_note:
                     buy_note = trade.note
+                if trade.requires_fx:
+                    buy_requires_fx = True
             else:
                 total_sell_qty += trade.quantity
                 sell_price = trade.price
@@ -85,6 +88,7 @@ def net_trades(all_trades: list) -> list:
                 currency=template.currency,
                 estimated_value=price * net_quantity,
                 note=buy_note,
+                requires_fx=buy_requires_fx,
             ))
         elif net_quantity < 0:
             price = sell_price if sell_price > 0 else template.price
