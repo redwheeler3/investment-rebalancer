@@ -1,7 +1,5 @@
 """Tests for the portfolio module — allocation math, drift, accuracy, and projection."""
 
-import pytest
-
 from src.portfolio import (
     calculate_allocations_for_values,
     calculate_accuracy,
