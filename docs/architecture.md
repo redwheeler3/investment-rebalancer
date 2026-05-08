@@ -67,13 +67,181 @@ All mutable files (tokens, config, history) live in that separate repo — the c
 - **transient_symbols** — things like DLR.TO you're temporarily holding during a conversion
 - **drift_trade_threshold_pct** — minimum drift before a trade is recommended
 - **norberts_gambit_fee_cad** — per-conversion fee
+- **tactical_config** — drawdown-based regime state machine that dynamically shifts the fixed/equity split (parsed via `parse_tactical_config()`)
 
 Optional fields gracefully default:
 ```python
 transient_symbols = data.get("transient_symbols", [])
 norberts_gambit_fee_cad = data.get("norberts_gambit_fee_cad", 0.0)
 fx_target_rules = data.get("fx_target_rules", {})
+tactical_config = parse_tactical_config(data.get("tactical_deployment", {}))
 ```
+
+### Tactical deployment
+
+The `tactical_deployment` section is parsed by `parse_tactical_config()` in `tactical.py`. When `enabled: true`, it returns a `TacticalConfig` dataclass; otherwise `None` (feature is off). This implements a drawdown-based regime state machine that dynamically shifts the portfolio's fixed-income / equity split — deploying bonds into equities during crashes, and rebuilding the bond position on recovery.
+
+### Deep Dive: Tactical Deployment
+
+The tactical deployment system is a regime-based state machine that dynamically shifts the portfolio's fixed-income / equity split in response to drawdowns. Instead of a simple "sell bonds, buy stocks" rule, it implements a multi-level deployment with hysteresis to avoid whipsawing.
+
+#### The Problem It Solves
+
+During a market crash, you want to deploy your fixed-income holdings into equities while they're cheap. But you don't want to:
+- Deploy too early (what if the crash deepens?)
+- Deploy too late (you miss the recovery)
+- Whipsaw back and forth near thresholds (expensive and stressful)
+
+The solution: a **tiered deployment** with **separate deploy/recovery thresholds** (hysteresis), triggered by drawdown from a frozen Reference High.
+
+#### Regime State Machine
+
+Four possible regimes, each with a different fixed-income percentage:
+
+```
+baseline (20% fixed) → level_1 (15%) → level_2 (10%) → level_3 (5%)
+```
+
+Transitions happen **one level at a time** per evaluation. Even if the portfolio drops 30% in one day, it moves `baseline → level_1` on the first evaluation, then `level_1 → level_2` on the next, etc. This prevents a flash crash from triggering full deployment in a single run.
+
+#### Reference High & Drawdown
+
+The **Reference High** determines the baseline from which drawdown is measured:
+
+- **At baseline:** Reference High = the all-time high (ATH). It tracks new highs as the portfolio grows.
+- **When deployed:** Reference High **freezes** at the ATH value when deployment first triggered. This prevents the reference from rising while deployed, which would trap you in a deployed state.
+
+```python
+# At baseline, reference tracks ATH
+if state.regime == "baseline":
+    reference_high = ath_value       # Moves up with new highs
+
+# When deployed, reference is frozen
+else:
+    reference_high = state.reference_high  # Fixed at deployment moment
+```
+
+Drawdown is then:
+```python
+drawdown_pct = ((current_value - reference_high) / reference_high) * 100.0
+```
+
+#### Hysteresis (Why Two Sets of Thresholds)
+
+Deploy thresholds trigger going **down** (into drawdown). Recovery thresholds trigger going **up** (out of drawdown). They're deliberately offset:
+
+```
+Deploy:    -10% → level_1,   -20% → level_2,   -30% → level_3
+Recovery:  -15% → level_1,    -5% → level_1,    +5% → baseline
+```
+
+This means:
+- You deploy to level_1 at -10% drawdown
+- You don't recover back to baseline until +5% **above** the reference high
+- Between -10% and +5%, you stay deployed — no thrashing
+
+The gap between deploy and recovery thresholds is the **dead zone** where no transitions happen.
+
+#### Example Walkthrough (With Numbers)
+
+Portfolio ATH: $1,000,000 on Jan 15, 2026. This scenario shows a crash, partial recovery that doesn't reach baseline, a second leg down, and then full recovery — demonstrating how the reference stays frozen and hysteresis prevents whipsawing.
+
+| Date | Value | Drawdown | Regime | Fixed % | What Happened |
+|------|-------|----------|--------|---------|---------------|
+| Jan 15 | $1,000,000 | 0% | baseline | 20% | ATH day |
+| Mar 1 | $900,000 | -10% | level_1 | 15% | Deploy trigger! Reference freezes at $1M |
+| Mar 15 | $800,000 | -20% | level_2 | 10% | Deeper deploy |
+| Apr 1 | $700,000 | -30% | level_3 | 5% | Max deployment |
+| Apr 15 | $750,000 | -25% | level_3 | 5% | Still deep, no recovery |
+| May 1 | $850,000 | -15% | level_2 | 10% | Recovery trigger (-15% threshold) |
+| May 15 | $950,000 | -5% | level_1 | 15% | Recovery trigger (-5% threshold) |
+| Jun 1 | $980,000 | -2% | level_1 | 15% | Rising but not at +5% → stays level_1 |
+| Jun 15 | $920,000 | -8% | level_1 | 15% | Dips again but NOT past -10% → no redeploy |
+| Jul 1 | $800,000 | -20% | level_2 | 10% | Second leg down, deploy trigger again |
+| Jul 15 | $700,000 | -30% | level_3 | 5% | Max deployment again |
+| Aug 15 | $850,000 | -15% | level_2 | 10% | Recovery begins |
+| Sep 15 | $950,000 | -5% | level_1 | 15% | Continuing recovery |
+| Oct 15 | $1,050,000 | +5% | baseline | 20% | Full recovery! Reference unfreezes |
+
+Key observations:
+- Reference stayed frozen at $1M for the **entire period** (Mar 1 → Oct 15) — it never updated to a new ATH during deployment
+- On Jun 15 the portfolio dipped to -8%, but since level_1's deploy threshold is -10%, it stayed at level_1 — hysteresis prevented re-deployment
+- On Jun 1 the portfolio was only -2% from reference, but the recovery threshold to baseline is +5%, so it stayed at level_1 — hysteresis prevented premature recovery
+- The second leg down (Jul 1) re-triggered deployment because the drawdown exceeded thresholds again
+- The system never jumps levels — each evaluation can move at most one step
+
+#### State Persistence
+
+The regime state is persisted in `data/tactical_state.json`:
+
+```json
+{
+  "regime": "level_1",
+  "reference_high": 1000000.0,
+  "reference_high_date": "2026-01-15",
+  "last_transition_date": "2026-03-01"
+}
+```
+
+At baseline, the file is minimal:
+```json
+{
+  "regime": "baseline"
+}
+```
+
+The reference high and date are only stored when deployed (they're derived from ATH at baseline).
+
+#### Target Resolution (`resolve_tactical_targets()`)
+
+Once the posture is known, targets are adjusted:
+
+1. **Fixed-income targets** are set absolutely from `fixed_composition × fixed_pct`:
+   ```python
+   # At level_1 (15% fixed):
+   ZMMK.TO → 15% × 0.50 = 7.5%
+   XSH.TO  → 15% × 0.25 = 3.75%
+   XIGS.TO → 15% × 0.25 = 3.75%
+   ```
+
+2. **Equity targets** are scaled proportionally to fill the remaining space:
+   ```python
+   # Original equity sum = 80%, new equity target = 85%
+   scale_factor = 85.0 / 80.0 = 1.0625
+   VSP.TO: 53.0% × 1.0625 = 56.31%
+   IVV:    21.0% × 1.0625 = 22.31%
+   XEF.TO:  6.0% × 1.0625 = 6.38%
+   ```
+
+3. **Cash targets** (CAD, USD) pass through unchanged.
+
+The result always sums to 100%.
+
+#### The `--sync` Mode Connection
+
+Daily `--sync` runs evaluate tactical transitions even when you don't run the full rebalancer. This ensures drawdown triggers are caught promptly:
+
+```python
+# In sync mode:
+if tactical_config:
+    posture = evaluate_tactical_posture(
+        current_value, ath_value, ath_date, config=tactical_config
+    )
+    if posture.transition_occurred:
+        print(f"  ⚡ Tactical regime changed: {posture.previous_regime} → {posture.regime}")
+```
+
+The next full rebalancer run will see the updated regime and calculate trades accordingly.
+
+#### Display Integration
+
+The terminal report shows:
+- Current regime and fixed/equity split
+- Drawdown from Reference High
+- Next deploy trigger (dollar value where the next level activates)
+- Recovery triggers (what needs to happen to step back)
+
+This gives you full visibility into where the system stands without needing to manually check thresholds.
 
 ### FX target resolution
 
