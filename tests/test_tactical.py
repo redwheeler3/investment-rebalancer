@@ -153,17 +153,17 @@ class TestDetermineRegime:
         result = _determine_regime("baseline", -12.0, sample_config)
         assert result == "level_1"
 
-    def test_deploys_to_level_1_at_20pct_from_baseline(self, sample_config):
-        """From baseline, even at -20% you first transition to level_1.
-        The system transitions one level at a time per evaluation."""
+    def test_deploys_to_level_2_at_20pct_from_baseline(self, sample_config):
+        """From baseline at -20%, jumps directly to level_2.
+        The system deploys to the deepest qualifying level in one shot."""
         result = _determine_regime("baseline", -20.0, sample_config)
-        assert result == "level_1"
+        assert result == "level_2"
 
-    def test_deploys_to_level_1_at_30pct_from_baseline(self, sample_config):
-        """From baseline, even at -30% you first transition to level_1.
-        Subsequent evaluations will cascade through levels."""
+    def test_deploys_to_level_3_at_30pct_from_baseline(self, sample_config):
+        """From baseline at -30%, jumps directly to level_3.
+        Flash crash triggers full deployment in a single evaluation."""
         result = _determine_regime("baseline", -30.0, sample_config)
-        assert result == "level_1"
+        assert result == "level_3"
 
     def test_stays_at_level_1_during_drawdown(self, sample_config):
         """At -15%, level_1 should stay (not recover, not deploy further)."""

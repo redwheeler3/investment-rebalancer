@@ -195,39 +195,43 @@ def _determine_regime(
     """Determine the correct regime based on current drawdown and direction.
 
     Uses hysteresis: deploy thresholds going down, recovery thresholds going up.
-    Only transitions one level at a time are supported (the thresholds define
-    the boundaries).
+    Jumps directly to the deepest qualifying level — if the portfolio drops 30%
+    in one day, it moves straight to the appropriate deployment level in a
+    single evaluation.
     """
+    current_index = REGIMES.index(current_regime)
+
     # Check deploy thresholds (going deeper into drawdown)
-    # These trigger moving to a MORE deployed state (less fixed)
+    # These trigger moving to a MORE deployed state (less fixed).
+    # Find the deepest level that qualifies (don't stop at first match).
+    best_deploy = None
     for threshold in config.deploy_thresholds:
         target_fixed = threshold["fixed_pct"]
         trigger_drawdown = threshold["drawdown_pct"]
 
-        # Find the regime that corresponds to this fixed_pct
         target_regime = _regime_for_fixed_pct(target_fixed, config)
         if target_regime is None:
             continue
 
-        # Only deploy if we haven't already deployed to this level or beyond
-        current_index = REGIMES.index(current_regime)
         target_index = REGIMES.index(target_regime)
 
         if target_index > current_index and drawdown_pct <= trigger_drawdown:
-            return target_regime
+            best_deploy = target_regime  # Keep going — later matches are deeper
+
+    if best_deploy is not None:
+        return best_deploy
 
     # Check recovery thresholds (recovering from drawdown)
-    # These trigger moving to a LESS deployed state (more fixed)
+    # These trigger moving to a LESS deployed state (more fixed).
+    # Find the most recovered (closest to baseline) level that qualifies.
     for threshold in reversed(config.recovery_thresholds):
         target_fixed = threshold["fixed_pct"]
         trigger_drawdown = threshold["drawdown_pct"]
 
-        # Find the regime that corresponds to this fixed_pct
         target_regime = _regime_for_fixed_pct(target_fixed, config)
         if target_regime is None:
             continue
 
-        current_index = REGIMES.index(current_regime)
         target_index = REGIMES.index(target_regime)
 
         if target_index < current_index and drawdown_pct >= trigger_drawdown:

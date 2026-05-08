@@ -102,7 +102,7 @@ Four possible regimes, each with a different fixed-income percentage:
 baseline (20% fixed) → level_1 (15%) → level_2 (10%) → level_3 (5%)
 ```
 
-Transitions happen **one level at a time** per evaluation. Even if the portfolio drops 30% in one day, it moves `baseline → level_1` on the first evaluation, then `level_1 → level_2` on the next, etc. This prevents a flash crash from triggering full deployment in a single run.
+Transitions jump directly to the deepest qualifying level. If the portfolio drops 30% in one day, it moves `baseline → level_3` in a single evaluation. This ensures a flash crash triggers immediate full deployment — you don't want to wait multiple evaluation cycles while the market is cratering.
 
 #### Reference High & Drawdown
 
@@ -168,7 +168,7 @@ Key observations:
 - On Jun 15 the portfolio dipped to -8%, but since level_1's deploy threshold is -10%, it stayed at level_1 — hysteresis prevented re-deployment
 - On Jun 1 the portfolio was only -2% from reference, but the recovery threshold to baseline is +5%, so it stayed at level_1 — hysteresis prevented premature recovery
 - The second leg down (Jul 1) re-triggered deployment because the drawdown exceeded thresholds again
-- The system never jumps levels — each evaluation can move at most one step
+- The system jumps directly to the deepest qualifying level — a flash crash can go from baseline straight to level_3
 
 #### State Persistence
 
