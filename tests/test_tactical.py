@@ -31,7 +31,6 @@ from src.tactical import (
 def sample_config():
     """Standard tactical config matching the example settings."""
     return TacticalConfig(
-        enabled=True,
         baseline_equity_pct=80.0,
         fixed_composition={
             "ZMMK.TO": 0.50,
@@ -67,10 +66,6 @@ def temp_state_dir(tmp_path):
 
 
 class TestParseConfig:
-    def test_returns_none_when_disabled(self):
-        result = parse_tactical_config({"enabled": False})
-        assert result is None
-
     def test_returns_none_when_empty(self):
         result = parse_tactical_config({})
         assert result is None
@@ -81,7 +76,6 @@ class TestParseConfig:
 
     def test_parses_valid_config(self):
         raw = {
-            "enabled": True,
             "baseline_equity_pct": 80.0,
             "fixed_composition": {
                 "ZMMK.TO": 50.0,
@@ -101,14 +95,12 @@ class TestParseConfig:
         }
         config = parse_tactical_config(raw)
         assert config is not None
-        assert config.enabled is True
         assert config.baseline_equity_pct == 80.0
         assert len(config.fixed_composition) == 3
         assert abs(sum(config.fixed_composition.values()) - 1.0) < 0.001
 
     def test_normalizes_ratios(self):
         raw = {
-            "enabled": True,
             "baseline_equity_pct": 80.0,
             "fixed_composition": {
                 "ZMMK.TO": 50,
@@ -123,7 +115,6 @@ class TestParseConfig:
 
     def test_deploy_thresholds_sorted_descending(self):
         raw = {
-            "enabled": True,
             "baseline_equity_pct": 80.0,
             "fixed_composition": {"ZMMK.TO": 1.0},
             "deploy_thresholds": [

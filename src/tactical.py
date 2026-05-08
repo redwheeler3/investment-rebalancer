@@ -35,7 +35,6 @@ REGIMES = ("baseline", "level_1", "level_2", "level_3")
 class TacticalConfig:
     """Tactical deployment configuration from settings.yaml."""
 
-    enabled: bool
     baseline_equity_pct: float
     fixed_composition: dict[str, float]  # symbol → ratio (sums to 1.0, parsed from %)
     deploy_thresholds: list[dict]  # sorted by drawdown_pct descending (least negative first)
@@ -119,9 +118,9 @@ def save_tactical_state(state: TacticalState) -> None:
 def parse_tactical_config(raw: dict) -> TacticalConfig | None:
     """Parse tactical_deployment section from settings.yaml.
 
-    Returns None if the section is missing or disabled.
+    Returns None if the section is missing or empty.
     """
-    if not raw or not raw.get("enabled", False):
+    if not raw:
         return None
 
     baseline_equity_pct = float(raw.get("baseline_equity_pct", 80.0))
@@ -161,7 +160,6 @@ def parse_tactical_config(raw: dict) -> TacticalConfig | None:
     recovery_thresholds.sort(key=lambda t: t["drawdown_pct"])
 
     return TacticalConfig(
-        enabled=True,
         baseline_equity_pct=baseline_equity_pct,
         fixed_composition=fixed_composition,
         deploy_thresholds=deploy_thresholds,

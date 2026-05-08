@@ -28,28 +28,10 @@ class TestResolveTargets:
         result = resolve_targets(base, {}, 1.36)
         assert result == base
 
-    def test_disabled_rule_ignored(self):
-        base = {"VCN.TO": 30.0, "XBB.TO": 30.0}
-        rules = {
-            "test_split": {
-                "enabled": False,
-                "usd_symbol": "IVV",
-                "cad_symbol": "XSP.TO",
-                "total_target_pct": 40.0,
-                "min_usd_to_cad_rate": 1.20,
-                "max_usd_to_cad_rate": 1.50,
-                "target_rounding_decimals": 2,
-            }
-        }
-        result = resolve_targets(base, rules, 1.36)
-        assert "IVV" not in result
-        assert "XSP.TO" not in result
-
-    def test_enabled_rule_adds_symbols(self):
+    def test_rule_adds_symbols(self):
         base = {"VCN.TO": 26.0, "CAD": 0.0, "USD": 0.0}
         rules = {
             "sp500_split": {
-                "enabled": True,
                 "usd_symbol": "IVV",
                 "cad_symbol": "VSP.TO",
                 "total_target_pct": 74.0,
@@ -68,7 +50,6 @@ class TestResolveTargets:
         base = {"XBB.TO": 26.0}
         rules = {
             "split": {
-                "enabled": True,
                 "usd_symbol": "IVV",
                 "cad_symbol": "VSP.TO",
                 "total_target_pct": 74.0,
@@ -87,7 +68,6 @@ class TestResolveTargets:
         base = {}
         rules = {
             "split": {
-                "enabled": True,
                 "usd_symbol": "IVV",
                 "cad_symbol": "VSP.TO",
                 "total_target_pct": 74.0,
@@ -105,7 +85,6 @@ class TestResolveTargets:
         base = {}
         rules = {
             "split": {
-                "enabled": True,
                 "usd_symbol": "IVV",
                 "cad_symbol": "VSP.TO",
                 "total_target_pct": 74.0,
@@ -123,7 +102,6 @@ class TestResolveTargets:
         base = {}
         rules = {
             "split": {
-                "enabled": True,
                 "usd_symbol": "IVV",
                 "cad_symbol": "VSP.TO",
                 "total_target_pct": 74.0,
@@ -141,7 +119,6 @@ class TestResolveTargets:
         base = {"VSP.TO": 50.0}
         rules = {
             "split": {
-                "enabled": True,
                 "usd_symbol": "IVV",
                 "cad_symbol": "VSP.TO",
                 "total_target_pct": 74.0,
@@ -158,7 +135,6 @@ class TestResolveTargets:
         base = {}
         rules = {
             "split": {
-                "enabled": True,
                 "usd_symbol": "IVV",
                 "cad_symbol": "VSP.TO",
                 "total_target_pct": 74.0,
@@ -174,7 +150,6 @@ class TestResolveTargets:
         base = {}
         rules = {
             "split": {
-                "enabled": True,
                 "usd_symbol": "VSP.TO",
                 "cad_symbol": "VSP.TO",
                 "total_target_pct": 74.0,
@@ -190,7 +165,6 @@ class TestResolveTargets:
         base = {}
         rules = {
             "split": {
-                "enabled": True,
                 "usd_symbol": "IVV",
                 "cad_symbol": "VSP.TO",
                 "total_target_pct": 74.0,

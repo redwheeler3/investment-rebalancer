@@ -1,6 +1,7 @@
 # Example target allocation percentages for a generic combined portfolio.
-# Static targets plus any enabled FX-derived targets should sum to 100%
-# after resolution.
+# When tactical deployment is active, static + FX-derived equity targets
+# should sum to baseline_equity_pct (the fixed portion is managed by
+# tactical). Without tactical, they should sum to 100%.
 # Cash targets use currency codes (CAD, USD).
 #
 # This file is intentionally public-safe sample data. Replace it with your own
@@ -26,24 +27,19 @@ targets:
   VCN.TO: 20.0
   VUN.TO: 25.0
   XEF.TO: 15.0
-  XBB.TO: 20.0
 
 # FX-derived targets.
-# This optional example keeps a combined 20% allocation shared between a USD
-# ETF and a CAD-hedged ETF, and shifts the split as USD/CAD changes.
-# Replace these placeholders with real symbols that exist in your brokerage.
-fx_target_rules: {}
-
-# Example alternative FX rule shape:
-# fx_target_rules:
-#   usd_equity_split:
-#     enabled: true
-#     usd_symbol: IVV
-#     cad_symbol: XSP.TO
-#     total_target_pct: 20.0
-#     min_usd_to_cad_rate: 1.0
-#     max_usd_to_cad_rate: 1.5
-#     target_rounding_decimals: 0
+# Each rule dynamically splits an allocation between a USD ETF and a
+# CAD-hedged ETF based on the current USD/CAD exchange rate.
+# Remove a rule (or the entire section) to disable it.
+fx_target_rules:
+  usd_equity_split:
+    usd_symbol: IVV
+    cad_symbol: XSP.TO
+    total_target_pct: 20.0
+    min_usd_to_cad_rate: 1.0
+    max_usd_to_cad_rate: 1.5
+    target_rounding_decimals: 0
 
 # Transient symbols — temporarily excluded from rebalancing.
 transient_symbols:
@@ -65,7 +61,6 @@ norberts_gambit_fee_cad: 10.49
 # recovery_thresholds trigger rebuilding fixed position (on the way up).
 # Both use drawdown_pct relative to the Reference High.
 tactical_deployment:
-  enabled: false
   baseline_equity_pct: 80.0
   fixed_composition:
     ZMMK.TO: 50.0    # Money market

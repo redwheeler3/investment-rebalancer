@@ -31,7 +31,7 @@ def _clamp(value: float, minimum: float, maximum: float) -> float:
 
 
 def _resolve_fx_split_rule(rule_name: str, rule: dict, targets: dict, usd_to_cad_rate: float) -> None:
-    """Apply one enabled FX split rule to the target mapping in place."""
+    """Apply one FX split rule to the target mapping in place."""
     usd_symbol = rule.get("usd_symbol")
     cad_symbol = rule.get("cad_symbol")
     if not usd_symbol or not cad_symbol:
@@ -82,8 +82,6 @@ def resolve_targets(base_targets: dict, fx_target_rules: dict, usd_to_cad_rate: 
     targets = dict(base_targets)
 
     for rule_name, rule in fx_target_rules.items():
-        if not rule.get("enabled", False):
-            continue
         _resolve_fx_split_rule(rule_name, rule, targets, usd_to_cad_rate)
 
     return targets
