@@ -1,7 +1,5 @@
 """Tests for the rebalancer module — sizing math, trade netting, and sell allocation."""
 
-import pytest
-
 from src.rebalancer import (
     shares_for_drift_gap,
     max_sellable_without_crossing_target,
