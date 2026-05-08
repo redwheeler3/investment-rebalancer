@@ -112,7 +112,7 @@ def _validate_resolved_targets(targets: dict):
     if abs(total - 100.0) > 0.5:
         raise ValueError(
             f"Resolved target allocations sum to {total:.2f}% (expected 100%). "
-            "Check config/settings.yaml static targets plus any enabled fx_target_rules."
+            "Check config/settings.yaml static targets plus any fx_target_rules."
         )
 
 
@@ -121,7 +121,7 @@ def run_scheduled_sync():
 
     Refreshes all Questrade OAuth tokens (single rotation per token file)
     and snapshots the current portfolio value for ATH tracking.
-    Also evaluates tactical regime transitions when tactical deployment is enabled.
+    Also evaluates tactical regime transitions when tactical deployment is configured.
     GitHub Actions handles committing and pushing the updated files.
     """
     (
@@ -165,7 +165,7 @@ def run_scheduled_sync():
             record_value(portfolio.total_value_cad)
             print(f"  ✓ Portfolio value recorded: ${portfolio.total_value_cad:,.2f}")
 
-            # Evaluate tactical regime transitions (if enabled)
+            # Evaluate tactical regime transitions (if configured)
             if tactical_config:
                 ath = get_all_time_high(current_value=portfolio.total_value_cad)
                 posture = evaluate_tactical_posture(
@@ -300,7 +300,7 @@ def run_rebalancer():
     portfolio = _build_priced_portfolio(clients, usd_to_cad_rate)
     dlr_quotes = _fetch_dlr_quotes(clients[0])
 
-    # Evaluate tactical posture and adjust targets if enabled
+    # Evaluate tactical posture and adjust targets if configured
     tactical_posture = None
     if tactical_config:
         ath = get_all_time_high(current_value=portfolio.total_value_cad)

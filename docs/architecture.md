@@ -79,7 +79,7 @@ tactical_config = parse_tactical_config(data.get("tactical_deployment", {}))
 
 ### Tactical deployment
 
-The `tactical_deployment` section is parsed by `parse_tactical_config()` in `tactical.py`. When `enabled: true`, it returns a `TacticalConfig` dataclass; otherwise `None` (feature is off). This implements a drawdown-based regime state machine that dynamically shifts the portfolio's fixed-income / equity split — deploying bonds into equities during crashes, and rebuilding the bond position on recovery.
+The `tactical_deployment` section is parsed by `parse_tactical_config()` in `tactical.py`. When the section is present and populated, it returns a `TacticalConfig` dataclass; otherwise `None` (feature is off). This implements a drawdown-based regime state machine that dynamically shifts the portfolio's fixed-income / equity split — deploying bonds into equities during crashes, and rebuilding the bond position on recovery.
 
 ### Deep Dive: Tactical Deployment
 
@@ -199,9 +199,9 @@ Once the posture is known, targets are adjusted:
 1. **Fixed-income targets** are set absolutely from `fixed_composition × fixed_pct`:
    ```python
    # At level_1 (15% fixed):
-   ZMMK.TO → 15% × 0.50 = 7.5%
-   XSH.TO  → 15% × 0.25 = 3.75%
-   XIGS.TO → 15% × 0.25 = 3.75%
+   ZMMK.TO → 15% × 50% = 7.5%
+   XSH.TO  → 15% × 25% = 3.75%
+   XIGS.TO → 15% × 25% = 3.75%
    ```
 
 2. **Equity targets** are scaled proportionally to fill the remaining space:
@@ -275,7 +275,6 @@ Say you want 74% of your portfolio in "S&P 500 exposure" — split between a Can
 # In settings.yaml:
 fx_target_rules:
   sp500_split:
-    enabled: true
     cad_symbol: VSP.TO
     usd_symbol: IVV
     total_target_pct: 74.0
