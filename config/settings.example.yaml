@@ -58,7 +58,7 @@ norberts_gambit_fee_cad: 10.49
 # from a Reference High. Deploys fixed-income assets into equities during
 # drawdowns, and rebuilds the fixed position on recovery.
 #
-# fixed_composition ratios should sum to 1.0 — they define how the fixed
+# fixed_composition percentages should sum to 100 — they define how the fixed
 # allocation is split across instruments regardless of the total fixed %.
 #
 # deploy_thresholds trigger moving INTO equities (on the way down).
@@ -68,9 +68,9 @@ tactical_deployment:
   enabled: false
   baseline_equity_pct: 80.0
   fixed_composition:
-    ZMMK.TO: 0.50    # Money market
-    XSH.TO: 0.25     # Canadian short-term corporate bonds
-    XIGS.TO: 0.25    # US short-term corporate bonds
+    ZMMK.TO: 50.0    # Money market
+    XSH.TO: 25.0     # Canadian short-term corporate bonds
+    XIGS.TO: 25.0    # US short-term corporate bonds
   deploy_thresholds:
     - { drawdown_pct: -10.0, fixed_pct: 15.0 }
     - { drawdown_pct: -20.0, fixed_pct: 10.0 }

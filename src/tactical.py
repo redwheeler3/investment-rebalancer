@@ -37,7 +37,7 @@ class TacticalConfig:
 
     enabled: bool
     baseline_equity_pct: float
-    fixed_composition: dict[str, float]  # symbol → ratio (sums to 1.0)
+    fixed_composition: dict[str, float]  # symbol → ratio (sums to 1.0, parsed from %)
     deploy_thresholds: list[dict]  # sorted by drawdown_pct descending (least negative first)
     recovery_thresholds: list[dict]  # sorted by drawdown_pct ascending (most negative first)
 
@@ -134,7 +134,7 @@ def parse_tactical_config(raw: dict) -> TacticalConfig | None:
     if not fixed_composition:
         return None
 
-    # Normalize ratios to sum to 1.0
+    # Normalize to ratios summing to 1.0 (config uses percentages summing to 100)
     total_ratio = sum(fixed_composition.values())
     if total_ratio > 0 and abs(total_ratio - 1.0) > 0.001:
         fixed_composition = {

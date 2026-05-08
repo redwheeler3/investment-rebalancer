@@ -84,9 +84,9 @@ class TestParseConfig:
             "enabled": True,
             "baseline_equity_pct": 80.0,
             "fixed_composition": {
-                "ZMMK.TO": 0.50,
-                "XSH.TO": 0.25,
-                "XIGS.TO": 0.25,
+                "ZMMK.TO": 50.0,
+                "XSH.TO": 25.0,
+                "XIGS.TO": 25.0,
             },
             "deploy_thresholds": [
                 {"drawdown_pct": -10.0, "fixed_pct": 15.0},
