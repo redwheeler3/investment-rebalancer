@@ -402,12 +402,7 @@ def display_year_to_date_chart(history_points: list, console_height: int | None 
                     xi = prev_x + step
                     yi = round(prev_y + ((y - prev_y) * step / dx))
                     if grid[yi][xi] == " ":
-                        if yi == prev_y == y:
-                            grid[yi][xi] = "-"
-                        elif y < prev_y:
-                            grid[yi][xi] = "/"
-                        else:
-                            grid[yi][xi] = "\\"
+                        grid[yi][xi] = fill_char
 
         grid[y][x] = fill_char
         previous_plot = (x, y)

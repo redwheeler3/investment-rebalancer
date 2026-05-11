@@ -47,7 +47,10 @@ def _get_dlr_quote(client, symbol: str) -> tuple[float, float]:
             quotes = client.get_quote([r["symbolId"]])
             if quotes:
                 q = quotes[0]
-                return float(q.get("bidPrice") or 0), float(q.get("askPrice") or 0)
+                bid = float(q.get("bidPrice") or 0)
+                ask = float(q.get("askPrice") or 0)
+                last = float(q.get("lastTradePrice") or 0)
+                return bid or last, ask or last
             break
     return 0.0, 0.0
 
