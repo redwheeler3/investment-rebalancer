@@ -287,7 +287,7 @@ def fund_buy(self, account_number, currency, cost_native, dlr_quotes=None) -> bo
 
 ---
 
-## Cash Raising: Displacement Sells (`_raise_cash_in_account`)
+## Cash Raising: Funding Sells (`_raise_cash_in_account`)
 
 When an account wants to buy IVV (USD) but has no USD and no CAD to convert, the planner can sell overweight *same-currency* holdings in that account:
 
@@ -334,7 +334,7 @@ for _drift_pct, symbol, bid_price, max_sellable in candidates:
         break  # We have enough
 
     sell_qty = min(max_sellable, ceil(shortfall / bid_price))
-    # Create "Displacement sell" trade...
+    # Create "Funding sell" trade...
 ```
 
 ---
@@ -646,7 +646,7 @@ Each `TradeRecommendation` carries a `note` string displayed in the output. Here
 | Note | When | Example |
 |------|------|---------|
 | `Overweight sell` | Layer 1: Symbol drift exceeds threshold, selling to reduce allocation | SELL 691 VSP.TO — portfolio has 55.3% vs 53% target |
-| `Displacement sell` | Cash raising: Selling an overweight holding in a specific account to fund a buy in that same account | Account holds XIGS.TO (overweight) and IVV (underweight) but no USD cash — sell XIGS.TO to fund IVV |
+| `Funding sell` | Cash raising: Selling an overweight holding in a specific account to fund a buy in that same account | Account holds XIGS.TO (overweight) and IVV (underweight) but no USD cash — sell XIGS.TO to fund IVV |
 
 ### Buy Notes
 
@@ -720,7 +720,7 @@ Here's what happens for a typical run with VSP.TO overweight and IVV underweight
 
 ## Real-World Scenarios
 
-These scenarios demonstrate how the planner handles complex situations that arise in multi-account, multi-currency portfolios. They showcase the interplay between account constraints, currency conversion, displacement sells, and iterative convergence.
+These scenarios demonstrate how the planner handles complex situations that arise in multi-account, multi-currency portfolios. They showcase the interplay between account constraints, currency conversion, funding sells, and iterative convergence.
 
 ---
 
@@ -857,7 +857,7 @@ Final result:
 
 ---
 
-### Scenario 2: Displacement Sell Creates Cross-Account Rebalancing
+### Scenario 2: Funding Sell Creates Cross-Account Rebalancing
 
 **Setup:** VUN.TO is slightly overweight (+1.5%) and QQQ is underweight (-1.8%). Account "Bob Margin" holds both. The planner sells VUN.TO in Bob's account and buys QQQ there — but this makes VUN.TO go underweight across the household. VUN.TO is then bought in a different account.
 
@@ -934,7 +934,7 @@ Final trades presented to user:
 
 ### Scenario 3: Multi-Account Cascade — One Sell Triggers a Chain Reaction
 
-**Setup:** A portfolio with three accounts where a single overweight position triggers trades across all accounts through the displacement mechanism.
+**Setup:** A portfolio with three accounts where a single overweight position triggers trades across all accounts through the funding-sell mechanism.
 
 **What the planner does:**
 
@@ -1132,7 +1132,7 @@ Post-trade planning (fx_conversions.py):
 | Scenario | Primary Rules Exercised |
 |----------|------------------------|
 | 1. Large cash deposit (single USD stock) | Rule 5 ("Only buy symbols that already exist in the account"), Rule 7 ("Allow account-constrained cash deployment, then clean up globally"), Rule 4 ("Minimize free cash whenever practical") |
-| 2. Displacement sell cascade | Rule 2 ("Sell overweight positions and buy underweight positions"), Rule 5 ("Only buy symbols that already exist in the account"), Rule 8 ("Avoid obviously wasteful churn") |
+| 2. Funding sell cascade | Rule 2 ("Sell overweight positions and buy underweight positions"), Rule 5 ("Only buy symbols that already exist in the account"), Rule 8 ("Avoid obviously wasteful churn") |
 | 3. Multi-account chain reaction | Rule 1 ("Treat all accounts as one household portfolio"), Rule 5 ("Only buy symbols that already exist in the account"), Rule 6 ("Prefer same-currency deployment before cross-currency deployment") |
 | 4. Best available fallback | Rule 4 ("Minimize free cash whenever practical"), Rule 5 ("Only buy symbols that already exist in the account") |
 | 5. Trade netting | Rule 8 ("Avoid obviously wasteful churn") |
@@ -1156,7 +1156,7 @@ rebalancer.py
 │   ├── _buy_symbol_toward_target() # Single-symbol buy logic
 │   ├── _eligible_buy_accounts()    # Account sorting for buys
 │   ├── _buy_in_account()           # Execute buy + fund it
-│   ├── _raise_cash_in_account()    # Displacement sells for cash
+│   ├── _raise_cash_in_account()    # Funding sells for cash
 │   ├── _deploy_residual_cash()     # Layer 3: spend remaining cash
 │   ├── _account_buyable_candidates()  # Find buyable symbols in an account
 │   ├── _build_cash_minimizing_same_currency_buy()   # Fallback: best available

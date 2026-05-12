@@ -543,7 +543,7 @@ class RebalancePlanner:
                 price=bid_price_native,
                 currency=currency,
                 estimated_value=bid_price_native * sell_qty,
-                note="Displacement sell",
+                note="Funding sell",
             )
             self.ledger.credit_sale(acct.number, currency, trade.estimated_value)
             self.plan.add_trade(trade)

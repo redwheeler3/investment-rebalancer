@@ -153,7 +153,7 @@ class TestNetTrades:
                 symbol="VCN.TO", action="SELL", quantity=50,
                 account_number="11111", account_type="TFSA",
                 owner="Alice", price=50.0, currency="CAD",
-                estimated_value=2500.0, note="Displacement sell",
+                estimated_value=2500.0, note="Funding sell",
             ),
             TradeRecommendation(
                 symbol="VCN.TO", action="BUY", quantity=150,
