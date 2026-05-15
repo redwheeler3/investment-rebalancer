@@ -359,7 +359,7 @@ def run_rebalancer():
 
 def _pull_latest():
     """Pull the latest private state from remote before running locally.
-    Uses --ff-only so it only applies clean fast-forwards; warns and continues on failure."""
+    Uses --ff-only so it only applies clean fast-forwards; exits on failure."""
     state_root = get_state_root()
     console.print(f"  [dim]Syncing private state repo: {state_root}[/dim]")
     try:
@@ -373,9 +373,16 @@ def _pull_latest():
             else:
                 console.print("  [green]✓[/green] [dim]Pulled latest changes from remote[/dim]")
         else:
-            console.print("  [yellow]⚠ Could not sync with remote — running with local data[/yellow]")
+            stderr = result.stderr.strip()
+            console.print(
+                "[red]ERROR: Could not pull latest private state.\n"
+                "  Your working tree may have uncommitted changes, or the remote is unreachable.\n"
+                f"  git: {stderr}[/red]"
+            )
+            sys.exit(1)
     except FileNotFoundError:
-        console.print("  [dim]git not found — skipping remote sync[/dim]")
+        console.print("[red]ERROR: git is not installed or not in PATH.[/red]")
+        sys.exit(1)
 
 
 def _push_synced_files():
