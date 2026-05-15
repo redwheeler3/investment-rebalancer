@@ -9,6 +9,7 @@ Usage:
     python main.py --sync   # Scheduled sync mode: refresh tokens + snapshot portfolio (used by GitHub Actions)
 """
 
+import os
 import subprocess
 import sys
 import yaml
@@ -122,14 +123,17 @@ def run_scheduled_sync():
     Refreshes all Questrade OAuth tokens (single rotation per token file)
     and snapshots the current portfolio value for ATH tracking.
     Also evaluates tactical regime transitions when tactical deployment is configured.
+    Computes and outputs portfolio accuracy for drift alerting.
     GitHub Actions handles committing and pushing the updated files.
     """
+    from src.portfolio import build_allocation_snapshot
+
     (
         accounts,
-        _targets,
-        _transient_symbols,
+        targets,
+        transient_symbols,
         _norberts_gambit_fee_cad,
-        _fx_target_rules,
+        fx_target_rules,
         _drift_trade_threshold_pct,
         tactical_config,
     ) = load_config()
@@ -158,6 +162,7 @@ def run_scheduled_sync():
         sys.exit(1)
 
     # Snapshot portfolio value for ATH tracking (best-effort)
+    accuracy = None
     if clients:
         try:
             usd_to_cad_rate = get_usd_to_cad_rate(client=clients[0])
@@ -181,8 +186,30 @@ def run_scheduled_sync():
                     )
                 else:
                     print(f"  ✓ Tactical regime: {posture.regime}")
+
+            # Compute accuracy for drift alerting
+            resolved_targets = resolve_targets(targets, fx_target_rules, usd_to_cad_rate)
+            if tactical_config:
+                resolved_targets = resolve_tactical_targets(
+                    resolved_targets, posture, tactical_config
+                )
+            hidden_symbols = set(
+                s for s in transient_symbols if s in portfolio.holdings
+            )
+            snapshot = build_allocation_snapshot(
+                portfolio, resolved_targets, usd_to_cad_rate,
+                excluded_symbols=hidden_symbols,
+            )
+            accuracy = snapshot.accuracy
+            print(f"  ✓ Accuracy: {accuracy:.1f}%")
         except Exception as e:
             print(f"  ⚠ Could not snapshot portfolio value: {e}")
+
+    # Write accuracy to GitHub Actions output (if running in CI)
+    github_output = os.environ.get("GITHUB_OUTPUT")
+    if github_output and accuracy is not None:
+        with open(github_output, "a") as f:
+            f.write(f"accuracy={accuracy:.1f}\n")
 
     print("\nPortfolio sync complete.")
 
