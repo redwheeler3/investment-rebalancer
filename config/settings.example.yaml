@@ -34,9 +34,9 @@ targets:
 # Remove a rule (or the entire section) to disable it.
 fx_target_rules:
   usd_equity_split:
+    total_target_pct: 20.0
     usd_symbol: IVV
     cad_symbol: XSP.TO
-    total_target_pct: 20.0
     min_usd_to_cad_rate: 1.0
     max_usd_to_cad_rate: 1.5
     target_rounding_step: 1

@@ -278,9 +278,9 @@ Say you want 74% of your portfolio in "S&P 500 exposure" — split between a Can
 # In settings.yaml:
 fx_target_rules:
   sp500_split:
-    cad_symbol: VSP.TO
-    usd_symbol: IVV
     total_target_pct: 74.0
+    usd_symbol: IVV
+    cad_symbol: VSP.TO
     min_usd_to_cad_rate: 1.20
     max_usd_to_cad_rate: 1.50
     target_rounding_step: 0.01
