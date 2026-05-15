@@ -45,6 +45,7 @@ Actions both operate against the same source of truth.
 - **Tolerance-Aware Status Display** — Marks symbols as `OK`, `OVER`, or `UNDER`
 - **Conservative FX Funding** — Uses conservative DLR bid/ask math for Norbert's Gambit sizing
 - **Tactical Defensive Deployment** — Drawdown-based regime system that deploys fixed-income assets into equities during market drops and rebuilds on recovery
+- **Drift & Token Alerting** — GitHub Issues created automatically when accuracy drops below 95% or tokens fail for >48h, auto-closed on recovery
 - **Automatic Portfolio Sync** — Designed to run with GitHub Actions from a private state repo
 
 ---
