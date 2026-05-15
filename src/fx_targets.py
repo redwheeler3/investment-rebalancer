@@ -5,19 +5,19 @@ based on the current exchange rate (configured via fx_target_rules in settings.y
 """
 
 
-def _to_float(rule_name: str, field_name: str, value) -> float:
-    """Convert a config value to float with a clear error message."""
+def _clamp(value: float, minimum: float, maximum: float) -> float:
+    """Clamp a number to an inclusive range."""
+    return max(minimum, min(maximum, value))
+
+
+def _parse_float(rule_name: str, field_name: str, value) -> float:
+    """Parse a config value as float, raising a clear error on failure."""
     try:
         return float(value)
     except (TypeError, ValueError) as exc:
         raise ValueError(
             f"fx_target_rules.{rule_name}.{field_name} must be a number"
         ) from exc
-
-
-def _clamp(value: float, minimum: float, maximum: float) -> float:
-    """Clamp a number to an inclusive range."""
-    return max(minimum, min(maximum, value))
 
 
 def _resolve_fx_split_rule(rule_name: str, rule: dict, targets: dict, usd_to_cad_rate: float) -> None:
@@ -38,14 +38,10 @@ def _resolve_fx_split_rule(rule_name: str, rule: dict, targets: dict, usd_to_cad
             f"fx_target_rules.{rule_name} manages {usd_symbol}/{cad_symbol}, so those symbols must not also appear in targets"
         )
 
-    total_target_pct = _to_float(rule_name, "total_target_pct", rule.get("total_target_pct"))
-    min_rate = _to_float(rule_name, "min_usd_to_cad_rate", rule.get("min_usd_to_cad_rate"))
-    max_rate = _to_float(rule_name, "max_usd_to_cad_rate", rule.get("max_usd_to_cad_rate"))
-    rounding_step = _to_float(
-        rule_name,
-        "target_rounding_step",
-        rule.get("target_rounding_step", 1),
-    )
+    total_target_pct = _parse_float(rule_name, "total_target_pct", rule.get("total_target_pct"))
+    min_rate = _parse_float(rule_name, "min_usd_to_cad_rate", rule.get("min_usd_to_cad_rate"))
+    max_rate = _parse_float(rule_name, "max_usd_to_cad_rate", rule.get("max_usd_to_cad_rate"))
+    rounding_step = _parse_float(rule_name, "target_rounding_step", rule.get("target_rounding_step", 1))
 
     if total_target_pct < 0:
         raise ValueError(f"fx_target_rules.{rule_name}.total_target_pct must be >= 0")
