@@ -447,7 +447,11 @@ class RebalancePlanner:
             dlr_quotes=self.dlr_quotes,
         )
         if buying_power < ask_price_native:
-            self._raise_cash_in_account(acct, symbol, currency, remaining_shares * ask_price_native)
+            self._raise_cash_in_account(
+                acct, symbol, currency,
+                target_native=remaining_shares * ask_price_native,
+                min_useful_native=ask_price_native,
+            )
             buying_power = self.ledger.total_buying_power(
                 acct.number,
                 currency,
@@ -481,13 +485,23 @@ class RebalancePlanner:
         ))
         return quantity
 
-    def _raise_cash_in_account(self, acct, buy_symbol: str, currency: str, minimum_needed_native: float) -> None:
+    def _raise_cash_in_account(
+        self,
+        acct,
+        buy_symbol: str,
+        currency: str,
+        target_native: float,
+        min_useful_native: float | None = None,
+    ) -> None:
         """Raise same-currency cash by selling other overweight holdings in the account.
 
-        Only commits funding sells if the total proceeds will actually be enough
-        to reach the minimum_needed_native threshold. This prevents orphaned sells
-        that generate cash but not enough to buy a single share of the target.
+        Tries to raise up to target_native by selling overweight positions.
+        Only commits funding sells if the total proceeds will be at least
+        min_useful_native (defaults to target_native). This prevents orphaned
+        sells that generate cash but not enough to buy a single share of the target.
         """
+        if min_useful_native is None:
+            min_useful_native = target_native
         drifts = self.plan.drifts()
         candidates = []
 
@@ -532,7 +546,7 @@ class RebalancePlanner:
         planned_sells: list[tuple[str, int, float, float]] = []
 
         for _drift_pct, symbol, bid_price_native, max_sellable in candidates:
-            shortfall = minimum_needed_native - simulated_cash
+            shortfall = target_native - simulated_cash
             if shortfall <= 0:
                 break
 
@@ -544,8 +558,8 @@ class RebalancePlanner:
             simulated_cash += proceeds
             planned_sells.append((symbol, sell_qty, bid_price_native, proceeds))
 
-        # Only commit if we can actually reach the minimum
-        if simulated_cash < minimum_needed_native:
+        # Only commit if we can raise at least enough for one share
+        if simulated_cash < min_useful_native:
             return
 
         for symbol, sell_qty, bid_price_native, proceeds in planned_sells:
