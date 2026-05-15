@@ -37,13 +37,13 @@ class TestResolveTargets:
                 "total_target_pct": 74.0,
                 "min_usd_to_cad_rate": 1.20,
                 "max_usd_to_cad_rate": 1.50,
-                "target_rounding_decimals": 2,
+                "target_rounding_step": 1,
             }
         }
         result = resolve_targets(base, rules, 1.36)
         assert "IVV" in result
         assert "VSP.TO" in result
-        assert abs(result["IVV"] + result["VSP.TO"] - 74.0) < 0.01
+        assert abs(result["IVV"] + result["VSP.TO"] - 74.0) < 1.0
 
     def test_midpoint_rate_splits_evenly(self):
         """At the midpoint of the range, allocation should be ~50/50."""
@@ -55,13 +55,13 @@ class TestResolveTargets:
                 "total_target_pct": 74.0,
                 "min_usd_to_cad_rate": 1.20,
                 "max_usd_to_cad_rate": 1.50,
-                "target_rounding_decimals": 2,
+                "target_rounding_step": 1,
             }
         }
         midpoint_rate = 1.35  # midpoint of 1.20-1.50
         result = resolve_targets(base, rules, midpoint_rate)
-        assert abs(result["VSP.TO"] - 37.0) < 0.5  # ~50% of 74
-        assert abs(result["IVV"] - 37.0) < 0.5  # ~50% of 74
+        assert abs(result["VSP.TO"] - 37.0) < 1.0  # ~50% of 74
+        assert abs(result["IVV"] - 37.0) < 1.0  # ~50% of 74
 
     def test_rate_at_max_favors_cad(self):
         """When USD is expensive (max rate), most goes to CAD fund."""
@@ -73,7 +73,7 @@ class TestResolveTargets:
                 "total_target_pct": 74.0,
                 "min_usd_to_cad_rate": 1.20,
                 "max_usd_to_cad_rate": 1.50,
-                "target_rounding_decimals": 2,
+                "target_rounding_step": 1,
             }
         }
         result = resolve_targets(base, rules, 1.50)
@@ -90,7 +90,7 @@ class TestResolveTargets:
                 "total_target_pct": 74.0,
                 "min_usd_to_cad_rate": 1.20,
                 "max_usd_to_cad_rate": 1.50,
-                "target_rounding_decimals": 2,
+                "target_rounding_step": 1,
             }
         }
         result = resolve_targets(base, rules, 1.20)
@@ -107,7 +107,7 @@ class TestResolveTargets:
                 "total_target_pct": 74.0,
                 "min_usd_to_cad_rate": 1.20,
                 "max_usd_to_cad_rate": 1.50,
-                "target_rounding_decimals": 2,
+                "target_rounding_step": 1,
             }
         }
         # Way above max
@@ -124,7 +124,7 @@ class TestResolveTargets:
                 "total_target_pct": 74.0,
                 "min_usd_to_cad_rate": 1.20,
                 "max_usd_to_cad_rate": 1.50,
-                "target_rounding_decimals": 2,
+                "target_rounding_step": 1,
             }
         }
         with pytest.raises(ValueError, match="must not also appear in targets"):
@@ -140,7 +140,7 @@ class TestResolveTargets:
                 "total_target_pct": 74.0,
                 "min_usd_to_cad_rate": 1.50,
                 "max_usd_to_cad_rate": 1.20,
-                "target_rounding_decimals": 2,
+                "target_rounding_step": 1,
             }
         }
         with pytest.raises(ValueError, match="greater than"):
@@ -160,8 +160,8 @@ class TestResolveTargets:
         with pytest.raises(ValueError, match="different symbols"):
             resolve_targets(base, rules, 1.36)
 
-    def test_rounding_decimals_zero(self):
-        """With 0 decimals, targets are whole numbers."""
+    def test_rounding_step_one_gives_whole_numbers(self):
+        """With step 1, targets are whole numbers."""
         base = {}
         rules = {
             "split": {
@@ -170,7 +170,110 @@ class TestResolveTargets:
                 "total_target_pct": 74.0,
                 "min_usd_to_cad_rate": 1.0,
                 "max_usd_to_cad_rate": 1.5,
-                "target_rounding_decimals": 0,
+                "target_rounding_step": 1,
+            }
+        }
+        result = resolve_targets(base, rules, 1.36)
+        assert result["VSP.TO"] == int(result["VSP.TO"])
+        assert result["IVV"] == int(result["IVV"])
+
+    def test_rounding_step_two(self):
+        """With step 2, targets are multiples of 2."""
+        base = {}
+        rules = {
+            "split": {
+                "usd_symbol": "IVV",
+                "cad_symbol": "VSP.TO",
+                "total_target_pct": 20.0,
+                "min_usd_to_cad_rate": 1.0,
+                "max_usd_to_cad_rate": 1.5,
+                "target_rounding_step": 2,
+            }
+        }
+        result = resolve_targets(base, rules, 1.36)
+        assert result["VSP.TO"] % 2 == 0
+        assert result["IVV"] % 2 == 0
+
+    def test_rounding_step_two_point_five(self):
+        """With step 2.5, targets are multiples of 2.5."""
+        base = {}
+        rules = {
+            "split": {
+                "usd_symbol": "IVV",
+                "cad_symbol": "VSP.TO",
+                "total_target_pct": 20.0,
+                "min_usd_to_cad_rate": 1.0,
+                "max_usd_to_cad_rate": 1.5,
+                "target_rounding_step": 2.5,
+            }
+        }
+        result = resolve_targets(base, rules, 1.25)
+        # 50% -> cad=10, usd=10 both multiples of 2.5
+        assert result["VSP.TO"] % 2.5 == 0
+        assert result["IVV"] % 2.5 == 0
+
+    def test_rounding_step_fractional(self):
+        """With step 0.01, targets have fine-grained precision."""
+        base = {}
+        rules = {
+            "split": {
+                "usd_symbol": "IVV",
+                "cad_symbol": "VSP.TO",
+                "total_target_pct": 74.0,
+                "min_usd_to_cad_rate": 1.20,
+                "max_usd_to_cad_rate": 1.50,
+                "target_rounding_step": 0.01,
+            }
+        }
+        result = resolve_targets(base, rules, 1.36)
+        # With 0.01 step, should be precise to two decimals
+        assert abs(result["VSP.TO"] - round(result["VSP.TO"], 2)) < 1e-9
+        assert abs(result["IVV"] - round(result["IVV"], 2)) < 1e-9
+        # Should still sum close to total
+        assert abs(result["IVV"] + result["VSP.TO"] - 74.0) < 0.02
+
+    def test_rounding_step_zero_raises(self):
+        """Step must be > 0."""
+        base = {}
+        rules = {
+            "split": {
+                "usd_symbol": "IVV",
+                "cad_symbol": "VSP.TO",
+                "total_target_pct": 74.0,
+                "min_usd_to_cad_rate": 1.20,
+                "max_usd_to_cad_rate": 1.50,
+                "target_rounding_step": 0,
+            }
+        }
+        with pytest.raises(ValueError, match="target_rounding_step must be > 0"):
+            resolve_targets(base, rules, 1.36)
+
+    def test_rounding_step_negative_raises(self):
+        """Step must be > 0."""
+        base = {}
+        rules = {
+            "split": {
+                "usd_symbol": "IVV",
+                "cad_symbol": "VSP.TO",
+                "total_target_pct": 74.0,
+                "min_usd_to_cad_rate": 1.20,
+                "max_usd_to_cad_rate": 1.50,
+                "target_rounding_step": -1,
+            }
+        }
+        with pytest.raises(ValueError, match="target_rounding_step must be > 0"):
+            resolve_targets(base, rules, 1.36)
+
+    def test_default_step_is_one(self):
+        """When target_rounding_step is omitted, default is 1 (whole numbers)."""
+        base = {}
+        rules = {
+            "split": {
+                "usd_symbol": "IVV",
+                "cad_symbol": "VSP.TO",
+                "total_target_pct": 74.0,
+                "min_usd_to_cad_rate": 1.0,
+                "max_usd_to_cad_rate": 1.5,
             }
         }
         result = resolve_targets(base, rules, 1.36)

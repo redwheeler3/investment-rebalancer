@@ -251,8 +251,8 @@ This is one of the coolest parts. Instead of hardcoding "21% IVV, 53% VSP.TO", y
 # fx_targets.py
 clamped_rate = _clamp(usd_to_cad_rate, min_rate, max_rate)
 cad_fraction = (clamped_rate - min_rate) / (max_rate - min_rate)
-cad_target_pct = round(total_target_pct * cad_fraction, rounding_decimals)
-usd_target_pct = round(total_target_pct - cad_target_pct, rounding_decimals)
+cad_target_pct = round(total_target_pct * cad_fraction / rounding_step) * rounding_step
+usd_target_pct = round((total_target_pct - cad_target_pct) / rounding_step) * rounding_step
 ```
 
 When USD is expensive (rate near max), more allocation goes to the CAD fund. When USD is cheap, more goes to the USD fund. The targets dynamically adapt to make currency conversion worthwhile.
@@ -280,7 +280,7 @@ fx_target_rules:
     total_target_pct: 74.0
     min_usd_to_cad_rate: 1.20
     max_usd_to_cad_rate: 1.50
-    target_rounding_decimals: 2
+    target_rounding_step: 0.01
 ```
 
 At runtime with USD/CAD = 1.36:

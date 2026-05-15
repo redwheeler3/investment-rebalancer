@@ -15,16 +15,6 @@ def _to_float(rule_name: str, field_name: str, value) -> float:
         ) from exc
 
 
-def _to_int(rule_name: str, field_name: str, value) -> int:
-    """Convert a config value to int with a clear error message."""
-    try:
-        return int(value)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(
-            f"fx_target_rules.{rule_name}.{field_name} must be an integer"
-        ) from exc
-
-
 def _clamp(value: float, minimum: float, maximum: float) -> float:
     """Clamp a number to an inclusive range."""
     return max(minimum, min(maximum, value))
@@ -51,17 +41,17 @@ def _resolve_fx_split_rule(rule_name: str, rule: dict, targets: dict, usd_to_cad
     total_target_pct = _to_float(rule_name, "total_target_pct", rule.get("total_target_pct"))
     min_rate = _to_float(rule_name, "min_usd_to_cad_rate", rule.get("min_usd_to_cad_rate"))
     max_rate = _to_float(rule_name, "max_usd_to_cad_rate", rule.get("max_usd_to_cad_rate"))
-    rounding_decimals = _to_int(
+    rounding_step = _to_float(
         rule_name,
-        "target_rounding_decimals",
-        rule.get("target_rounding_decimals", 2),
+        "target_rounding_step",
+        rule.get("target_rounding_step", 1),
     )
 
     if total_target_pct < 0:
         raise ValueError(f"fx_target_rules.{rule_name}.total_target_pct must be >= 0")
-    if rounding_decimals < 0:
+    if rounding_step <= 0:
         raise ValueError(
-            f"fx_target_rules.{rule_name}.target_rounding_decimals must be >= 0"
+            f"fx_target_rules.{rule_name}.target_rounding_step must be > 0"
         )
     if max_rate <= min_rate:
         raise ValueError(
@@ -70,8 +60,8 @@ def _resolve_fx_split_rule(rule_name: str, rule: dict, targets: dict, usd_to_cad
 
     clamped_rate = _clamp(usd_to_cad_rate, min_rate, max_rate)
     cad_fraction = (clamped_rate - min_rate) / (max_rate - min_rate)
-    cad_target_pct = round(total_target_pct * cad_fraction, rounding_decimals)
-    usd_target_pct = round(total_target_pct - cad_target_pct, rounding_decimals)
+    cad_target_pct = round(total_target_pct * cad_fraction / rounding_step) * rounding_step
+    usd_target_pct = round((total_target_pct - cad_target_pct) / rounding_step) * rounding_step
 
     targets[usd_symbol] = usd_target_pct
     targets[cad_symbol] = cad_target_pct

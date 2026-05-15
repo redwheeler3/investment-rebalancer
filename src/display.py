@@ -70,6 +70,7 @@ def _partition_symbols(allocations: dict, targets: dict, drifts: dict):
     stocks = sorted(
         [s for s in all_symbols if s not in _CASH_SYMBOLS],
         key=lambda s: drifts.get(s, 0.0),
+        reverse=True,
     )
     cash = sorted(s for s in all_symbols if s in _CASH_SYMBOLS)
     return stocks, cash
