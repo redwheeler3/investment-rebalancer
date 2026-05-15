@@ -35,7 +35,7 @@ REGIMES = ("baseline", "level_1", "level_2", "level_3")
 class TacticalConfig:
     """Tactical deployment configuration from settings.yaml."""
 
-    baseline_equity_pct: float
+    baseline_fixed_pct: float
     fixed_composition: dict[str, float]  # symbol → ratio (sums to 1.0, parsed from %)
     deploy_thresholds: list[dict]  # sorted by drawdown_pct descending (least negative first)
     recovery_thresholds: list[dict]  # sorted by drawdown_pct ascending (most negative first)
@@ -123,7 +123,7 @@ def parse_tactical_config(raw: dict) -> TacticalConfig | None:
     if not raw:
         return None
 
-    baseline_equity_pct = float(raw.get("baseline_equity_pct", 80.0))
+    baseline_fixed_pct = float(raw.get("baseline_fixed_pct", 20.0))
 
     # Parse fixed composition ratios
     fixed_composition = {}
@@ -160,7 +160,7 @@ def parse_tactical_config(raw: dict) -> TacticalConfig | None:
     recovery_thresholds.sort(key=lambda t: t["drawdown_pct"])
 
     return TacticalConfig(
-        baseline_equity_pct=baseline_equity_pct,
+        baseline_fixed_pct=baseline_fixed_pct,
         fixed_composition=fixed_composition,
         deploy_thresholds=deploy_thresholds,
         recovery_thresholds=recovery_thresholds,
@@ -174,7 +174,7 @@ def parse_tactical_config(raw: dict) -> TacticalConfig | None:
 
 def _fixed_pct_for_regime(regime: str, config: TacticalConfig) -> float:
     """Return the fixed-income percentage for a given regime."""
-    baseline_fixed = 100.0 - config.baseline_equity_pct
+    baseline_fixed = config.baseline_fixed_pct
 
     if regime == "baseline":
         return baseline_fixed
@@ -242,7 +242,7 @@ def _determine_regime(
 
 def _regime_for_fixed_pct(fixed_pct: float, config: TacticalConfig) -> str | None:
     """Map a fixed_pct value to its corresponding regime name."""
-    baseline_fixed = 100.0 - config.baseline_equity_pct
+    baseline_fixed = config.baseline_fixed_pct
 
     if abs(fixed_pct - baseline_fixed) < 0.01:
         return "baseline"

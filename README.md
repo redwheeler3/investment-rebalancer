@@ -636,7 +636,7 @@ Add a `tactical_deployment` section to `config/settings.yaml`:
 
 ```yaml
 tactical_deployment:
-  baseline_equity_pct: 80.0
+  baseline_fixed_pct: 20.0
   fixed_composition:
     ZMMK.TO: 50.0
     XSH.TO: 25.0

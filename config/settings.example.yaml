@@ -1,6 +1,6 @@
 # Example target allocation percentages for a generic combined portfolio.
 # When tactical deployment is active, static + FX-derived equity targets
-# should sum to baseline_equity_pct (the fixed portion is managed by
+# should sum to (100% - baseline_fixed_pct) (the fixed portion is managed by
 # tactical). Without tactical, they should sum to 100%.
 # Cash targets use currency codes (CAD, USD).
 #
@@ -41,14 +41,6 @@ fx_target_rules:
     max_usd_to_cad_rate: 1.5
     target_rounding_step: 1
 
-# Transient symbols — temporarily excluded from rebalancing.
-transient_symbols:
-  - DLR.TO
-  - DLR.U.TO
-
-# Trading fee for Norbert's Gambit: $9.99 commission + 5% GST.
-norberts_gambit_fee_cad: 10.49
-
 # Tactical defensive deployment.
 # Dynamically shifts the fixed/equity allocation based on portfolio drawdown
 # from a Reference High. Deploys fixed-income assets into equities during
@@ -61,7 +53,7 @@ norberts_gambit_fee_cad: 10.49
 # recovery_thresholds trigger rebuilding fixed position (on the way up).
 # Both use drawdown_pct relative to the Reference High.
 tactical_deployment:
-  baseline_equity_pct: 80.0
+  baseline_fixed_pct: 20.0
   fixed_composition:
     ZMMK.TO: 50.0    # Money market
     XSH.TO: 25.0     # Canadian short-term corporate bonds
@@ -77,3 +69,11 @@ tactical_deployment:
 
 # Only generate trades for symbols whose absolute drift is at least this %.
 drift_trade_threshold_pct: 0.5
+
+# Transient symbols — temporarily excluded from rebalancing.
+transient_symbols:
+  - DLR.TO
+  - DLR.U.TO
+
+# Trading fee for Norbert's Gambit: $9.99 commission + 5% GST.
+norberts_gambit_fee_cad: 10.49
