@@ -68,6 +68,35 @@ jobs:
           git commit -m "🔄 Auto-sync tokens and portfolio history [skip ci]"
           git push
 
+      - name: Auto-close token alert on recovery
+        if: success()
+        uses: actions/github-script@v8
+        with:
+          script: |
+            const issues = await github.rest.issues.listForRepo({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              labels: 'token-refresh',
+              state: 'open',
+            });
+
+            for (const issue of issues.data) {
+              await github.rest.issues.update({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                state: 'closed',
+                state_reason: 'completed',
+              });
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: issue.number,
+                body: `✅ Token refresh recovered successfully. Auto-closing.`,
+              });
+              console.log(`Closed token-refresh issue #${issue.number}`);
+            }
+
       - name: Alert on prolonged failure (>48h)
         if: failure()
         uses: actions/github-script@v8
