@@ -447,7 +447,7 @@ class RebalancePlanner:
             dlr_quotes=self.dlr_quotes,
         )
         if buying_power < ask_price_native:
-            self._raise_cash_in_account(acct, symbol, currency, ask_price_native)
+            self._raise_cash_in_account(acct, symbol, currency, remaining_shares * ask_price_native)
             buying_power = self.ledger.total_buying_power(
                 acct.number,
                 currency,
