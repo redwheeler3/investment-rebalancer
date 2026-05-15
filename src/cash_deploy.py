@@ -3,8 +3,8 @@
 Builds buy trades from available cash after the planner's main sell/buy passes:
 
 - **underweight_candidates** — find account-local underweight holdings in a currency
-- **build_same_currency_buy** — build one buy trade funded by same-currency cash
-- **build_cross_currency_buy** — build one buy trade funded by cross-currency conversion
+- **build_underweight_buy** — build one buy trade funded by available cash
+  (handles both same-currency and cross-currency depending on parameters)
 """
 
 import math
@@ -58,70 +58,7 @@ def underweight_candidates(
     return candidates
 
 
-def build_same_currency_buy(
-    acct,
-    cash_by_account: dict[str, dict[str, float]],
-    holdings: dict,
-    drifts: dict,
-    hidden_symbols: set,
-    total_value_cad: float,
-    usd_to_cad_rate: float,
-    currency: str,
-    underweight_threshold_pct: float,
-    note: str = "",
-) -> TradeRecommendation | None:
-    """Build one same-currency buy and deduct its cash cost if possible."""
-    acct_cash = cash_by_account.setdefault(acct.number, {"CAD": 0.0, "USD": 0.0})
-    cash_native = acct_cash.get(currency, 0.0)
-    if cash_native <= 0:
-        return None
-
-    candidates = underweight_candidates(
-        acct,
-        holdings,
-        drifts,
-        hidden_symbols,
-        currency,
-        underweight_threshold_pct,
-    )
-    if not candidates:
-        return None
-
-    symbol, drift_pct, ask_price_native = candidates[0]
-    affordable_shares = int(math.floor(cash_native / ask_price_native))
-    if affordable_shares <= 0:
-        return None
-
-    shares = min(
-        _shares_to_close_underweight(
-            total_value_cad,
-            drift_pct,
-            ask_price_native,
-            currency,
-            usd_to_cad_rate,
-        ),
-        affordable_shares,
-    )
-    if shares <= 0:
-        return None
-
-    cost_native = shares * ask_price_native
-    acct_cash[currency] -= cost_native
-    return TradeRecommendation(
-        symbol=symbol,
-        action="BUY",
-        quantity=shares,
-        account_number=acct.number,
-        account_type=acct.account_type,
-        owner=acct.owner,
-        price=ask_price_native,
-        currency=currency,
-        estimated_value=cost_native,
-        note=note,
-    )
-
-
-def build_cross_currency_buy(
+def build_underweight_buy(
     acct,
     cash_by_account: dict[str, dict[str, float]],
     holdings: dict,
@@ -130,77 +67,99 @@ def build_cross_currency_buy(
     total_value_cad: float,
     usd_to_cad_rate: float,
     source_currency: str,
-    fee_cad: float,
+    buy_currency: str,
     underweight_threshold_pct: float,
-    note: str,
+    fee_cad: float = 0.0,
+    note: str = "",
     dlr_quotes=None,
 ) -> TradeRecommendation | None:
-    """Build one cross-currency buy and deduct its conservative cash cost."""
+    """Build one buy trade funded by available cash.
+
+    Handles both same-currency (source_currency == buy_currency) and
+    cross-currency (source_currency != buy_currency) cases. Iterates
+    through underweight candidates so that if the most underweight symbol
+    is too expensive, a cheaper alternative is used.
+    """
     acct_cash = cash_by_account.setdefault(acct.number, {"CAD": 0.0, "USD": 0.0})
-    source_cash_native = acct_cash.get(source_currency, 0.0)
-    if source_cash_native <= 0:
+    requires_fx = source_currency != buy_currency
+
+    # Compute buying power
+    source_cash = acct_cash.get(source_currency, 0.0)
+    if source_cash <= 0:
         return None
 
-    target_currency = "USD" if source_currency == "CAD" else "CAD"
+    if requires_fx:
+        buying_power = cross_currency_buying_power(
+            source_cash,
+            source_currency,
+            usd_to_cad_rate,
+            fee_cad,
+            dlr_quotes=dlr_quotes,
+        )
+    else:
+        buying_power = source_cash
+
+    # Find candidates in the buy currency
     candidates = underweight_candidates(
         acct,
         holdings,
         drifts,
         hidden_symbols,
-        target_currency,
+        buy_currency,
         underweight_threshold_pct,
     )
     if not candidates:
         return None
 
-    symbol, drift_pct, ask_price_native = candidates[0]
-    buying_power_native = cross_currency_buying_power(
-        source_cash_native,
-        source_currency,
-        usd_to_cad_rate,
-        fee_cad,
-        dlr_quotes=dlr_quotes,
-    )
-    affordable_shares = int(math.floor(buying_power_native / ask_price_native))
-    if affordable_shares <= 0:
-        return None
+    for symbol, drift_pct, ask_price_native in candidates:
+        affordable_shares = int(math.floor(buying_power / ask_price_native))
+        if affordable_shares <= 0:
+            continue
 
-    shares = min(
-        _shares_to_close_underweight(
-            total_value_cad,
-            drift_pct,
-            ask_price_native,
-            target_currency,
-            usd_to_cad_rate,
-        ),
-        affordable_shares,
-    )
-    if shares <= 0:
-        return None
+        shares = min(
+            _shares_to_close_underweight(
+                total_value_cad,
+                drift_pct,
+                ask_price_native,
+                buy_currency,
+                usd_to_cad_rate,
+            ),
+            affordable_shares,
+        )
+        if shares <= 0:
+            continue
 
-    cost_native = shares * ask_price_native
-    consume_cross_currency_cash(
-        acct_cash,
-        source_currency,
-        target_currency,
-        cost_native,
-        usd_to_cad_rate,
-        fee_cad,
-        dlr_quotes=dlr_quotes,
-    )
-    return TradeRecommendation(
-        symbol=symbol,
-        action="BUY",
-        quantity=shares,
-        account_number=acct.number,
-        account_type=acct.account_type,
-        owner=acct.owner,
-        price=ask_price_native,
-        currency=target_currency,
-        estimated_value=cost_native,
-        note=note,
-        requires_fx=True,
-    )
+        cost_native = shares * ask_price_native
+
+        # Consume cash
+        if requires_fx:
+            consume_cross_currency_cash(
+                acct_cash,
+                source_currency,
+                buy_currency,
+                cost_native,
+                usd_to_cad_rate,
+                fee_cad,
+                dlr_quotes=dlr_quotes,
+            )
+        else:
+            acct_cash[buy_currency] -= cost_native
+
+        return TradeRecommendation(
+            symbol=symbol,
+            action="BUY",
+            quantity=shares,
+            account_number=acct.number,
+            account_type=acct.account_type,
+            owner=acct.owner,
+            price=ask_price_native,
+            currency=buy_currency,
+            estimated_value=cost_native,
+            note=note,
+            requires_fx=requires_fx,
+        )
+
+    return None
 
 
 def _shares_to_close_underweight(

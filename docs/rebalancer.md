@@ -355,7 +355,9 @@ def _deploy_residual_cash(self) -> None:
             # Pass 1: Same-currency buys (no conversion cost)
             for currency in ("CAD", "USD"):
                 while True:
-                    trade = build_same_currency_buy(...)    # From cash_deploy.py
+                    trade = build_underweight_buy(
+                        ..., source_currency=currency, buy_currency=currency, ...
+                    )
                     if trade is None:
                         trade = self._build_cash_minimizing_same_currency_buy(...)
                     if trade is None:
@@ -365,8 +367,11 @@ def _deploy_residual_cash(self) -> None:
 
             # Pass 2: Cross-currency buys (conversion needed)
             for source_currency in ("CAD", "USD"):
+                buy_currency = "USD" if source_currency == "CAD" else "CAD"
                 while True:
-                    trade = build_cross_currency_buy(...)   # From cash_deploy.py
+                    trade = build_underweight_buy(
+                        ..., source_currency=source_currency, buy_currency=buy_currency, ...
+                    )
                     if trade is None:
                         trade = self._build_cash_minimizing_cross_currency_buy(...)
                     if trade is None:
@@ -380,13 +385,11 @@ def _deploy_residual_cash(self) -> None:
 
 ### The fallback chain for each account/currency
 
-1. **`build_same_currency_buy`** (from `cash_deploy.py`) — Buy the most underweight symbol in this account that matches the currency. Caps at the number of shares needed to close the gap.
+1. **`build_underweight_buy`** (from `cash_deploy.py`) — Buy the most underweight symbol in this account that matches the currency. Iterates through candidates if the top pick is too expensive. Caps at the number of shares needed to close the gap. Handles both same-currency (`source_currency == buy_currency`) and cross-currency cases.
 
 2. **`_build_cash_minimizing_same_currency_buy`** — Fallback if no underweight symbols exist. Buys the *least overweight* symbol — the goal is "don't leave cash idle" not "fix drift."
 
-3. **`build_cross_currency_buy`** — Convert other-currency cash and buy the most underweight symbol.
-
-4. **`_build_cash_minimizing_cross_currency_buy`** — Same fallback logic but with conversion.
+3. **`_build_cash_minimizing_cross_currency_buy`** — Same fallback logic but with FX conversion.
 
 ### How `cash_deploy.py` picks candidates
 
@@ -775,8 +778,8 @@ Round 1 — Layer 2 (Buys):
 Round 1 — Layer 3 (Residual Cash):
   acct_A still has ~$86,000 CAD after the QQQ buy
   
-  build_same_currency_buy: No CAD-denominated symbols in this account → skip
-  build_cross_currency_buy: Source=CAD, target=USD
+  build_underweight_buy(source=CAD, buy=CAD): No CAD-denominated symbols → skip
+  build_underweight_buy(source=CAD, buy=USD):
     → QQQ is the only candidate in this account
     → But QQQ is no longer underweight after the 20-share buy!
     → Falls through to _build_cash_minimizing_cross_currency_buy

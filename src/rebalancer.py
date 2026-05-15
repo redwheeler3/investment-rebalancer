@@ -27,10 +27,7 @@ from dataclasses import dataclass, field
 
 from src.fx_math import consume_cross_currency_cash, cross_currency_buying_power, to_cad
 from src.portfolio import get_current_allocations, get_drifts, get_holdings_view, simulate_rebalance
-from src.cash_deploy import (
-    build_cross_currency_buy,
-    build_same_currency_buy,
-)
+from src.cash_deploy import build_underweight_buy
 from src.models import TradeRecommendation
 
 # Maximum optimisation rounds before stopping
@@ -485,7 +482,12 @@ class RebalancePlanner:
         return quantity
 
     def _raise_cash_in_account(self, acct, buy_symbol: str, currency: str, minimum_needed_native: float) -> None:
-        """Raise same-currency cash by selling other overweight holdings in the account."""
+        """Raise same-currency cash by selling other overweight holdings in the account.
+
+        Only commits funding sells if the total proceeds will actually be enough
+        to reach the minimum_needed_native threshold. This prevents orphaned sells
+        that generate cash but not enough to buy a single share of the target.
+        """
         drifts = self.plan.drifts()
         candidates = []
 
@@ -523,9 +525,14 @@ class RebalancePlanner:
             candidates.append((drift_pct, pos.symbol, bid_price_native, max_sellable))
 
         candidates.sort(key=lambda item: item[0], reverse=True)
+
+        # Dry-run: compute planned sells and check if they raise enough cash
+        current_cash = self.ledger.same_currency_buying_power(acct.number, currency)
+        simulated_cash = current_cash
+        planned_sells: list[tuple[str, int, float, float]] = []
+
         for _drift_pct, symbol, bid_price_native, max_sellable in candidates:
-            current_cash = self.ledger.same_currency_buying_power(acct.number, currency)
-            shortfall = minimum_needed_native - current_cash
+            shortfall = minimum_needed_native - simulated_cash
             if shortfall <= 0:
                 break
 
@@ -533,6 +540,15 @@ class RebalancePlanner:
             if sell_qty <= 0:
                 continue
 
+            proceeds = bid_price_native * sell_qty
+            simulated_cash += proceeds
+            planned_sells.append((symbol, sell_qty, bid_price_native, proceeds))
+
+        # Only commit if we can actually reach the minimum
+        if simulated_cash < minimum_needed_native:
+            return
+
+        for symbol, sell_qty, bid_price_native, proceeds in planned_sells:
             trade = TradeRecommendation(
                 symbol=symbol,
                 action="SELL",
@@ -542,7 +558,7 @@ class RebalancePlanner:
                 owner=acct.owner,
                 price=bid_price_native,
                 currency=currency,
-                estimated_value=bid_price_native * sell_qty,
+                estimated_value=proceeds,
                 note="Funding sell",
             )
             self.ledger.credit_sale(acct.number, currency, trade.estimated_value)
@@ -592,87 +608,81 @@ class RebalancePlanner:
         return candidates
 
     def _build_cash_minimizing_same_currency_buy(self, acct, currency: str, drifts: dict[str, float]):
-        """Spend same-currency cash on the best buyable symbol in the account."""
+        """Spend same-currency cash on the best affordable buyable symbol."""
         available_cash = self.ledger.same_currency_buying_power(acct.number, currency)
         if available_cash <= 0:
             return None
 
-        candidates = self._account_buyable_candidates(
-            acct,
-            currency,
-            drifts,
-            underweight_only=False,
-        )
+        candidates = self._account_buyable_candidates(acct, currency, drifts, underweight_only=False)
         if not candidates:
             return None
 
-        _drift_pct, symbol, ask_price_native = candidates[0]
-        quantity = int(math.floor(available_cash / ask_price_native))
-        if quantity <= 0:
-            return None
+        for _drift_pct, symbol, ask_price_native in candidates:
+            quantity = int(math.floor(available_cash / ask_price_native))
+            if quantity <= 0:
+                continue
 
-        cost_native = quantity * ask_price_native
-        self.ledger.balances[acct.number][currency] -= cost_native
-        return TradeRecommendation(
-            symbol=symbol,
-            action="BUY",
-            quantity=quantity,
-            account_number=acct.number,
-            account_type=acct.account_type,
-            owner=acct.owner,
-            price=ask_price_native,
-            currency=currency,
-            estimated_value=cost_native,
-            note="Best available buy",
-        )
+            cost_native = quantity * ask_price_native
+            self.ledger.balances[acct.number][currency] -= cost_native
+            return TradeRecommendation(
+                symbol=symbol,
+                action="BUY",
+                quantity=quantity,
+                account_number=acct.number,
+                account_type=acct.account_type,
+                owner=acct.owner,
+                price=ask_price_native,
+                currency=currency,
+                estimated_value=cost_native,
+                note="Best available buy",
+            )
+
+        return None
 
     def _build_cash_minimizing_cross_currency_buy(self, acct, source_currency: str, drifts: dict[str, float]):
-        """Convert remaining cash and spend it on the best buyable symbol."""
-        target_currency = "USD" if source_currency == "CAD" else "CAD"
-        buying_power = cross_currency_buying_power(
+        """Convert remaining cash and spend it on the best affordable buyable symbol."""
+        buy_currency = "USD" if source_currency == "CAD" else "CAD"
+        available_cash = cross_currency_buying_power(
             self.ledger.cash(acct.number, source_currency),
             source_currency,
             self.usd_to_cad_rate,
             self.fee_cad,
             dlr_quotes=self.dlr_quotes,
         )
-        if buying_power <= 0:
+        if available_cash <= 0:
             return None
 
-        candidates = self._account_buyable_candidates(
-            acct,
-            target_currency,
-            drifts,
-            underweight_only=False,
-        )
+        candidates = self._account_buyable_candidates(acct, buy_currency, drifts, underweight_only=False)
         if not candidates:
             return None
 
-        _drift_pct, symbol, ask_price_native = candidates[0]
-        quantity = int(math.floor(buying_power / ask_price_native))
-        if quantity <= 0:
-            return None
+        for _drift_pct, symbol, ask_price_native in candidates:
+            quantity = int(math.floor(available_cash / ask_price_native))
+            if quantity <= 0:
+                continue
 
-        cost_native = quantity * ask_price_native
-        converted = self.ledger.fund_buy(
-            acct.number,
-            target_currency,
-            cost_native,
-            dlr_quotes=self.dlr_quotes,
-        )
-        return TradeRecommendation(
-            symbol=symbol,
-            action="BUY",
-            quantity=quantity,
-            account_number=acct.number,
-            account_type=acct.account_type,
-            owner=acct.owner,
-            price=ask_price_native,
-            currency=target_currency,
-            estimated_value=cost_native,
-            note="Best available buy (requires FX)" if converted else "Best available buy",
-            requires_fx=converted,
-        )
+            cost_native = quantity * ask_price_native
+            self.ledger.fund_buy(
+                acct.number,
+                buy_currency,
+                cost_native,
+                dlr_quotes=self.dlr_quotes,
+            )
+            return TradeRecommendation(
+                symbol=symbol,
+                action="BUY",
+                quantity=quantity,
+                account_number=acct.number,
+                account_type=acct.account_type,
+                owner=acct.owner,
+                price=ask_price_native,
+                currency=buy_currency,
+                estimated_value=cost_native,
+                note="Best available buy (requires FX)",
+                requires_fx=True,
+            )
+
+        return None
 
     def _deploy_residual_cash(self) -> None:
         """Minimize stranded cash after starter trades, same-currency first."""
@@ -681,9 +691,11 @@ class RebalancePlanner:
             projected_drifts = self.plan.drifts()
 
             for acct in self.portfolio.accounts:
+                # Same-currency deployment
                 for currency in ("CAD", "USD"):
                     while True:
-                        trade = build_same_currency_buy(
+                        # First try underweight-only buys (drift-aware)
+                        trade = build_underweight_buy(
                             acct,
                             self.ledger.balances,
                             self.holdings_view,
@@ -691,15 +703,15 @@ class RebalancePlanner:
                             self.hidden_symbols,
                             self.portfolio.total_value_cad,
                             self.usd_to_cad_rate,
-                            currency,
-                            0.0,
+                            source_currency=currency,
+                            buy_currency=currency,
+                            underweight_threshold_pct=0.0,
                             note="Leftover cash buy",
                         )
+                        # Fall back to best-available (any drift) to avoid stranded cash
                         if trade is None:
                             trade = self._build_cash_minimizing_same_currency_buy(
-                                acct,
-                                currency,
-                                projected_drifts,
+                                acct, currency, projected_drifts,
                             )
                         if trade is None:
                             break
@@ -708,9 +720,12 @@ class RebalancePlanner:
                         made_trade = True
                         projected_drifts = self.plan.drifts()
 
+                # Cross-currency deployment
                 for source_currency in ("CAD", "USD"):
+                    buy_currency = "USD" if source_currency == "CAD" else "CAD"
                     while True:
-                        trade = build_cross_currency_buy(
+                        # First try underweight-only buys (drift-aware)
+                        trade = build_underweight_buy(
                             acct,
                             self.ledger.balances,
                             self.holdings_view,
@@ -718,17 +733,17 @@ class RebalancePlanner:
                             self.hidden_symbols,
                             self.portfolio.total_value_cad,
                             self.usd_to_cad_rate,
-                            source_currency,
-                            self.fee_cad,
-                            0.0,
+                            source_currency=source_currency,
+                            buy_currency=buy_currency,
+                            underweight_threshold_pct=0.0,
+                            fee_cad=self.fee_cad,
                             note="Leftover cash buy (requires FX)",
                             dlr_quotes=self.dlr_quotes,
                         )
+                        # Fall back to best-available (any drift)
                         if trade is None:
                             trade = self._build_cash_minimizing_cross_currency_buy(
-                                acct,
-                                source_currency,
-                                projected_drifts,
+                                acct, source_currency, projected_drifts,
                             )
                         if trade is None:
                             break
