@@ -251,9 +251,12 @@ This is one of the coolest parts. Instead of hardcoding "21% IVV, 53% VSP.TO", y
 # fx_targets.py
 clamped_rate = _clamp(usd_to_cad_rate, min_rate, max_rate)
 cad_fraction = (clamped_rate - min_rate) / (max_rate - min_rate)
-cad_target_pct = round(total_target_pct * cad_fraction / rounding_step) * rounding_step
+raw_cad_pct = total_target_pct * cad_fraction
+cad_target_pct = _sticky_round(raw_cad_pct, rounding_step, prior_cad_target)
 usd_target_pct = round((total_target_pct - cad_target_pct) / rounding_step) * rounding_step
 ```
+
+The `_sticky_round` function keeps the current target unless the raw value has moved a full step away, preventing oscillation when the rate hovers near a rounding boundary.
 
 When USD is expensive (rate near max), more allocation goes to the CAD fund. When USD is cheap, more goes to the USD fund. The targets dynamically adapt to make currency conversion worthwhile.
 

@@ -74,3 +74,8 @@ def get_history_file() -> Path:
 def get_tactical_state_file() -> Path:
     """Return the tactical deployment state file inside the private state repo."""
     return get_data_dir() / "tactical_state.json"
+
+
+def get_fx_targets_state_file() -> Path:
+    """Return the FX targets state file inside the private state repo."""
+    return get_data_dir() / "fx_targets_state.json"

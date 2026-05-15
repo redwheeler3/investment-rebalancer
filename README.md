@@ -312,7 +312,8 @@ Private repo: investment-rebalancer-state/
 │   └── settings.yaml
 ├── data/
 │   ├── portfolio_history.jsonl
-│   └── tactical_state.json       (created automatically on first regime change)
+│   ├── tactical_state.json       (created automatically on first regime change)
+│   └── fx_targets_state.json     (created automatically on first FX target resolution)
 └── tokens/
     ├── primary_token.json
     └── secondary_token.json
