@@ -844,8 +844,8 @@ def display_full_report(
     """Display the complete rebalancing report."""
     display_header()
     display_accuracy(accuracy, projected_accuracy)
-    display_all_time_high(all_time_high, portfolio.total_value_cad)
     display_daily_change(daily_change, portfolio.total_value_cad)
+    display_all_time_high(all_time_high, portfolio.total_value_cad)
     display_tactical_posture(tactical_posture)
     display_year_to_date_chart(ytd_history or [])
     display_holdings_summary(portfolio, usd_to_cad_rate)
