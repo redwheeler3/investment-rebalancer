@@ -221,7 +221,6 @@ def display_daily_change(daily_change, portfolio_value: float):
             f"[default]${portfolio_value:,.2f}[/default]  "
             f"{_format_signed_change(change, pct)}"
         )
-    console.print()
 
 
 def _format_compact_money(amount: float) -> str:
@@ -846,6 +845,7 @@ def display_full_report(
     display_accuracy(accuracy, projected_accuracy)
     display_daily_change(daily_change, portfolio.total_value_cad)
     display_all_time_high(all_time_high, portfolio.total_value_cad)
+    console.print()
     display_tactical_posture(tactical_posture)
     display_year_to_date_chart(ytd_history or [])
     display_holdings_summary(portfolio, usd_to_cad_rate)
