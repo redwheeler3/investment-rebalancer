@@ -85,6 +85,7 @@ class HoldingSummary:
     currency: str = "CAD"
     bid_price: float = 0.0
     ask_price: float = 0.0
+    open_price: float = 0.0
     accounts: list["HoldingAccountDetail"] = field(default_factory=list)
 
 
@@ -366,6 +367,7 @@ def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
             holding.bid_price = float(quote.get("bidPrice") or 0)
             holding.ask_price = float(quote.get("askPrice") or 0)
             holding.current_price = float(quote.get("lastTradePrice") or 0) or holding.current_price
+            holding.open_price = float(quote.get("openPrice") or 0)
 
 
 def get_current_allocations(portfolio: PortfolioSummary, usd_to_cad_rate: float, excluded_symbols: set = None) -> dict:
