@@ -9,10 +9,8 @@ from dataclasses import dataclass, field
 from src.fx_conversions import CurrencyConversion
 from src.history import (
     AllTimeHigh,
-    DailyChange,
     HistoryPoint,
     get_all_time_high,
-    get_daily_change,
     get_year_to_date_history,
 )
 from src.portfolio import AllocationSnapshot, simulate_rebalance
@@ -30,7 +28,6 @@ class RebalanceReportData:
     currency_conversions: list[CurrencyConversion]
     projected: AllocationSnapshot | None = None
     all_time_high: AllTimeHigh = None
-    daily_change: DailyChange | None = None
     ytd_history: list[HistoryPoint] = field(default_factory=list)
     tactical_posture: TacticalPosture | None = None
 
@@ -66,7 +63,6 @@ def build_report_data(
         )
 
     all_time_high = get_all_time_high(current_value=portfolio.total_value_cad)
-    daily_change_data = get_daily_change(current_value=portfolio.total_value_cad)
     ytd_history = get_year_to_date_history(current_value=portfolio.total_value_cad)
 
     return RebalanceReportData(
@@ -76,7 +72,6 @@ def build_report_data(
         currency_conversions=currency_conversions,
         projected=projected_snapshot,
         all_time_high=all_time_high,
-        daily_change=daily_change_data,
         ytd_history=ytd_history,
         tactical_posture=tactical_posture,
     )

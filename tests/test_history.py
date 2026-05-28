@@ -8,10 +8,8 @@ import pytest
 
 from src.history import (
     AllTimeHigh,
-    DailyChange,
     HistoryPoint,
     get_all_time_high,
-    get_daily_change,
     get_year_to_date_history,
     record_value,
 )
@@ -95,43 +93,6 @@ class TestGetAllTimeHigh:
 
         ath = get_all_time_high(current_value=720000.0)
         assert abs(ath.drawdown_pct - (-10.0)) < 0.01
-
-
-class TestGetDailyChange:
-    def test_no_history_returns_none(self, history_file):
-        result = get_daily_change(current_value=500000.0)
-        assert result is None
-
-    def test_only_today_returns_none(self, history_file):
-        history_file.parent.mkdir(parents=True, exist_ok=True)
-        today = date.today().isoformat()
-        with open(history_file, "w") as f:
-            f.write(json.dumps({"date": today, "value": 500000.0}) + "\n")
-
-        result = get_daily_change(current_value=510000.0)
-        assert result is None
-
-    def test_calculates_change(self, history_file):
-        history_file.parent.mkdir(parents=True, exist_ok=True)
-        yesterday = (date.today() - timedelta(days=1)).isoformat()
-        with open(history_file, "w") as f:
-            f.write(json.dumps({"date": yesterday, "value": 500000.0}) + "\n")
-
-        result = get_daily_change(current_value=510000.0)
-        assert result is not None
-        assert result.change_dollars == 10000.0
-        assert abs(result.change_pct - 2.0) < 0.01
-        assert result.previous_value == 500000.0
-
-    def test_negative_change(self, history_file):
-        history_file.parent.mkdir(parents=True, exist_ok=True)
-        yesterday = (date.today() - timedelta(days=1)).isoformat()
-        with open(history_file, "w") as f:
-            f.write(json.dumps({"date": yesterday, "value": 500000.0}) + "\n")
-
-        result = get_daily_change(current_value=490000.0)
-        assert result.change_dollars == -10000.0
-        assert result.change_pct < 0
 
 
 class TestGetYearToDateHistory:

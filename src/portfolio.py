@@ -85,7 +85,7 @@ class HoldingSummary:
     currency: str = "CAD"
     bid_price: float = 0.0
     ask_price: float = 0.0
-    open_price: float = 0.0
+    prev_close_price: float = 0.0
     accounts: list["HoldingAccountDetail"] = field(default_factory=list)
 
 
@@ -331,12 +331,46 @@ def calculate_allocations_for_values(
     return allocations
 
 
+def _get_prev_close_price(client, symbol_id: int) -> float:
+    """Fetch the previous trading day's closing price for a symbol.
+
+    Requests 10 calendar days of daily candles and returns the close of the
+    second-to-last candle (the last completed trading day before today's session).
+    Returns 0.0 if insufficient data is available.
+    """
+    from datetime import date, timedelta
+
+    today = date.today()
+    start = today - timedelta(days=10)
+
+    start_time = f"{start.isoformat()}T00:00:00-05:00"
+    end_time = f"{today.isoformat()}T23:59:59-05:00"
+
+    candles = client.get_candles(symbol_id, start_time, end_time, interval="OneDay")
+    if not candles:
+        return 0.0
+
+    # Filter out any candle starting today (in-progress or just-completed)
+    today_str = today.isoformat()
+    prior_candles = [
+        c for c in candles
+        if not c.get("start", "").startswith(today_str)
+    ]
+
+    if not prior_candles:
+        return 0.0
+
+    # The last prior candle is the most recent completed trading day
+    return float(prior_candles[-1].get("close") or 0)
+
+
 def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
     """
-    Fetch bid/ask quotes for all holdings and update the portfolio.
+    Fetch bid/ask quotes and previous close prices for all holdings.
 
-    Uses the first available client to fetch quotes.
-    Updates holdings with bid_price (for sells) and ask_price (for buys).
+    Uses the first available client to fetch quotes and daily candles.
+    Updates holdings with bid_price (for sells), ask_price (for buys),
+    and prev_close_price (for day change calculations).
 
     Args:
         portfolio: The portfolio to update.
@@ -367,7 +401,11 @@ def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
             holding.bid_price = float(quote.get("bidPrice") or 0)
             holding.ask_price = float(quote.get("askPrice") or 0)
             holding.current_price = float(quote.get("lastTradePrice") or 0) or holding.current_price
-            holding.open_price = float(quote.get("openPrice") or 0)
+
+    # Fetch previous close for each symbol via daily candles
+    for symbol_id, symbol in symbol_id_map.items():
+        if symbol in portfolio.holdings:
+            portfolio.holdings[symbol].prev_close_price = _get_prev_close_price(client, symbol_id)
 
 
 def get_current_allocations(portfolio: PortfolioSummary, usd_to_cad_rate: float, excluded_symbols: set = None) -> dict:

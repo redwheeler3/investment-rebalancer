@@ -1,16 +1,21 @@
 """Tests for the portfolio module — allocation math, drift, accuracy, and projection."""
 
+from unittest.mock import patch, MagicMock
+from datetime import date
+
 from src.portfolio import (
     calculate_allocations_for_values,
     calculate_accuracy,
     get_drifts,
     simulate_rebalance,
     build_allocation_snapshot_from_values,
+    _get_prev_close_price,
     PortfolioSummary,
     AccountInfo,
     Position,
     HoldingSummary,
 )
+from src.display import _compute_portfolio_day_pnl
 from src.models import TradeRecommendation
 
 
@@ -259,3 +264,130 @@ class TestSimulateRebalance:
         # IVV should now have an allocation
         assert "IVV" in snapshot.allocations
         assert snapshot.allocations["IVV"] > 0
+
+
+# ══════════════════════════════════════════════════════════════════
+# Previous close price (candle filtering)
+# ══════════════════════════════════════════════════════════════════
+
+
+class TestGetPrevClosePrice:
+    def test_returns_last_prior_candle_close(self):
+        """Should return the close of the most recent candle before today."""
+        today = date.today().isoformat()
+        candles = [
+            {"start": "2020-01-01T00:00:00-05:00", "close": 100.0},
+            {"start": "2020-01-02T00:00:00-05:00", "close": 102.0},
+            {"start": "2020-01-03T00:00:00-05:00", "close": 105.0},
+            {"start": f"{today}T00:00:00-05:00", "close": 107.0},
+        ]
+        client = MagicMock()
+        client.get_candles.return_value = candles
+
+        result = _get_prev_close_price(client, symbol_id=12345)
+        # Should be 105.0 (the last candle before today's date)
+        assert result == 105.0
+
+    def test_no_candles_returns_zero(self):
+        """Should return 0.0 when no candle data is available."""
+        client = MagicMock()
+        client.get_candles.return_value = []
+        result = _get_prev_close_price(client, symbol_id=12345)
+        assert result == 0.0
+
+    def test_only_today_candle_returns_zero(self):
+        """Should return 0.0 when only today's candle exists."""
+        today = date.today().isoformat()
+        candles = [
+            {"start": f"{today}T00:00:00-05:00", "close": 107.0},
+        ]
+        client = MagicMock()
+        client.get_candles.return_value = candles
+        result = _get_prev_close_price(client, symbol_id=12345)
+        assert result == 0.0
+
+    def test_handles_missing_close_field(self):
+        """Should return 0.0 gracefully if close field is None."""
+        candles = [
+            {"start": "2026-05-27T00:00:00-05:00", "close": None},
+        ]
+        client = MagicMock()
+        client.get_candles.return_value = candles
+        result = _get_prev_close_price(client, symbol_id=12345)
+        assert result == 0.0
+
+
+# ══════════════════════════════════════════════════════════════════
+# Portfolio day P&L calculation
+# ══════════════════════════════════════════════════════════════════
+
+
+class TestComputePortfolioDayPnl:
+    def test_basic_pnl_cad(self):
+        """Positive price change should produce positive P&L."""
+        portfolio = PortfolioSummary(
+            accounts=[],
+            holdings={
+                "VCN.TO": HoldingSummary(
+                    value_cad=51000.0, total_quantity=1000,
+                    current_price=51.0, currency="CAD",
+                    prev_close_price=50.0,
+                ),
+            },
+            total_value_cad=51000.0,
+        )
+        pnl, pct = _compute_portfolio_day_pnl(portfolio, usd_to_cad_rate=1.36)
+        assert pnl == 1000.0  # (51 - 50) × 1000
+        assert abs(pct - 2.0) < 0.01  # 1/50 × 100 = 2%
+
+    def test_usd_holding_converted(self):
+        """USD holdings P&L should be converted to CAD."""
+        portfolio = PortfolioSummary(
+            accounts=[],
+            holdings={
+                "IVV": HoldingSummary(
+                    value_cad=136000.0, total_quantity=100,
+                    current_price=110.0, currency="USD",
+                    prev_close_price=100.0,
+                ),
+            },
+            total_value_cad=136000.0,
+        )
+        pnl, pct = _compute_portfolio_day_pnl(portfolio, usd_to_cad_rate=1.36)
+        # (110 - 100) × 100 × 1.36 = 1360
+        assert abs(pnl - 1360.0) < 0.01
+        assert abs(pct - 10.0) < 0.01
+
+    def test_no_prev_close_excluded(self):
+        """Holdings without prev_close should not affect P&L."""
+        portfolio = PortfolioSummary(
+            accounts=[],
+            holdings={
+                "NEW.TO": HoldingSummary(
+                    value_cad=10000.0, total_quantity=100,
+                    current_price=100.0, currency="CAD",
+                    prev_close_price=0.0,
+                ),
+            },
+            total_value_cad=10000.0,
+        )
+        pnl, pct = _compute_portfolio_day_pnl(portfolio, usd_to_cad_rate=1.36)
+        assert pnl == 0.0
+        assert pct == 0.0
+
+    def test_negative_pnl(self):
+        """Price decline should produce negative P&L."""
+        portfolio = PortfolioSummary(
+            accounts=[],
+            holdings={
+                "VCN.TO": HoldingSummary(
+                    value_cad=48000.0, total_quantity=1000,
+                    current_price=48.0, currency="CAD",
+                    prev_close_price=50.0,
+                ),
+            },
+            total_value_cad=48000.0,
+        )
+        pnl, pct = _compute_portfolio_day_pnl(portfolio, usd_to_cad_rate=1.36)
+        assert pnl == -2000.0  # (48 - 50) × 1000
+        assert abs(pct - (-4.0)) < 0.01

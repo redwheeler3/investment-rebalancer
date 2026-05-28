@@ -257,7 +257,7 @@ def _build_priced_portfolio(clients: list, usd_to_cad_rate: float):
     console.print("  [dim]Building portfolio...[/dim]")
     portfolio = build_portfolio(clients, usd_to_cad_rate)
 
-    console.print("  [dim]Fetching market quotes (bid/ask)...[/dim]")
+    console.print("  [dim]Fetching market quotes and previous close...[/dim]")
     fetch_quotes_for_holdings(portfolio, clients)
     return portfolio
 
@@ -300,7 +300,6 @@ def _render_report(
         projected_accuracy=projected_snapshot.accuracy if projected_snapshot else None,
         projected_allocations=projected_snapshot.allocations if projected_snapshot else None,
         all_time_high=report.all_time_high,
-        daily_change=report.daily_change,
         ytd_history=report.ytd_history,
         drift_trade_threshold_pct=drift_trade_threshold_pct,
         tactical_posture=report.tactical_posture,

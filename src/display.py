@@ -44,7 +44,11 @@ def _format_shares(quantity: float) -> str:
 
 
 def _format_signed_change(change: float, pct: float) -> str:
-    """Format a signed change with matching arrow, color, and percentage."""
+    """Format a signed change with matching arrow, color, and percentage.
+
+    Used consistently across all change indicators: portfolio value,
+    all-time high, and per-holding Day P&L.
+    """
     if change >= 0:
         color = "green"
         arrow = "▲"
@@ -114,28 +118,6 @@ def display_header():
     console.print()
 
 
-def _format_price_change(price_change: float, change_pct: float, currency: str) -> str:
-    """Format a price change with sign, currency prefix, and percentage."""
-    if price_change == 0 and change_pct == 0:
-        return "[dim]—[/dim]"
-
-    prefix = "US$" if currency == "USD" else "$"
-    sign = "+" if price_change >= 0 else "-"
-    color = "green" if price_change >= 0 else "red"
-    return (
-        f"[{color}]{sign}{prefix}{abs(price_change):,.2f} "
-        f"({sign}{abs(change_pct):.1f}%)[/{color}]"
-    )
-
-
-def _format_day_pnl(pnl_cad: float) -> str:
-    """Format a day P&L value in CAD with sign and color."""
-    if pnl_cad == 0:
-        return "[dim]—[/dim]"
-
-    sign = "+" if pnl_cad >= 0 else "-"
-    color = "green" if pnl_cad >= 0 else "red"
-    return f"[{color}]{sign}${abs(pnl_cad):,.2f}[/{color}]"
 
 
 def display_holdings_summary(portfolio, usd_to_cad_rate: float):
@@ -150,12 +132,12 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
     table.add_column("Symbol", style="bold")
     table.add_column("Shares", justify="right")
     table.add_column("Price", justify="right")
-    table.add_column("Change", justify="right")
     table.add_column("Value (CAD)", justify="right")
-    table.add_column("Day P&L", justify="right")
+    table.add_column("Day P&L (CAD)", justify="right")
 
     # Collect holdings sorted alphabetically
     total_day_pnl_cad = 0.0
+    total_value_for_pct = 0.0
     rows = []
     for symbol in sorted(portfolio.holdings.keys()):
         holding = portfolio.holdings[symbol]
@@ -163,34 +145,34 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
         price = holding.current_price
         currency = holding.currency
         value_cad = holding.value_cad
-        open_px = holding.open_price
+        prev_close = holding.prev_close_price
 
         price_str = _format_price(price, currency)
         qty_str = _format_shares(qty)
 
-        # Calculate price change and day P&L (from today's open)
-        if open_px > 0:
-            price_change = price - open_px
-            change_pct = (price_change / open_px) * 100.0
+        # Calculate day P&L (from previous close)
+        if prev_close > 0:
+            price_change = price - prev_close
+            change_pct = (price_change / prev_close) * 100.0
             day_pnl_native = price_change * qty
             day_pnl_cad = day_pnl_native * usd_to_cad_rate if currency == "USD" else day_pnl_native
+            prev_value_cad = prev_close * qty * (usd_to_cad_rate if currency == "USD" else 1.0)
         else:
-            price_change = 0.0
             change_pct = 0.0
             day_pnl_cad = 0.0
+            prev_value_cad = 0.0
 
         total_day_pnl_cad += day_pnl_cad
-        change_str = _format_price_change(price_change, change_pct, currency)
-        pnl_str = _format_day_pnl(day_pnl_cad)
+        total_value_for_pct += prev_value_cad
+        pnl_str = _format_signed_change(day_pnl_cad, change_pct)
 
-        rows.append((symbol, qty_str, price_str, change_str, value_cad, pnl_str))
+        rows.append((symbol, qty_str, price_str, value_cad, pnl_str))
 
-    for symbol, qty_str, price_str, change_str, value_cad, pnl_str in rows:
+    for symbol, qty_str, price_str, value_cad, pnl_str in rows:
         table.add_row(
             symbol,
             qty_str,
             price_str,
-            change_str,
             _format_money(value_cad),
             pnl_str,
         )
@@ -202,7 +184,6 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
             "Cash CAD",
             "",
             "",
-            "",
             _format_money(portfolio.cash_cad_total),
             "",
         )
@@ -212,20 +193,19 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
             "Cash USD",
             "",
             _format_money(portfolio.cash_usd_total, "USD"),
-            "",
             _format_money(cash_usd_cad),
             "",
         )
 
     # Total row
+    total_change_pct = (total_day_pnl_cad / total_value_for_pct * 100.0) if total_value_for_pct > 0 else 0.0
     table.add_section()
     table.add_row(
         "[bold]Total[/bold]",
         "",
         f"[dim]USD/CAD {usd_to_cad_rate:.4f}[/dim]",
-        "",
         f"[bold green]{_format_money(portfolio.total_value_cad)}[/bold green]",
-        f"[bold]{_format_day_pnl(total_day_pnl_cad)}[/bold]",
+        f"[bold]{_format_signed_change(total_day_pnl_cad, total_change_pct)}[/bold]",
     )
 
     console.print(table)
@@ -257,21 +237,39 @@ def display_all_time_high(ath, portfolio_value: float):
     )
 
 
-def display_daily_change(daily_change, portfolio_value: float):
-    """Display the current portfolio value with day-over-day change."""
-    if daily_change is None:
+def _compute_portfolio_day_pnl(portfolio, usd_to_cad_rate: float) -> tuple[float, float]:
+    """Compute total portfolio Day P&L and percentage from previous close prices.
+
+    Returns (total_pnl_cad, total_change_pct).
+    """
+    total_day_pnl_cad = 0.0
+    total_prev_value_cad = 0.0
+
+    for holding in portfolio.holdings.values():
+        prev_close = holding.prev_close_price
+        if prev_close > 0:
+            price_change = holding.current_price - prev_close
+            qty = holding.total_quantity
+            fx = usd_to_cad_rate if holding.currency == "USD" else 1.0
+            total_day_pnl_cad += price_change * qty * fx
+            total_prev_value_cad += prev_close * qty * fx
+
+    total_change_pct = (total_day_pnl_cad / total_prev_value_cad * 100.0) if total_prev_value_cad > 0 else 0.0
+    return total_day_pnl_cad, total_change_pct
+
+
+def display_daily_change(portfolio_value: float, day_pnl_cad: float, day_pnl_pct: float):
+    """Display the current portfolio value with day-over-day change from previous close."""
+    if day_pnl_cad == 0 and day_pnl_pct == 0:
         console.print(
             f"  [bold]Portfolio Value:[/bold]         "
             f"[default]${portfolio_value:,.2f}[/default]"
         )
     else:
-        change = daily_change.change_dollars
-        pct = daily_change.change_pct
-
         console.print(
             f"  [bold]Portfolio Value:[/bold]         "
             f"[default]${portfolio_value:,.2f}[/default]  "
-            f"{_format_signed_change(change, pct)}"
+            f"{_format_signed_change(day_pnl_cad, day_pnl_pct)}"
         )
 
 
@@ -887,15 +885,16 @@ def display_full_report(
     projected_accuracy: float = None,
     projected_allocations: dict = None,
     all_time_high=None,
-    daily_change=None,
     ytd_history: list = None,
     drift_trade_threshold_pct: float = 0.1,
     tactical_posture=None,
 ):
     """Display the complete rebalancing report."""
+    day_pnl_cad, day_pnl_pct = _compute_portfolio_day_pnl(portfolio, usd_to_cad_rate)
+
     display_header()
     display_accuracy(accuracy, projected_accuracy)
-    display_daily_change(daily_change, portfolio.total_value_cad)
+    display_daily_change(portfolio.total_value_cad, day_pnl_cad, day_pnl_pct)
     display_all_time_high(all_time_high, portfolio.total_value_cad)
     console.print()
     display_tactical_posture(tactical_posture)

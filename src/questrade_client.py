@@ -159,6 +159,29 @@ class QuestradeClient:
         data = self._get("v1/symbols", params={"ids": ids_str})
         return data.get("symbols", [])
 
+    def get_candles(self, symbol_id: int, start_time: str, end_time: str, interval: str = "OneDay") -> list:
+        """
+        Get historical OHLC candlestick data for a symbol.
+
+        Args:
+            symbol_id: Questrade internal symbol ID.
+            start_time: ISO 8601 start datetime string.
+            end_time: ISO 8601 end datetime string.
+            interval: Candle interval (default "OneDay").
+
+        Returns:
+            List of candle dictionaries with open, high, low, close, volume.
+        """
+        data = self._get(
+            f"v1/markets/candles/{symbol_id}",
+            params={
+                "startTime": start_time,
+                "endTime": end_time,
+                "interval": interval,
+            },
+        )
+        return data.get("candles", [])
+
     def search_symbol(self, symbol: str) -> list:
         """
         Search for a symbol to get its Questrade symbol ID.
