@@ -195,12 +195,19 @@ def calculate_currency_needs(
             conversions.append(required_conversion)
 
     # ── Sweep: convert stranded foreign cash in single-currency accounts ──
-    # If all positions in an account are one currency, convert leftover cash
-    # in the other currency.  Keep one fee in the account for the journal.
+    # Foreign cash is only "stranded" when every position in the account is
+    # denominated in the other currency — making it structurally impossible
+    # for the rebalancer to deploy the cash without FX conversion.
+    #
+    # Mixed-currency accounts (e.g. Margin accounts holding both IVV and
+    # VSP.TO) are intentionally excluded: any foreign cash there is
+    # deployable by the rebalancer's cascade logic (the "best available"
+    # fallback will buy into an existing same-currency position when a
+    # trade fires). Converting it here would cause an unnecessary round-trip.
     for acct in accounts:
         pos_currencies = {p.currency for p in acct.positions if p.quantity > 0}
         if not pos_currencies or len(pos_currencies) > 1:
-            continue  # Skip multi-currency or empty accounts
+            continue  # Skip empty and mixed-currency accounts (see note above)
 
         position_currency = next(iter(pos_currencies))
 

@@ -11,3 +11,7 @@ This app has no external consumers — keep it simple:
 
 - Prefer one function that handles multiple cases via parameters over duplicated functions with near-identical logic.
 - **Treat the root cause, not the symptom.** Before writing a fix, identify the underlying logic failure and address it directly. Don't add guards or workarounds that produce the correct output while leaving the underlying flaw in place.
+
+## Git
+
+- **Never commit without explicit user approval.** When changes are ready to commit, present a summary of what will be committed and ask for confirmation before running `git commit`.

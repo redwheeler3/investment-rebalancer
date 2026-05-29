@@ -653,7 +653,15 @@ class RebalancePlanner:
         return candidates
 
     def _build_cash_minimizing_same_currency_buy(self, acct, currency: str, drifts: dict[str, float]):
-        """Spend same-currency cash on the best affordable buyable symbol."""
+        """Spend same-currency cash on the best affordable buyable symbol.
+
+        Candidates are ordered by cascade potential first (symbols with the
+        most total underweight drift in other accounts that hold them), then
+        by lowest drift as a tiebreaker. Buying a high-cascade symbol may
+        overshoot the household allocation, which a subsequent round will
+        correct by selling from an account with underweight alternatives —
+        effectively routing the cash to where it's most needed.
+        """
         available_cash = self.ledger.same_currency_buying_power(acct.number, currency)
         if available_cash <= 0:
             return None
@@ -685,7 +693,12 @@ class RebalancePlanner:
         return None
 
     def _build_cash_minimizing_cross_currency_buy(self, acct, source_currency: str, drifts: dict[str, float]):
-        """Convert remaining cash and spend it on the best affordable buyable symbol."""
+        """Convert remaining cash and spend it on the best affordable buyable symbol.
+
+        Same cascade-first ordering as _build_cash_minimizing_same_currency_buy:
+        prefer the symbol with the most total underweight drift in other accounts
+        that hold it, falling back to lowest drift when scores are equal.
+        """
         buy_currency = "USD" if source_currency == "CAD" else "CAD"
         available_cash = cross_currency_buying_power(
             self.ledger.cash(acct.number, source_currency),
