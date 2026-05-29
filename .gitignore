@@ -14,7 +14,6 @@ env/
 # IDE
 .vscode/
 .idea/
-.clinerules
 *.swp
 *.swo
 
