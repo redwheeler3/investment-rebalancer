@@ -1085,7 +1085,7 @@ The cascade:
 
 ---
 
-### Scenario 4: The "Best Available" Fallback — No Good Options, But Cash Must Move
+### Scenario 4: The "Best Available" Fallback — Cascade-Aware Candidate Selection
 
 **Setup:** An account holds only two CAD symbols. Both are at or above target. But the account received $2,000 CAD from a dividend or prior sell. There's nothing underweight to buy — but leaving cash idle violates Rule 4 ("Minimize free cash whenever practical").
 
@@ -1095,21 +1095,35 @@ Account "Bob RRSP":
   XBB.TO: 2,000 shares @ $28.94, drift +0.1%
   Cash CAD: $2,000
 
-Neither VUN.TO nor XBB.TO is underweight. Normal underweight buys produce nothing.
+Other accounts:
+  Account "Alice TFSA": holds VUN.TO (drift +0.3%) and ZAG.TO (drift -0.8%)
+  Account "Carol RRSP": holds XBB.TO only (drift +0.1%)
+
+Neither VUN.TO nor XBB.TO is underweight in Bob RRSP. Normal underweight buys return nothing.
 
 Fallback chain:
   1. build_same_currency_buy → no underweight candidates → returns None
   2. _build_cash_minimizing_same_currency_buy kicks in
      → _account_buyable_candidates(underweight_only=False)
-     → Returns ALL buyable symbols sorted by drift (lowest first)
-     → XBB.TO at +0.1% ranks before VUN.TO at +0.3%
-     → BUY 69 XBB.TO @ $28.94 = $1,996.86 ("Best available buy")
+     → Computes _cascade_score for each candidate:
+         VUN.TO: Alice TFSA holds VUN.TO and has ZAG.TO at -0.8%
+                 → cascade_score = 0.8
+         XBB.TO: Carol RRSP holds XBB.TO but has no underweight positions
+                 → cascade_score = 0.0
+     → Sort key: (-cascade_score, drift_pct)
+         VUN.TO: (-0.8, +0.3%) ranks FIRST
+         XBB.TO: (-0.0, +0.1%) ranks second
+     → BUY 32 VUN.TO @ $62.18 = $1,989.76 ("Best available buy")
 
-Result: Cash is deployed into the least-overweight option.
-The drift impact is minimal (+0.1% → +0.3%) but cash isn't stranded.
+Result: Cash is deployed into VUN.TO, overshooting its household allocation.
+Round 2: VUN.TO drift pushes past threshold → sell from Alice TFSA
+         (which has ZAG.TO as an underweight alternative)
+         → ZAG.TO gap gets filled using those proceeds.
 ```
 
-**Key insight:** The "best available" fallback exists because idle cash has a real cost in a rebalancing portfolio — it creates drift in the CAD/USD cash allocation itself. The fallback picks the *least bad* option rather than the *best* option.
+**Key insight:** The "best available" fallback doesn't just deploy cash into the *least bad* option — it picks the option most likely to trigger a useful cascade in a subsequent round. The `_cascade_score` of a symbol is the total underweight drift in other accounts that also hold it. Buying a high-cascade symbol now may overshoot the household allocation, which Round 2 corrects by selling from the *right* account — one that has underweight alternatives to absorb the proceeds.
+
+When no symbol has cascade potential (all other holders are balanced), the fallback degrades gracefully to lowest-drift ordering.
 
 ---
 
@@ -1197,6 +1211,7 @@ rebalancer.py
 │   ├── _buy_in_account()           # Execute buy + fund it
 │   ├── _raise_cash_in_account()    # Funding sells for cash
 │   ├── _deploy_residual_cash()     # Layer 3: spend remaining cash
+│   ├── _cascade_score()            # Score a symbol by downstream rebalancing potential
 │   ├── _account_buyable_candidates()  # Find buyable symbols in an account
 │   ├── _build_cash_minimizing_same_currency_buy()   # Fallback: best available
 │   └── _build_cash_minimizing_cross_currency_buy()  # Fallback: best available + FX

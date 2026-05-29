@@ -578,6 +578,32 @@ class RebalancePlanner:
             self.ledger.credit_sale(acct.number, currency, trade.estimated_value)
             self.plan.add_trade(trade)
 
+    def _cascade_score(self, symbol: str, current_account_number: str, drifts: dict[str, float]) -> float:
+        """Score a symbol by the total underweight drift it can unlock in other accounts.
+
+        When the current account buys this symbol with leftover cash, it may
+        overshoot the household allocation, triggering a sell in a *different*
+        account that holds the same symbol. If that other account has its own
+        underweight positions, the sell proceeds get redeployed there — a
+        cascade. The score is the total absolute underweight drift across all
+        positions in all other accounts that hold this symbol. A higher score
+        means buying this symbol now is more likely to unlock downstream
+        rebalancing.
+        """
+        score = 0.0
+        for acct in self.portfolio.accounts:
+            if acct.number == current_account_number:
+                continue
+            if not any(p.symbol == symbol and p.quantity > 0 for p in acct.positions):
+                continue
+            for pos in acct.positions:
+                if pos.symbol in self.hidden_symbols or pos.quantity <= 0:
+                    continue
+                drift = drifts.get(pos.symbol, 0.0)
+                if drift < 0:
+                    score += abs(drift)
+        return score
+
     def _account_buyable_candidates(
         self,
         acct,
@@ -589,8 +615,8 @@ class RebalancePlanner:
         """Return account-local buyable symbols sorted by lowest drift first.
 
         When ``underweight_only`` is false, this becomes the cash-minimizing
-        fallback that prefers the least overweight / most underweight symbol the
-        account is actually allowed to hold.
+        fallback that prefers the symbol most likely to trigger useful downstream
+        rebalancing (highest cascade score), breaking ties by lowest drift.
         """
         candidates = []
         seen = set()
@@ -618,7 +644,12 @@ class RebalancePlanner:
             seen.add(pos.symbol)
             candidates.append((drift_pct, pos.symbol, ask_price_native))
 
-        candidates.sort(key=lambda item: item[0])
+        if underweight_only:
+            candidates.sort(key=lambda item: item[0])
+        else:
+            candidates.sort(
+                key=lambda item: (-self._cascade_score(item[1], acct.number, drifts), item[0])
+            )
         return candidates
 
     def _build_cash_minimizing_same_currency_buy(self, acct, currency: str, drifts: dict[str, float]):

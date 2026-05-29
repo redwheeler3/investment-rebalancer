@@ -1,0 +1,13 @@
+# Project Rules
+
+## Simplicity Over Compatibility
+
+This app has no external consumers — keep it simple:
+
+- **No backward-compatibility wrappers.** When refactoring, remove the old interface entirely and update all call sites. Don't leave thin wrappers "just in case."
+- **Before making backward-incompatible changes**, warn the user: describe what's changing, which call sites will break, and what the risks are (e.g. runtime errors if something was missed). Then proceed only after acknowledgment.
+
+## Code Style
+
+- Prefer one function that handles multiple cases via parameters over duplicated functions with near-identical logic.
+- **Treat the root cause, not the symptom.** Before writing a fix, identify the underlying logic failure and address it directly. Don't add guards or workarounds that produce the correct output while leaving the underlying flaw in place.
