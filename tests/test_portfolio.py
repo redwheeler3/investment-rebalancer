@@ -10,6 +10,8 @@ from src.portfolio import (
     simulate_rebalance,
     build_allocation_snapshot_from_values,
     _get_prev_close_price,
+    _get_quote_trade_date,
+    fetch_quotes_for_holdings,
     PortfolioSummary,
     AccountInfo,
     Position,
@@ -315,6 +317,89 @@ class TestGetPrevClosePrice:
         client.get_candles.return_value = candles
         result = _get_prev_close_price(client, symbol_id=12345)
         assert result == 0.0
+
+    def test_uses_quote_trade_date_not_weekend_calendar_date(self):
+        """A Saturday run should compare Friday's quote to Thursday's close."""
+        candles = [
+            {"start": "2026-05-27T00:00:00-05:00", "close": 100.0},
+            {"start": "2026-05-28T00:00:00-05:00", "close": 102.0},
+            {"start": "2026-05-29T00:00:00-05:00", "close": 105.0},
+        ]
+        client = MagicMock()
+        client.get_candles.return_value = candles
+
+        result = _get_prev_close_price(
+            client,
+            symbol_id=12345,
+            exclude_date=date(2026, 5, 29),
+        )
+
+        assert result == 102.0
+        _, end_time = client.get_candles.call_args.args[1:3]
+        assert end_time == "2026-05-29T23:59:59-05:00"
+
+    def test_quote_trade_date_parses_questrade_timestamp(self):
+        quote = {"lastTradeTime": "2026-05-29T16:00:00.000000-04:00"}
+
+        assert _get_quote_trade_date(quote) == date(2026, 5, 29)
+
+    def test_quote_trade_date_returns_none_for_missing_or_invalid_value(self):
+        assert _get_quote_trade_date({}) is None
+        assert _get_quote_trade_date({"lastTradeTime": "not-a-date"}) is None
+
+
+class TestFetchQuotesForHoldings:
+    def test_prev_close_is_anchored_to_quote_last_trade_date(self):
+        """Fetching quotes should pass lastTradeTime's date to candle selection."""
+        account = AccountInfo(
+            number="11111",
+            account_type="TFSA",
+            client_account_type="Individual",
+            owner="Alice",
+            positions=[
+                Position(
+                    symbol="ABC.TO",
+                    symbol_id=12345,
+                    quantity=100,
+                    market_value=10500.0,
+                    current_price=105.0,
+                    currency="CAD",
+                    account_number="11111",
+                    account_type="TFSA",
+                    owner="Alice",
+                ),
+            ],
+        )
+        portfolio = PortfolioSummary(
+            accounts=[account],
+            holdings={
+                "ABC.TO": HoldingSummary(
+                    value_cad=10500.0,
+                    total_quantity=100,
+                    current_price=105.0,
+                    currency="CAD",
+                ),
+            },
+            total_value_cad=10500.0,
+        )
+        client = MagicMock()
+        client.get_quote.return_value = [
+            {
+                "symbol": "ABC.TO",
+                "bidPrice": 104.99,
+                "askPrice": 105.01,
+                "lastTradePrice": 105.0,
+                "lastTradeTime": "2026-05-29T16:00:00.000000-04:00",
+            }
+        ]
+        client.get_candles.return_value = [
+            {"start": "2026-05-28T00:00:00-05:00", "close": 102.0},
+            {"start": "2026-05-29T00:00:00-05:00", "close": 105.0},
+        ]
+
+        fetch_quotes_for_holdings(portfolio, [client])
+
+        assert portfolio.holdings["ABC.TO"].prev_close_price == 102.0
 
 
 # ══════════════════════════════════════════════════════════════════

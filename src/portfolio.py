@@ -331,30 +331,50 @@ def calculate_allocations_for_values(
     return allocations
 
 
-def _get_prev_close_price(client, symbol_id: int) -> float:
+def _get_quote_trade_date(quote: dict):
+    """Return the calendar date of the quote's last trade, if available."""
+    from datetime import datetime
+
+    last_trade_time = quote.get("lastTradeTime")
+    if not last_trade_time:
+        return None
+
+    try:
+        return datetime.fromisoformat(str(last_trade_time)).date()
+    except ValueError:
+        return None
+
+
+def _get_prev_close_price(client, symbol_id: int, exclude_date=None) -> float:
     """Fetch the previous trading day's closing price for a symbol.
 
-    Requests 10 calendar days of daily candles and returns the close of the
-    second-to-last candle (the last completed trading day before today's session).
+    Requests 10 calendar days of daily candles and returns the latest close
+    strictly before exclude_date. Callers should pass the quote's last trade
+    date so weekend/holiday runs compare the latest trade against the trading
+    day before it, not against the computer's calendar date.
+
+    Falls back to today's date when exclude_date is unavailable.
     Returns 0.0 if insufficient data is available.
     """
     from datetime import date, timedelta
 
-    today = date.today()
-    start = today - timedelta(days=10)
+    reference_date = exclude_date or date.today()
+    start = reference_date - timedelta(days=10)
 
     start_time = f"{start.isoformat()}T00:00:00-05:00"
-    end_time = f"{today.isoformat()}T23:59:59-05:00"
+    end_time = f"{reference_date.isoformat()}T23:59:59-05:00"
 
     candles = client.get_candles(symbol_id, start_time, end_time, interval="OneDay")
     if not candles:
         return 0.0
 
-    # Filter out any candle starting today (in-progress or just-completed)
-    today_str = today.isoformat()
+    # Filter out the quote's own trade date. On non-trading days, the latest
+    # quote is still from the previous trading session, so using date.today()
+    # would incorrectly treat that session's close as the prior close.
+    reference_date_str = reference_date.isoformat()
     prior_candles = [
         c for c in candles
-        if not c.get("start", "").startswith(today_str)
+        if c.get("start", "")[:10] < reference_date_str
     ]
 
     if not prior_candles:
@@ -393,6 +413,7 @@ def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
     symbol_ids = list(symbol_id_map.keys())
     client = clients[0]
 
+    quote_trade_dates = {}
     quotes = client.get_quote(symbol_ids)
     for quote in quotes:
         symbol = quote.get("symbol", "")
@@ -401,11 +422,16 @@ def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
             holding.bid_price = float(quote.get("bidPrice") or 0)
             holding.ask_price = float(quote.get("askPrice") or 0)
             holding.current_price = float(quote.get("lastTradePrice") or 0) or holding.current_price
+            quote_trade_dates[symbol] = _get_quote_trade_date(quote)
 
     # Fetch previous close for each symbol via daily candles
     for symbol_id, symbol in symbol_id_map.items():
         if symbol in portfolio.holdings:
-            portfolio.holdings[symbol].prev_close_price = _get_prev_close_price(client, symbol_id)
+            portfolio.holdings[symbol].prev_close_price = _get_prev_close_price(
+                client,
+                symbol_id,
+                exclude_date=quote_trade_dates.get(symbol),
+            )
 
 
 def get_current_allocations(portfolio: PortfolioSummary, usd_to_cad_rate: float, excluded_symbols: set = None) -> dict:
