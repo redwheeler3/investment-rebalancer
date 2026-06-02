@@ -2,7 +2,7 @@
 
 A Python-based portfolio rebalancer for Questrade accounts that treats multiple accounts across multiple Questrade logins as one unified portfolio.
 
-Built as an alternative to Passiv, this project combines portfolio rebalancing
+Built as an alternative to [Passiv](https://passiv.com/), this project combines portfolio rebalancing
 with a public-code/private-state model that keeps expiring Questrade tokens
 refreshed for free via GitHub Actions.
 
@@ -26,6 +26,31 @@ explicit environment variable, `REBALANCER_STATE_DIR`, so local runs and GitHub
 Actions both operate against the same source of truth.
 
 > TL;DR: Keep code public and reusable, while keeping broker credentials and rotating state private and fully automated.
+
+---
+
+## Why use this?
+
+Rebalancing keeps your portfolio aligned with the plan you chose on purpose. As
+markets move, some assets grow faster than others, new cash accumulates, and your
+actual allocation drifts. Left alone, that drift can quietly change your risk
+level — for example, leaving you with more equity exposure, sector concentration,
+or currency exposure than you intended.
+
+Rebalancing also adds discipline. Instead of chasing whatever has recently done
+well, you systematically trim assets that have become overweight and add to
+assets that are underweight. In other words, it nudges you toward the classic
+"sell high, buy low" behaviour while keeping the focus on your target allocation.
+
+This project is for DIY investors who want to keep control of their own trades
+without rebuilding a spreadsheet every time the portfolio drifts. It turns the
+mechanical work into a repeatable report: measure the whole household portfolio,
+compare it to your targets, identify what is overweight or underweight, and show
+specific whole-share trades you can review before placing orders.
+
+You still define the target allocation, drift threshold, account setup, and
+tactical rules. The app handles the allocation math, account constraints,
+CAD/USD planning, and Questrade-specific workflow details.
 
 ---
 
