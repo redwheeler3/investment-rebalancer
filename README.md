@@ -295,13 +295,24 @@ conversions with DLR share counts.
 
 ## Why Norbert's Gambit is part of this workflow
 
-Questrade users often prefer **Norbert's Gambit** for larger CAD/USD conversions
-because it can be cheaper than a standard broker FX conversion. This project
-does not execute the gambit for you, but it does model the planning around it:
+Norbert's Gambit is a common Canadian DIY investing technique for converting
+CAD to USD, or USD to CAD, by buying an interlisted security in one currency,
+journaling it to the other currency side of the account, and selling it there.
+For Questrade users, the usual instrument is `DLR.TO` / `DLR.U.TO`.
+
+The reason to use it is cost. Standard broker FX conversions often hide the cost
+inside the exchange-rate spread; at roughly 1.5%, converting $10,000 costs about
+$150 before you have invested a dollar. On Questrade, Norbert's Gambit is slower
+and more manual, but with current zero-commission stock/ETF trading its visible
+cost may be closer to the flat journaling fee plus the DLR bid/ask spread — often
+roughly $10-$20 on a $10,000 conversion, depending on taxes, fees, and execution.
+
+This project does not execute the gambit for you, but it does model the planning
+around it:
 
 - detecting when cross-currency funding is needed
 - sizing the conversion conservatively with DLR bid/ask pricing
-- accounting for the trading fee in the recommendation
+- accounting for the configured gambit fee in the recommendation
 - letting you mark `DLR.TO` / `DLR.U.TO` as transient while the gambit is in flight
 
 That keeps the rebalance plan realistic without pretending that the conversion is
@@ -591,11 +602,14 @@ This gives you automated token refresh without ever storing live credentials in 
 
 ## Tactical defensive deployment
 
-The tactical system implements a modified 120-minus-age rule combined with a
-drawdown-based deployment plan. At baseline, the portfolio holds 80% equities
-and 20% fixed income. When the market drops, fixed-income assets are deployed
-into equities at predefined thresholds. On recovery, the fixed position is
-rebuilt.
+The optional tactical system implements a modified 120-minus-age rule combined
+with a drawdown-based deployment plan. The reason to use it is to make defensive
+assets part of a predefined bear-market plan instead of an ad hoc decision made
+while markets are falling.
+
+When enabled, the baseline portfolio holds 80% equities and 20% fixed income.
+When the market drops, fixed-income assets are deployed into equities at
+predefined thresholds. On recovery, the fixed position is rebuilt.
 
 ### How it works
 
@@ -624,38 +638,10 @@ fixed until the portfolio recovers back to baseline.
 The different thresholds on the way down vs. up (hysteresis) prevent whipsawing
 near boundaries.
 
-### Fixed-income composition
-
-The fixed allocation is split by configurable ratios across instruments:
-
-```yaml
-fixed_composition:
-  ZMMK.TO: 50.0    # Money market (50% of fixed)
-  XSH.TO: 25.0     # Canadian short-term corporate bonds (25% of fixed)
-  XIGS.TO: 25.0    # US short-term corporate bonds (25% of fixed)
-```
-
-These ratios are maintained regardless of the total fixed percentage.
-
-### Equity scaling
-
-When the fixed allocation shrinks, all equity targets scale up proportionally.
-For example, at Level 1 (85% equity, up from 80%), each equity target is
-multiplied by 85/80 = 1.0625.
-
-### Display
-
-At baseline, the tactical system is invisible — nothing extra appears in the
-report. When deployed, a panel appears showing the current regime, Reference
-High, drawdown percentage, and dollar values for the next recovery and deploy
-triggers.
-
-### State persistence
-
-Regime state is stored in `data/tactical_state.json` in the private state repo.
-The file is only written on regime transitions (a few times per year at most).
-The `--sync` mode also evaluates tactical transitions so GitHub Actions catches
-daily threshold crossings.
+The fixed allocation is split by `fixed_composition`, and when fixed income is
+reduced, equity targets scale up proportionally. Regime state is stored in
+`data/tactical_state.json` in the private state repo, and `--sync` mode evaluates
+transitions so scheduled runs can catch threshold crossings.
 
 ### Configuration
 
@@ -709,7 +695,6 @@ target and will be recommended for sale.
 - Never commit live Questrade tokens to the public repo
 - Keep your real `settings.yaml` in the private state repo
 - Keep `portfolio_history.jsonl` in the private state repo
-- If you are converting an old private repo into a public one, do **not** rely only on deleting files from the latest commit — clean or replace the git history first
 
 ---
 
