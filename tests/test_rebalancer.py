@@ -544,6 +544,28 @@ class TestPlannerCashDeployment:
         buy_trades = [t for t in trades if t.action == "BUY"]
         assert any(t.symbol == "VUN.TO" for t in buy_trades)
 
+    def test_deploys_idle_cash_even_when_no_starter_trade_needed(self):
+        """Cash deployment should run even when asset drift is within threshold."""
+        portfolio = _build_test_portfolio([{
+            "number": "11111", "type": "Margin", "owner": "Alice",
+            "cash_cad": 6000.0, "cash_usd": 0.0,
+            "positions": [
+                {"symbol": "VSP.TO", "qty": 10000, "price": 100.0, "currency": "CAD"},
+                {"symbol": "ZMMK.TO", "qty": 10000, "price": 100.0, "currency": "CAD"},
+            ],
+        }])
+        # Total = 2,006,000. Each holding starts at about 49.85%.
+        # VSP.TO is slightly underweight, but not enough to trigger a starter buy.
+        targets = {"VSP.TO": 49.9, "ZMMK.TO": 49.8, "CAD": 0.0, "USD": 0.0}
+
+        trades = calculate_trades(portfolio, targets, 1.36, 10.49, 0.5, set(), None)
+
+        buy_trades = [t for t in trades if t.action == "BUY"]
+        assert len(buy_trades) > 0
+        assert all(t.account_number == "11111" for t in buy_trades)
+        assert all(t.symbol in {"VSP.TO", "ZMMK.TO"} for t in buy_trades)
+        assert sum(t.estimated_value for t in buy_trades) >= 5900.0
+
     def test_zero_value_portfolio_returns_no_trades(self):
         """Empty portfolio should produce no trades."""
         portfolio = PortfolioSummary(

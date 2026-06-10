@@ -93,8 +93,8 @@ these portfolio rules:
      portfolio.
 
 4. **Minimize free cash whenever practical**
-   - Once meaningful trades are already happening, the planner is allowed to use
-     leftover cash more aggressively so cash does not remain stranded.
+   - The planner deploys useful account-level cash even when no symbol is far
+     enough from target to start a normal rebalance.
    - This can include buying a symbol that is merely the best eligible holding
      in an account, even if it is no longer globally underweight.
 

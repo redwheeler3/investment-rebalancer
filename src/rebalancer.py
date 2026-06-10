@@ -8,7 +8,7 @@ based on the household rules documented in the README:
 - sell overweight symbols and buy underweight symbols,
 - only buy symbols that already exist in the destination account,
 - prefer same-currency deployment before cross-currency deployment,
-- minimize stranded cash after meaningful trades have started,
+- minimize stranded account-level cash whenever practical,
 - and allow account-constrained cash deployment (buy the best available symbol
   in an account to avoid leaving cash idle, even if that symbol is not globally
   underweight).
@@ -302,10 +302,9 @@ class RebalancePlanner:
             starter_changes += self._sell_overweight_starters()
             starter_changes += self._buy_underweight_starters()
 
-            if starter_changes > 0:
-                self._deploy_residual_cash()
+            cash_changes = self._deploy_residual_cash()
 
-            if starter_changes == 0:
+            if starter_changes == 0 and cash_changes == 0:
                 break
 
         return self.plan.netted_trades()
@@ -742,8 +741,9 @@ class RebalancePlanner:
 
         return None
 
-    def _deploy_residual_cash(self) -> None:
-        """Minimize stranded cash after starter trades, same-currency first."""
+    def _deploy_residual_cash(self) -> int:
+        """Minimize stranded cash, same-currency first."""
+        trades_added = 0
         while True:
             made_trade = False
             projected_drifts = self.plan.drifts()
@@ -776,6 +776,7 @@ class RebalancePlanner:
 
                         self.plan.add_trade(trade)
                         made_trade = True
+                        trades_added += 1
                         projected_drifts = self.plan.drifts()
 
                 # Cross-currency deployment
@@ -808,10 +809,13 @@ class RebalancePlanner:
 
                         self.plan.add_trade(trade)
                         made_trade = True
+                        trades_added += 1
                         projected_drifts = self.plan.drifts()
 
             if not made_trade:
                 break
+
+        return trades_added
 
 
 # ══════════════════════════════════════════════════════════════════

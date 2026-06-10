@@ -11,7 +11,7 @@ The planner is built around these rules (defined in the project README). They're
 1. **Treat all accounts as one household portfolio** — Drift is measured at the total-portfolio level, not per account.
 2. **Sell overweight positions and buy underweight positions** — The planner starts with symbols whose drift is materially away from target.
 3. **Use a drift threshold to avoid tiny starter trades** — The configured `drift_trade_threshold_pct` suppresses trades for symbols that are only slightly off target.
-4. **Minimize free cash whenever practical** — Once meaningful trades are already happening, leftover cash is deployed aggressively so it doesn't remain stranded.
+4. **Minimize free cash whenever practical** — Useful account-level cash is deployed even when no symbol is far enough from target to start a normal rebalance.
 5. **Only buy symbols that already exist in the account** — An account's current holdings define its buyable universe.
 6. **Prefer same-currency deployment before cross-currency deployment** — Same-currency buys come before CAD/USD conversion. Cross-currency funding is still used when needed.
 7. **Allow account-constrained cash deployment, then clean up globally** — If cash lands in an account with limited options, deploy it there first. If that creates excess exposure, sell the excess from another account where proceeds can fund underweight buys.
@@ -85,10 +85,9 @@ def build(self) -> list:
         starter_changes += self._sell_overweight_starters()
         starter_changes += self._buy_underweight_starters()
 
-        if starter_changes > 0:
-            self._deploy_residual_cash()
+        cash_changes = self._deploy_residual_cash()
 
-        if starter_changes == 0:
+        if starter_changes == 0 and cash_changes == 0:
             break                    # Converged — no more drift to fix
 
     return self.plan.netted_trades()  # Consolidate and return
@@ -341,12 +340,12 @@ for _drift_pct, symbol, bid_price, max_sellable in candidates:
 
 ## Layer 3: Residual Cash Deployment (`_deploy_residual_cash`)
 
-After starter sells and buys, cash can remain in accounts from rounding, pre-existing balances, or partial fills. This layer minimizes idle cash.
+Cash can remain in accounts from rounding, pre-existing balances, dividends, or partial fills. This layer minimizes idle cash and runs even when no starter sell or buy was needed.
 
 ### The two-pass approach
 
 ```python
-def _deploy_residual_cash(self) -> None:
+def _deploy_residual_cash(self) -> int:
     while True:
         made_trade = False
         projected_drifts = self.plan.drifts()
@@ -657,7 +656,7 @@ Each `TradeRecommendation` carries a `note` string displayed in the output. Here
 |------|------|---------|
 | `Underweight buy` | Layer 2: Symbol drift below threshold, buying with same-currency cash | BUY 1495 ZMMK.TO — funded by CAD cash from VSP.TO sells |
 | `Underweight buy (requires FX)` | Layer 2: Same as above but no same-currency cash — triggered cross-currency conversion | BUY 62 IVV — CAD converted to USD via Norbert's Gambit |
-| `Leftover cash buy` | Layer 3: Account has leftover same-currency cash after starter trades, buying the most underweight symbol available | Account has $800 CAD remaining, buys 7 more ZMMK.TO |
+| `Leftover cash buy` | Layer 3: Account has leftover same-currency cash, buying the most underweight symbol available | Account has $800 CAD remaining, buys 7 more ZMMK.TO |
 | `Leftover cash buy (requires FX)` | Layer 3: Same as above but spending foreign-currency cash via conversion | Account has $200 CAD remaining, only holds USD symbols — convert and buy |
 | `Best available buy` | Layer 3 fallback: No underweight symbols available in this account/currency, but cash exists — buy the least overweight symbol to minimize idle cash | All symbols at target, but $50 CAD sitting in account — buy 1 share of least-drifted holding |
 | `Best available buy (requires FX)` | Layer 3 fallback with conversion: Same as above but funded by converting the other currency | Same situation but with foreign cash |
@@ -922,7 +921,7 @@ Round 1 — Layer 2 (Buys):
   (Layer 2 only acts on symbols beyond the drift_trade_threshold_pct)
 
 Round 1 — Layer 3 (Residual Cash):
-  starter_changes > 0 (sell + buy happened) → _deploy_residual_cash fires
+  _deploy_residual_cash runs after the starter passes
   
   acct_B: All CAD was consumed by the QQQ FX conversion. ~$0 left. Done.
   
