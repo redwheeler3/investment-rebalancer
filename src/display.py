@@ -773,10 +773,10 @@ def display_account_summary(accounts: list, usd_to_cad_rate: float):
         "[bold]Total[/bold]",
         "",
         "",
-        f"[bold]{_format_money(total_positions_value_sum)}[/bold]",
+        f"[bold green]{_format_money(total_value_sum)}[/bold green]",
         f"[bold]{_format_money(total_cash_cad_sum)}[/bold]",
         f"[bold]{_format_money(total_cash_usd_sum, 'USD')}[/bold]",
-        f"[bold green]{_format_money(total_value_sum)}[/bold green]",
+        f"[bold]{_format_money(total_positions_value_sum)}[/bold]",
     )
 
     console.print(table)
