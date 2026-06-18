@@ -343,16 +343,19 @@ class RebalancePlanner:
             if shares <= 0:
                 continue
 
+            current_drifts = self.plan.drifts()
+            productive = self._productive_accounts_for_sell(symbol, current_drifts)
             sell_trades = allocate_sell(
                 symbol,
                 shares,
                 bid_price_native,
                 currency,
                 self.portfolio.accounts,
-                effective_drift=self.plan.drifts(),
+                effective_drift=current_drifts,
                 transient_symbols=self.hidden_symbols,
                 drift_trade_threshold_pct=self.drift_trade_threshold_pct,
                 position_deltas=self.plan.position_deltas(),
+                productive_accounts=productive,
             )
             for trade in sell_trades:
                 self.ledger.credit_sale(trade.account_number, currency, trade.estimated_value)
@@ -602,6 +605,44 @@ class RebalancePlanner:
                 if drift < 0:
                     score += abs(drift)
         return score
+
+    def _productive_accounts_for_sell(self, sell_symbol: str, drifts: dict[str, float]) -> set[str]:
+        """Determine which accounts can productively use proceeds from selling a symbol.
+
+        An account can productively use proceeds if it has:
+        1. An underweight alternative (direct rebalancing), OR
+        2. An alternative with greater cascade potential than the sell symbol
+           (routes value out through a better conduit)
+        """
+        sell_cascade = {}
+        productive = set()
+
+        for acct in self.portfolio.accounts:
+            if not any(p.symbol == sell_symbol and p.quantity > 0 for p in acct.positions):
+                continue
+
+            if _has_underweight_alternatives(
+                acct, sell_symbol, drifts, self.hidden_symbols, self.drift_trade_threshold_pct,
+            ):
+                productive.add(acct.number)
+                continue
+
+            if acct.number not in sell_cascade:
+                sell_cascade[acct.number] = self._cascade_score(
+                    sell_symbol, acct.number, drifts,
+                )
+
+            for pos in acct.positions:
+                if pos.symbol == sell_symbol or pos.quantity <= 0:
+                    continue
+                if pos.symbol in self.hidden_symbols:
+                    continue
+                alt_score = self._cascade_score(pos.symbol, acct.number, drifts)
+                if alt_score > sell_cascade[acct.number]:
+                    productive.add(acct.number)
+                    break
+
+        return productive
 
     def _account_buyable_candidates(
         self,
@@ -923,11 +964,14 @@ def allocate_sell(
     transient_symbols: set,
     drift_trade_threshold_pct: float,
     position_deltas: dict,
+    productive_accounts: set | None = None,
 ) -> list:
     """Allocate a SELL order across accounts.
 
     Strategy:
     - Only sell from accounts that hold the symbol
+    - Skip accounts that can't productively use the proceeds (when
+      productive_accounts is provided, only sell from those accounts)
     - Prefer accounts with underweight alternatives (cash can be redeployed)
     - Among equally ranked accounts, sell from the largest position first
     - Uses effective quantities (adjusted for prior-round trades) to prevent
@@ -939,6 +983,11 @@ def allocate_sell(
     holders = find_accounts_for_symbol(symbol, accounts)
     if not holders:
         return []
+
+    if productive_accounts is not None:
+        holders = [a for a in holders if a.number in productive_accounts]
+        if not holders:
+            return []
 
     holders.sort(
         key=lambda a: (

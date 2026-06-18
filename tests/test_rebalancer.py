@@ -379,6 +379,61 @@ class TestAllocateSell:
         )
         assert trades == []
 
+    def test_productive_accounts_filter_excludes_unproductive(self):
+        """Only sells from accounts in the productive set."""
+        accounts = _make_accounts()
+        # Only account 11111 is productive
+        trades = allocate_sell(
+            symbol="VCN.TO",
+            total_shares=100,
+            price=50.0,
+            currency="CAD",
+            accounts=accounts,
+            effective_drift={"VCN.TO": 2.0, "VUN.TO": -1.0, "XBB.TO": 0.0},
+            transient_symbols=set(),
+            drift_trade_threshold_pct=0.5,
+            position_deltas={},
+            productive_accounts={"11111"},
+        )
+        assert len(trades) == 1
+        assert trades[0].account_number == "11111"
+        assert trades[0].quantity == 100
+
+    def test_productive_accounts_empty_set_returns_no_trades(self):
+        """When no accounts are productive, no sells are generated."""
+        accounts = _make_accounts()
+        trades = allocate_sell(
+            symbol="VCN.TO",
+            total_shares=100,
+            price=50.0,
+            currency="CAD",
+            accounts=accounts,
+            effective_drift={"VCN.TO": 2.0},
+            transient_symbols=set(),
+            drift_trade_threshold_pct=0.5,
+            position_deltas={},
+            productive_accounts=set(),
+        )
+        assert trades == []
+
+    def test_productive_accounts_none_sells_from_all(self):
+        """When productive_accounts is None (default), all holders are eligible."""
+        accounts = _make_accounts()
+        trades = allocate_sell(
+            symbol="VCN.TO",
+            total_shares=3000,
+            price=50.0,
+            currency="CAD",
+            accounts=accounts,
+            effective_drift={"VCN.TO": 2.0},
+            transient_symbols=set(),
+            drift_trade_threshold_pct=0.5,
+            position_deltas={},
+            productive_accounts=None,
+        )
+        total_sold = sum(t.quantity for t in trades)
+        assert total_sold == 3000
+
 
 # ══════════════════════════════════════════════════════════════════
 # Full planner integration tests
