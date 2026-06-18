@@ -149,20 +149,33 @@ If the drift gap is small but a single share would roughly close it, go ahead.
 ### Step 3: Decide which accounts to sell from
 
 ```python
+current_drifts = self.plan.drifts()
+productive = self._productive_accounts_for_sell(symbol, current_drifts)
 sell_trades = allocate_sell(
     symbol, shares, bid_price_native, currency,
     self.portfolio.accounts,
-    effective_drift=self.plan.drifts(),
+    effective_drift=current_drifts,
     transient_symbols=self.hidden_symbols,
     drift_trade_threshold_pct=self.drift_trade_threshold_pct,
     position_deltas=self.plan.position_deltas(),
+    productive_accounts=productive,
 )
 ```
+
+**What `_productive_accounts_for_sell` determines:** An account can productively use sell proceeds if it has:
+1. An underweight alternative (direct rebalancing), OR
+2. An alternative symbol with greater cascade potential than the sell symbol (routes value out through a better conduit — buying it may overshoot household allocation, triggering a sell from a *different* account where proceeds fund underweight buys)
+
+If neither condition holds, selling from that account would just generate cash that buys the same symbol back during residual deployment — leaking bid/ask spread for no benefit.
 
 Inside `allocate_sell`:
 
 ```python
 holders = find_accounts_for_symbol(symbol, accounts)
+
+# Exclude accounts that can't productively use the proceeds
+if productive_accounts is not None:
+    holders = [a for a in holders if a.number in productive_accounts]
 
 # Sort by: (1) has underweight alternatives? (2) position size
 holders.sort(
