@@ -913,30 +913,6 @@ def _has_underweight_alternatives(
     return False
 
 
-def _can_absorb_proceeds(
-    acct,
-    sell_symbol: str,
-    effective_drift: dict,
-    transient_symbols: set,
-    drift_trade_threshold_pct: float,
-) -> bool:
-    """Check if the account has at least one position that won't also be sold.
-
-    Selling from an account only makes sense if the proceeds can flow into
-    something else. If every other position in the account is itself overweight
-    beyond the threshold (and will also be sold), the cash has nowhere to go
-    and will boomerang back during residual cash deployment.
-    """
-    for pos in acct.positions:
-        if pos.symbol == sell_symbol or pos.quantity <= 0:
-            continue
-        if pos.symbol in transient_symbols:
-            continue
-        if effective_drift.get(pos.symbol, 0.0) <= drift_trade_threshold_pct:
-            return True
-    return False
-
-
 def allocate_sell(
     symbol: str,
     total_shares: int,
@@ -952,8 +928,6 @@ def allocate_sell(
 
     Strategy:
     - Only sell from accounts that hold the symbol
-    - Skip accounts where proceeds can't be redeployed (every other position
-      is also overweight beyond threshold, so cash would boomerang back)
     - Prefer accounts with underweight alternatives (cash can be redeployed)
     - Among equally ranked accounts, sell from the largest position first
     - Uses effective quantities (adjusted for prior-round trades) to prevent
@@ -963,13 +937,6 @@ def allocate_sell(
         return []
 
     holders = find_accounts_for_symbol(symbol, accounts)
-    if not holders:
-        return []
-
-    holders = [
-        a for a in holders
-        if _can_absorb_proceeds(a, symbol, effective_drift, transient_symbols, drift_trade_threshold_pct)
-    ]
     if not holders:
         return []
 
