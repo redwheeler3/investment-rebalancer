@@ -1,5 +1,12 @@
 # Project Rules
 
+## Capturing Feedback
+
+Persisting what we learn is valuable. For this project, that persistence lives in the project files, not the auto-memory system.
+
+- **Actively capture durable "gems."** When Jeff corrects you, confirms an approach, states a preference, or surfaces a decision that will matter beyond this conversation, write it down — don't let it evaporate. There's no auto-memory prompting you to do this, so it's on you to notice and record.
+- Write anything worth keeping to the right project file, never to memory files (including `MEMORY.md`). How-to-work guidance (corrections, confirmed approaches, engineering rules) goes in this file, in the most relevant section.
+
 ## Simplicity Over Compatibility
 
 This app has no external consumers — keep it simple:
@@ -10,7 +17,7 @@ This app has no external consumers — keep it simple:
 ## Code Style
 
 - Prefer one function that handles multiple cases via parameters over duplicated functions with near-identical logic.
-- **Treat the root cause, not the symptom.** Before writing a fix, identify the underlying logic failure and address it directly. Don't add guards or workarounds that produce the correct output while leaving the underlying flaw in place.
+- **Treat the root cause, not the symptom.** Before writing a fix, identify the underlying logic failure and address it directly. Don't add guards or workarounds that produce the correct output while leaving the underlying flaw in place. Ask "what general invariant is being violated?" and fix that — if your first idea only handles the exact case observed (e.g. "skip accounts with one position"), keep thinking until you find the condition covering all variants. The user shouldn't have to guide you to the deeper fix through a series of "what about X?" questions.
 
 ## Git
 
