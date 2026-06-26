@@ -65,12 +65,12 @@ CAD/USD planning, and Questrade-specific workflow details.
 - **Unknown Holdings** — Symbols not in targets are treated as implicit 0% targets and recommended for sale
 - **Projected Accuracy** — Shows expected accuracy after recommended trades
 - **Whole-Share Trading** — Uses whole shares only, with bid pricing for sells and ask pricing for buys
-- **Iterative Algorithm** — Repeats Sell → Buy → Sweep rounds until positions are within tolerance
+- **Iterative Algorithm** — Repeats Sell → Buy → Sweep rounds until positions are within tolerance (or a 10-round cap is reached)
 - **Configurable Drift Trade Threshold** — Only acts on positions that drift beyond your chosen threshold
 - **Tolerance-Aware Status Display** — Marks symbols as `OK`, `OVER`, or `UNDER`
 - **Conservative FX Funding** — Uses conservative DLR bid/ask math for Norbert's Gambit sizing
 - **Tactical Defensive Deployment** — Drawdown-based regime system that deploys fixed-income assets into equities during market drops and rebuilds on recovery
-- **Drift & Token Alerting** — GitHub Issues created automatically when accuracy drops below 95% or tokens fail for >48h, auto-closed on recovery
+- **Drift & Token Alerting** — GitHub Issues created automatically when accuracy drops below 95% or tokens fail for >48h, auto-closed on recovery (the app emits the accuracy score; the thresholds and issue logic live in the `portfolio_sync.yml` workflow template, where you can tune them)
 - **Automatic Portfolio Sync** — Designed to run with GitHub Actions from a private state repo
 
 ---
@@ -108,12 +108,20 @@ these portfolio rules:
    - Cross-currency funding is still used when needed, with conservative
      Norbert's Gambit math.
 
-7. **Allow account-constrained cash deployment, then clean up globally**
+7. **Allow account-constrained cash deployment, then clean up globally (cascade routing)**
    - If cash lands in an account that can only productively buy a limited set of
      existing holdings, the planner may fully deploy that cash there first.
    - If that creates excess exposure at the household level, the planner can
      later sell that excess from another account where the proceeds can be used
      for more useful underweight buys.
+   - To make this deliberate rather than accidental, the "best available" fallback
+     ranks candidates by a **cascade score** — how much underweight drift the buy
+     could unlock in *other* accounts that hold the same symbol. Buying a
+     high-cascade symbol intentionally overshoots so a later round can sell it from
+     a needier account, routing the cash to where it actually closes a gap. The
+     mirror image applies to sells: an account is only sold from if it can
+     productively use the proceeds (a "productive account" — one with an underweight
+     alternative, or a better cascade conduit than the symbol being sold).
 
 8. **Avoid obviously wasteful churn**
    - The planner tries to avoid creating trade patterns that simply undo each
@@ -152,7 +160,7 @@ This rule set is meant to reflect the practical objective of the project:
   Fetching USD/CAD exchange rate...
   USD/CAD rate: 1.3591
   Building portfolio...
-  Fetching market quotes (bid/ask)...
+  Fetching market quotes and previous close...
   Fetching DLR quotes...
   DLR.TO bid/ask: $13.79 / $13.79 | DLR.U.TO bid/ask: $10.15 / $10.15
   Calculating trades...
@@ -329,7 +337,9 @@ Public repo: investment-rebalancer/
 ├── config/
 │   └── settings.example.yaml
 ├── data/
-│   └── portfolio_history.example.jsonl
+│   ├── portfolio_history.example.jsonl
+│   ├── tactical_state.example.json
+│   └── fx_targets_state.example.json
 ├── tokens/
 │   └── token.example.json
 ├── templates/
@@ -375,7 +385,7 @@ The private repo contains the live state the app reads through
 | `src/fx_targets.py` | Resolves FX-based target allocation rules from config |
 | `src/report_builder.py` | Assembles all report data (trades, projections, history) for display |
 | `src/display.py` | Terminal rendering with Rich (tables, charts, formatting) |
-| `src/history.py` | Portfolio value history — ATH tracking, daily change, YTD chart data |
+| `src/history.py` | Portfolio value history — ATH tracking and YTD chart data (day P&L is computed in `display.py` from previous-close prices) |
 | `src/tactical.py` | Tactical defensive deployment — drawdown-based dynamic target adjustment |
 | `src/questrade_client.py` | Questrade API client (OAuth token rotation, positions, quotes) |
 | `src/paths.py` | Resolves private state repo paths from `REBALANCER_STATE_DIR` |
@@ -602,14 +612,16 @@ This gives you automated token refresh without ever storing live credentials in 
 
 ## Tactical defensive deployment
 
-The optional tactical system implements a modified 120-minus-age rule combined
-with a drawdown-based deployment plan. The reason to use it is to make defensive
-assets part of a predefined bear-market plan instead of an ad hoc decision made
-while markets are falling.
+The optional tactical system pairs a static baseline fixed/equity split with a
+drawdown-based deployment plan. You choose the baseline split yourself (a common
+starting point is a "120-minus-age" heuristic, but the app doesn't compute it from
+your age — `baseline_fixed_pct` is just a number you set). The reason to use it is
+to make defensive assets part of a predefined bear-market plan instead of an ad hoc
+decision made while markets are falling.
 
-When enabled, the baseline portfolio holds 80% equities and 20% fixed income.
-When the market drops, fixed-income assets are deployed into equities at
-predefined thresholds. On recovery, the fixed position is rebuilt.
+With the example configuration below, the baseline portfolio holds 80% equities
+and 20% fixed income. When the market drops, fixed-income assets are deployed into
+equities at predefined thresholds. On recovery, the fixed position is rebuilt.
 
 ### How it works
 
@@ -669,6 +681,50 @@ Symbols listed in `fixed_composition` should **not** also appear in the static
 
 ---
 
+## FX-derived target allocations
+
+Rather than hardcoding a fixed split between a USD-listed ETF and its CAD-hedged
+twin (say `IVV` and `XSP.TO`), you can configure a **total** allocation for that
+exposure and let the current USD/CAD exchange rate decide the split:
+
+- When USD is expensive (rate near the top of the band), more of the allocation
+  goes to the CAD-hedged fund — no conversion needed.
+- When USD is cheap (rate near the bottom), more goes to the USD fund — you're
+  buying US exposure at a relative discount.
+- In between, the split blends linearly across the band.
+
+### Configuration
+
+Add an `fx_target_rules` section to `config/settings.yaml`:
+
+```yaml
+fx_target_rules:
+  usd_equity_split:
+    total_target_pct: 20.0      # combined allocation across both funds
+    usd_symbol: IVV             # the USD-listed fund
+    cad_symbol: XSP.TO          # the CAD-hedged fund
+    min_usd_to_cad_rate: 1.0    # bottom of the rate band (all USD below this)
+    max_usd_to_cad_rate: 1.5    # top of the rate band (all CAD above this)
+    target_rounding_step: 1     # resolved targets snap to whole percentage points
+```
+
+The CAD fraction is `(clamped_rate − min) / (max − min)`, applied to
+`total_target_pct`; the remainder goes to the USD symbol. The rate is clamped to
+the band, so outside `[min, max]` the split pins to one extreme.
+
+The two managed symbols must **not** also appear in the static `targets` (the
+resolver raises if they do), since `fx_target_rules` owns them.
+
+### Sticky rounding
+
+To avoid the split oscillating by a percentage point every run as the rate
+wobbles near a rounding boundary, resolved targets are **sticky**: the value only
+moves once the raw (unrounded) calculation has traveled a full `target_rounding_step`
+away from the last resolved value. The last resolved CAD target per rule is
+persisted to `data/fx_targets_state.json` so stickiness carries across runs.
+
+---
+
 ## Configuration
 
 Your real configuration lives in `config/settings.yaml` in the private state
@@ -679,7 +735,7 @@ Key fields:
 
 - `targets` — static target allocations (should sum to ~100% with FX and tactical rules)
 - `accounts` — token filenames, display labels, and optional account-type overrides
-- `fx_target_rules` — exchange-rate-driven target logic
+- `fx_target_rules` — exchange-rate-driven target logic (see [FX-derived target allocations](#fx-derived-target-allocations))
 - `tactical_deployment` — drawdown-based regime system for fixed/equity split (optional)
 - `transient_symbols` — symbols to exclude temporarily from trading
 - `norberts_gambit_fee_cad` — estimated fee used in conversion suggestions

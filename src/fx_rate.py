@@ -74,8 +74,12 @@ def fetch_dlr_quotes(client) -> DlrQuotes:
         cad_mid = (cad_bid_price + cad_ask_price) / 2
         usd_mid = (usd_bid_price + usd_ask_price) / 2
         rate = cad_mid / usd_mid
-        # Sanity check: rate should be between 1.0 and 2.0
-        if 1.0 < rate < 2.0:
+        # Sanity check against garbage DLR quotes (stale/empty leg, wrong symbol
+        # match, etc.) — reject anything outside a plausible USD/CAD band rather
+        # than valuing the whole portfolio at a nonsensical rate. The floor is
+        # 0.5, not 1.0: CAD has historically traded above parity (USD/CAD fell to
+        # ~0.91 in 2007), so a strong-CAD day is real, not garbage.
+        if 0.5 < rate < 2.0:
             exchange_rate = round(rate, 4)
 
     return DlrQuotes(

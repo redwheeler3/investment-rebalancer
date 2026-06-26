@@ -23,7 +23,8 @@ The `run_rebalancer()` function is the spine of the app. Every other module is c
 
 ```python
 def run_rebalancer():
-    accounts, targets, transient_symbols, ... = load_config()
+    (accounts, targets, transient_symbols, norberts_gambit_fee_cad,
+     fx_target_rules, drift_trade_threshold_pct, tactical_config) = load_config()
 
     clients = _connect_clients(accounts)
     usd_to_cad_rate = _fetch_exchange_rate(clients[0])
@@ -31,14 +32,28 @@ def run_rebalancer():
     portfolio = _build_priced_portfolio(clients, usd_to_cad_rate)
     dlr_quotes = _fetch_dlr_quotes(clients[0])
 
+    # Tactical posture (if configured) shifts the resolved targets before sizing.
+    tactical_posture = evaluate_tactical_posture(...) if tactical_config else None
+    if tactical_posture:
+        resolved_targets = resolve_tactical_targets(resolved_targets, tactical_posture, ...)
+    _validate_resolved_targets(resolved_targets)  # fail fast if not ~100%
+
     trades = calculate_trades(portfolio, resolved_targets, ...)
     currency_conversions = calculate_currency_needs(trades, portfolio.accounts, ...)
-    report = build_report_data(portfolio, trades, ...)
+    report = build_report_data(portfolio, resolved_targets, ..., trades, ...)
     record_value(portfolio.total_value_cad)
-    _render_report(portfolio, report, ...)
+    _render_report(portfolio, resolved_targets, ..., report)
 ```
 
-Before any of this, `_pull_latest()` does a `git pull --ff-only` on the private state repo to get fresh tokens and history. After everything, `_push_synced_files()` commits and pushes the rotated tokens + updated history back.
+`load_config()` returns a 7-tuple (accounts, targets, transient symbols, gambit
+fee, FX rules, drift threshold, tactical config); the snippet above keeps the
+interesting names and elides the rest.
+
+This is the **interactive** path. Before any of it, `_pull_latest()` does a
+`git pull --ff-only` on the private state repo to get fresh tokens and history.
+After everything, `_push_synced_files()` commits and pushes the rotated tokens +
+updated history back. (The `--sync` path is different — see [The `--sync` Mode](#the---sync-mode)
+below — it does **not** push; the GitHub Actions workflow handles its own commit.)
 
 ---
 
@@ -79,7 +94,7 @@ tactical_config = parse_tactical_config(data.get("tactical_deployment", {}))
 
 ### Tactical deployment
 
-The `tactical_deployment` section is parsed by `parse_tactical_config()` in `tactical.py`. When the section is present and populated, it returns a `TacticalConfig` dataclass; otherwise `None` (feature is off). This implements a drawdown-based regime state machine that dynamically shifts the portfolio's fixed-income / equity split — deploying bonds into equities during crashes, and rebuilding the bond position on recovery.
+The `tactical_deployment` section is parsed by `parse_tactical_config()` in `tactical.py`. When the section is present and populated, it returns a `TacticalConfig` dataclass; otherwise `None` (feature is off). The full mechanism is described in the deep dive below.
 
 ### Deep Dive: Tactical Deployment
 
@@ -224,8 +239,10 @@ Daily `--sync` runs evaluate tactical transitions even when you don't run the fu
 ```python
 # In sync mode:
 if tactical_config:
+    ath = get_all_time_high(current_value=portfolio.total_value_cad)
     posture = evaluate_tactical_posture(
-        current_value, ath_value, ath_date, config=tactical_config
+        current_value=portfolio.total_value_cad,
+        ath_value=ath.value, ath_date=ath.date, config=tactical_config,
     )
     if posture.transition_occurred:
         print(f"  ⚡ Tactical regime changed: {posture.previous_regime} → {posture.regime}")
@@ -256,13 +273,13 @@ cad_target_pct = _sticky_round(raw_cad_pct, rounding_step, prior_cad_target)
 usd_target_pct = round((total_target_pct - cad_target_pct) / rounding_step) * rounding_step
 ```
 
-The `_sticky_round` function keeps the current target unless the raw value has moved a full step away, preventing oscillation when the rate hovers near a rounding boundary.
+The `_sticky_round` function keeps the current target unless the raw value has moved a full step away, preventing oscillation when the rate hovers near a rounding boundary. To make stickiness work across runs, the resolver persists the last resolved CAD target per rule to `data/fx_targets_state.json` (`_load_fx_state` / `_save_fx_state`) and reads it back as the `prior_cad_target` on the next run.
 
 When USD is expensive (rate near max), more allocation goes to the CAD fund. When USD is cheap, more goes to the USD fund. The targets dynamically adapt to make currency conversion worthwhile.
 
 ### Deep Dive: FX Target Resolution
 
-The FX target system is one of the more subtle design decisions. Instead of manually adjusting your allocation split between Canadian and US funds when the exchange rate changes, the app does it automatically.
+The worked numbers below show how the resolver behaves across the rate band.
 
 #### The Problem It Solves
 
@@ -364,6 +381,8 @@ usd_mid = (usd_bid + usd_ask) / 2   # ~$10.155
 rate = cad_mid / usd_mid             # ~1.3614
 ```
 
+The derived rate is only accepted if it lands in a plausible band (`0.5 < rate < 2.0`); otherwise `get_usd_to_cad_rate()` raises rather than valuing the portfolio with a garbage rate from a bad/empty quote. The floor is 0.5 rather than 1.0 because CAD has historically traded above parity with USD (USD/CAD fell to ~0.91 in 2007), so a strong-CAD reading is legitimate, not garbage.
+
 Using DLR instead of a generic forex feed means the exchange rate is **achievable** — it's the rate you'd actually get doing Norbert's Gambit.
 
 ### Building the portfolio
@@ -462,7 +481,7 @@ shares_affordable = floor((cad_available - fee) / cad_buy_price)
 dlr_shares = min(shares_needed, shares_affordable)
 ```
 
-It also handles **sweep logic** — if an account only holds USD positions but has leftover CAD cash after trades, it converts the remainder to avoid stranded cash.
+It also handles **sweep logic** — if an account holds positions in only one currency but has leftover cash in the *other* currency after trades, that cash is structurally stranded (the rebalancer can't deploy it without an FX conversion), so the sweep converts it. This runs in both directions (leftover CAD in a USD-only account, and leftover USD in a CAD-only account). **Mixed-currency accounts are deliberately skipped** — their foreign cash is deployable by the planner's same-currency "best available" fallback, so converting it here would force an unnecessary round-trip.
 
 ### The math layer (`fx_math.py`)
 
@@ -511,17 +530,22 @@ if net_cash.usd < 0 and net_cash.cad > 0:
 
 #### Stage 3: Sweep Logic (Same Module)
 
-After required conversions are planned, the sweep detects leftover cash in the "wrong" currency:
+After required conversions are planned, the sweep detects leftover cash in the "wrong" currency — but only in **single-currency** accounts, where that cash is genuinely stranded:
 
 ```python
-# If all positions are USD but we have leftover CAD:
+# Only single-currency accounts qualify; mixed accounts are skipped because
+# the planner can deploy their foreign cash without an FX round-trip.
 pos_currencies = {p.currency for p in acct.positions if p.quantity > 0}
+if len(pos_currencies) != 1:
+    continue
+
+# USD-only account with leftover CAD → sweep CAD into USD
 if pos_currencies == {"USD"} and remaining_cad > fee:
-    # Sweep: convert the rest too
     sweep_shares = floor((remaining_cad - fee) / cad_buy_price)
+# CAD-only account with leftover USD → sweep USD into CAD (symmetric)
 ```
 
-The sweep augments an existing conversion if one was already planned (no extra fee), or creates a standalone conversion if needed.
+The sweep runs in both directions and augments an existing conversion if one was already planned (same journal, no extra fee), or creates a standalone conversion if needed.
 
 #### Why Three Stages?
 
@@ -542,11 +566,12 @@ The sweep augments an existing conversion if one was already planned (no extra f
 current_snapshot = build_allocation_snapshot(portfolio, targets, ...)
 projected_snapshot = simulate_rebalance(portfolio, trades, targets, ...)
 all_time_high = get_all_time_high(current_value=portfolio.total_value_cad)
-daily_change = get_daily_change(current_value=portfolio.total_value_cad)
 ytd_history = get_year_to_date_history(current_value=portfolio.total_value_cad)
 ```
 
-All three history functions take the **live portfolio value** directly — they don't depend on what's been written to disk yet. This was a deliberate design choice to avoid ordering bugs.
+Both history functions take the **live portfolio value** directly — they don't depend on what's been written to disk yet. This was a deliberate design choice to avoid ordering bugs.
+
+Day P&L is **not** a history function — there's no `get_daily_change`. It's computed in `display.py` (`_compute_portfolio_day_pnl`) from each holding's `prev_close_price`, which is fetched from daily candles during quote enrichment (see Stage 3). The previous close is selected as the latest candle strictly *before* the quote's own last-trade date, so weekend/holiday runs compare against the right trading session rather than the calendar day.
 
 ### History tracking (`history.py`)
 
@@ -591,8 +616,15 @@ GitHub Actions runs `python main.py --sync` on a schedule. This mode:
 1. Refreshes all tokens (keeps them alive even when you don't run locally)
 2. Snapshots the portfolio value (so ATH tracking works even on days you don't check)
 3. Evaluates tactical regime transitions (so drawdown triggers are caught daily)
+4. Resolves the final targets (FX rules + tactical adjustment) and computes the
+   current **accuracy** score, which it writes to `GITHUB_OUTPUT` as `accuracy=...`
+   for the workflow's **drift alerting** (the workflow opens/closes a GitHub Issue
+   based on this number — the 95% threshold lives in the workflow template, not here)
 
-It's a stripped-down path — no trades calculated, no display rendered. Just auth + record + tactical evaluation.
+It calculates **no trades** and renders **no display**. It also does **not** commit
+or push: the private-repo GitHub Actions workflow handles its own commit/push, so
+`--sync` deliberately skips `_push_synced_files()`. A token-refresh failure exits
+non-zero so the workflow can alert on stale credentials.
 
 ---
 

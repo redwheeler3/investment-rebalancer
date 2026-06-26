@@ -1190,6 +1190,8 @@ Post-trade planning (fx_conversions.py):
 
 **Key insight:** The sweep logic in `fx_conversions.py` runs *after* the rebalancer. It detects "orphaned" foreign cash that can never be productively used and folds it into the conversion plan. This prevents the slow accumulation of small unusable cash balances over time.
 
+The sweep is gated on the account holding positions in **exactly one** currency (`len(pos_currencies) == 1`). **Mixed-currency accounts are deliberately skipped:** their foreign cash isn't stranded — the planner's same-currency "best available" fallback can deploy it without an FX round-trip, so converting it here would be wasteful. The sweep is also symmetric: the example above shows a USD-only account sweeping leftover CAD, but a CAD-only account with leftover USD sweeps the other direction (Buy DLR.U.TO → Sell DLR.TO) the same way.
+
 ---
 
 ### How These Scenarios Interact With the Rules
