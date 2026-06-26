@@ -13,7 +13,7 @@ from src.history import (
     get_all_time_high,
     get_year_to_date_history,
 )
-from src.portfolio import AllocationSnapshot, simulate_rebalance
+from src.portfolio import AllocationSnapshot, build_allocation_snapshot, simulate_rebalance
 from src.models import TradeRecommendation, TransientAlert
 from src.tactical import TacticalPosture
 
@@ -43,8 +43,6 @@ def build_report_data(
     tactical_posture: TacticalPosture | None = None,
 ) -> RebalanceReportData:
     """Calculate all report inputs from the current portfolio state."""
-    from src.portfolio import build_allocation_snapshot
-
     current_snapshot = build_allocation_snapshot(
         portfolio,
         targets,

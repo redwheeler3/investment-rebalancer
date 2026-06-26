@@ -33,11 +33,6 @@ def _format_money(amount: float, currency: str = "CAD") -> str:
     return f"{prefix}{amount:,.2f}"
 
 
-def _format_price(price: float, currency: str) -> str:
-    """Format a quoted price in its native currency."""
-    return _format_money(price, currency)
-
-
 def _format_shares(quantity: float) -> str:
     """Format a share quantity for display."""
     return f"{int(quantity):,}" if quantity == int(quantity) else f"{quantity:,.2f}"
@@ -147,7 +142,7 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
         value_cad = holding.value_cad
         prev_close = holding.prev_close_price
 
-        price_str = _format_price(price, currency)
+        price_str = _format_money(price, currency)
         qty_str = _format_shares(qty)
 
         # Calculate day P&L (from previous close)
@@ -218,7 +213,6 @@ def display_all_time_high(ath, portfolio_value: float):
         return
 
     ath_change = portfolio_value - ath.value
-    ath_change_pct = 0.0 if ath.value == 0 else (ath_change / ath.value) * 100.0
 
     if ath.is_new_ath:
         console.print(
@@ -232,7 +226,7 @@ def display_all_time_high(ath, portfolio_value: float):
     console.print(
         f"  [bold]All-Time High:[/bold]           "
         f"[default]${ath.value:,.2f}[/default]  "
-        f"{_format_signed_change(ath_change, ath_change_pct)}  "
+        f"{_format_signed_change(ath_change, ath.drawdown_pct)}  "
         f"[default]({ath.date})[/default]"
     )
 
@@ -643,7 +637,7 @@ def display_trades(trades: list):
             trade.symbol,
             Text(trade.action, style=action_style),
             str(trade.quantity),
-            _format_price(trade.price, trade.currency),
+            _format_money(trade.price, trade.currency),
             _format_money(trade.estimated_value, trade.currency),
             account_label,
             trade.note,

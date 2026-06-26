@@ -7,6 +7,7 @@ and projects what the portfolio would look like after a set of trades.
 """
 
 from dataclasses import dataclass, field
+from datetime import date, datetime, timedelta
 
 
 def _coerce_numeric(value, default: float = 0.0) -> float:
@@ -333,8 +334,6 @@ def calculate_allocations_for_values(
 
 def _get_quote_trade_date(quote: dict):
     """Return the calendar date of the quote's last trade, if available."""
-    from datetime import datetime
-
     last_trade_time = quote.get("lastTradeTime")
     if not last_trade_time:
         return None
@@ -356,8 +355,6 @@ def _get_prev_close_price(client, symbol_id: int, exclude_date=None) -> float:
     Falls back to today's date when exclude_date is unavailable.
     Returns 0.0 if insufficient data is available.
     """
-    from datetime import date, timedelta
-
     reference_date = exclude_date or date.today()
     start = reference_date - timedelta(days=10)
 

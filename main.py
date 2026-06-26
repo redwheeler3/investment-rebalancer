@@ -22,7 +22,7 @@ if sys.platform == "win32":
         sys.stderr.reconfigure(encoding="utf-8")
 
 from src.questrade_client import QuestradeClient
-from src.portfolio import build_portfolio, fetch_quotes_for_holdings
+from src.portfolio import build_allocation_snapshot, build_portfolio, fetch_quotes_for_holdings
 from src.report_builder import build_report_data
 from src.display import display_full_report, console
 from src.fx_rate import get_usd_to_cad_rate, fetch_dlr_quotes
@@ -126,8 +126,6 @@ def run_scheduled_sync():
     Computes and outputs portfolio accuracy for drift alerting.
     GitHub Actions handles committing and pushing the updated files.
     """
-    from src.portfolio import build_allocation_snapshot
-
     (
         accounts,
         targets,
