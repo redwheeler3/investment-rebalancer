@@ -7,6 +7,7 @@ from src.rebalancer import (
     find_accounts_for_symbol,
     get_position_quantity,
     allocate_sell,
+    _has_underweight_alternatives,
 )
 from src.portfolio import AccountInfo, Position
 from src.models import TradeRecommendation
@@ -303,6 +304,33 @@ class TestGetPositionQuantity:
         assert qty == 0.0
 
 
+class TestHasUnderweightAlternatives:
+    def test_sub_threshold_underweight_counts(self):
+        """Any position below target is a redeployment target, even below the
+        starter-trade threshold. Regression for a barely-overweight sell being
+        suppressed when the only alternatives were slightly underweight."""
+        accounts = _make_accounts()
+        # VUN.TO is only -0.2% underweight — well inside a 0.5% threshold.
+        drifts = {"VCN.TO": 0.6, "VUN.TO": -0.2}
+        assert _has_underweight_alternatives(
+            accounts[0], "VCN.TO", drifts, set(),
+        )
+
+    def test_no_underweight_positions_returns_false(self):
+        accounts = _make_accounts()
+        drifts = {"VCN.TO": 0.6, "VUN.TO": 0.1}
+        assert not _has_underweight_alternatives(
+            accounts[0], "VCN.TO", drifts, set(),
+        )
+
+    def test_transient_alternative_ignored(self):
+        accounts = _make_accounts()
+        drifts = {"VCN.TO": 0.6, "VUN.TO": -0.2}
+        assert not _has_underweight_alternatives(
+            accounts[0], "VCN.TO", drifts, {"VUN.TO"},
+        )
+
+
 class TestAllocateSell:
     def test_sells_from_largest_holder(self):
         accounts = _make_accounts()
@@ -316,7 +344,6 @@ class TestAllocateSell:
             accounts=accounts,
             effective_drift=drifts,
             transient_symbols=set(),
-            drift_trade_threshold_pct=0.5,
             position_deltas={},
         )
         assert len(trades) >= 1
@@ -338,7 +365,6 @@ class TestAllocateSell:
             accounts=accounts,
             effective_drift=drifts,
             transient_symbols=set(),
-            drift_trade_threshold_pct=0.5,
             position_deltas={},
         )
         # Account A should be preferred (has VUN.TO underweight)
@@ -358,7 +384,6 @@ class TestAllocateSell:
             accounts=accounts,
             effective_drift=drifts,
             transient_symbols=set(),
-            drift_trade_threshold_pct=0.5,
             position_deltas={},
         )
         total_sold = sum(t.quantity for t in trades)
@@ -374,7 +399,6 @@ class TestAllocateSell:
             accounts=accounts,
             effective_drift={"VCN.TO": 2.0},
             transient_symbols=set(),
-            drift_trade_threshold_pct=0.5,
             position_deltas={},
         )
         assert trades == []
@@ -391,7 +415,6 @@ class TestAllocateSell:
             accounts=accounts,
             effective_drift={"VCN.TO": 2.0, "VUN.TO": -1.0, "XBB.TO": 0.0},
             transient_symbols=set(),
-            drift_trade_threshold_pct=0.5,
             position_deltas={},
             productive_accounts={"11111"},
         )
@@ -410,7 +433,6 @@ class TestAllocateSell:
             accounts=accounts,
             effective_drift={"VCN.TO": 2.0},
             transient_symbols=set(),
-            drift_trade_threshold_pct=0.5,
             position_deltas={},
             productive_accounts=set(),
         )
@@ -427,7 +449,6 @@ class TestAllocateSell:
             accounts=accounts,
             effective_drift={"VCN.TO": 2.0},
             transient_symbols=set(),
-            drift_trade_threshold_pct=0.5,
             position_deltas={},
             productive_accounts=None,
         )

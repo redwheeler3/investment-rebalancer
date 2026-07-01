@@ -163,7 +163,7 @@ sell_trades = allocate_sell(
 ```
 
 **What `_productive_accounts_for_sell` determines:** An account can productively use sell proceeds if it has:
-1. An underweight alternative (direct rebalancing), OR
+1. An underweight alternative (direct rebalancing) — *any* position below target (drift < 0), matching what the residual-cash deployment layer will actually buy. This is intentionally looser than `drift_trade_threshold_pct`: that threshold suppresses tiny *starter* trades, but once an overweight sell has been triggered its proceeds should be usable against any underweight holding rather than left stranded. OR
 2. An alternative symbol with greater cascade potential than the sell symbol (routes value out through a better conduit — buying it may overshoot household allocation, triggering a sell from a *different* account where proceeds fund underweight buys)
 
 If neither condition holds, selling from that account would just generate cash that buys the same symbol back during residual deployment — leaking bid/ask spread for no benefit.

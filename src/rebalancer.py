@@ -351,7 +351,6 @@ class RebalancePlanner:
                 self.portfolio.accounts,
                 effective_drift=current_drifts,
                 transient_symbols=self.hidden_symbols,
-                drift_trade_threshold_pct=self.drift_trade_threshold_pct,
                 position_deltas=self.plan.position_deltas(),
                 productive_accounts=productive,
             )
@@ -620,7 +619,7 @@ class RebalancePlanner:
                 continue
 
             if _has_underweight_alternatives(
-                acct, sell_symbol, drifts, self.hidden_symbols, self.drift_trade_threshold_pct,
+                acct, sell_symbol, drifts, self.hidden_symbols,
             ):
                 productive.add(acct.number)
                 continue
@@ -922,15 +921,22 @@ def _has_underweight_alternatives(
     sell_symbol: str,
     effective_drift: dict,
     transient_symbols: set,
-    drift_trade_threshold_pct: float,
 ) -> bool:
-    """Check if proceeds from selling can be redeployed into underweight positions."""
+    """Check if proceeds from selling can be redeployed into underweight positions.
+
+    A position counts as a redeployment target if it is below target at all
+    (drift < 0), matching the residual-cash deployment layer which buys any
+    underweight symbol. This is deliberately looser than
+    ``drift_trade_threshold_pct``: that threshold suppresses tiny *starter*
+    trades, but once an overweight sell has been triggered its proceeds should
+    be usable against any underweight holding rather than stranded.
+    """
     for pos in acct.positions:
         if pos.symbol == sell_symbol or pos.quantity <= 0:
             continue
         if pos.symbol in transient_symbols:
             continue
-        if effective_drift.get(pos.symbol, 0) < -drift_trade_threshold_pct:
+        if effective_drift.get(pos.symbol, 0) < 0:
             return True
     return False
 
@@ -943,7 +949,6 @@ def allocate_sell(
     accounts: list,
     effective_drift: dict,
     transient_symbols: set,
-    drift_trade_threshold_pct: float,
     position_deltas: dict,
     productive_accounts: set | None = None,
 ) -> list:
@@ -977,7 +982,6 @@ def allocate_sell(
                 symbol,
                 effective_drift,
                 transient_symbols,
-                drift_trade_threshold_pct,
             ) else 0,
             effective_qty(a, symbol, position_deltas),
         ),

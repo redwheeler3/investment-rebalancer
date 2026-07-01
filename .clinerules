@@ -6,6 +6,7 @@ Persisting what we learn is valuable. For this project, that persistence lives i
 
 - **Actively capture durable "gems."** When Jeff corrects you, confirms an approach, states a preference, or surfaces a decision that will matter beyond this conversation, write it down — don't let it evaporate. There's no auto-memory prompting you to do this, so it's on you to notice and record.
 - Write anything worth keeping to the right project file, never to memory files (including `MEMORY.md`). How-to-work guidance (corrections, confirmed approaches, engineering rules) goes in this file, in the most relevant section.
+- **Keep `.clinerules` stylistic/workflow only — never app logic.** How the rebalancer behaves, why a threshold works the way it does, and similar domain nuance belong in the docs next to the code they describe (e.g. `docs/rebalancer.md`), not here.
 
 ## Simplicity Over Compatibility
 
