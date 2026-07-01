@@ -23,3 +23,4 @@ This app has no external consumers — keep it simple:
 ## Git
 
 - **Never commit without explicit user approval.** When changes are ready to commit, present a summary of what will be committed and ask for confirmation before running `git commit`.
+- **Always commit directly to `main` — never create feature branches.** This is a solo project with trunk-based development; commit to mainline every time.
