@@ -53,7 +53,7 @@ def record_value(total_value_cad: float) -> None:
     updated = False
     for entry in history:
         if entry["date"] == today:
-            previous_high = _entry_high(entry)
+            previous_high = float(entry["high"])
             entry["value"] = rounded_value
             entry["high"] = max(previous_high, rounded_value)
             updated = True
@@ -85,8 +85,8 @@ def get_all_time_high(current_value: float) -> AllTimeHigh:
 
     # Find the historical best (if any)
     if history:
-        best = max(history, key=_entry_high)
-        historical_max = _entry_high(best)
+        best = max(history, key=lambda e: e["high"])
+        historical_max = float(best["high"])
         historical_date = best["date"]
     else:
         historical_max = 0.0
@@ -143,7 +143,7 @@ def get_year_to_date_history(current_value: float) -> list[HistoryPoint]:
 def _load_history() -> list:
     """Load history from a JSONL file (one JSON object per line).
 
-    Each line: {"date":"2026-04-14","value":156432.50}
+    Each line: {"date":"2026-04-14","value":156432.50,"high":156900.00}
     """
     history_file = get_history_file()
     if not history_file.exists():
@@ -164,11 +164,6 @@ def _load_history() -> list:
         return entries
     except (json.JSONDecodeError, IOError):
         return []
-
-
-def _entry_high(entry: dict) -> float:
-    """Return an entry's recorded high, falling back to value for older rows."""
-    return float(entry.get("high", entry["value"]))
 
 
 def _save_history(history: list) -> None:

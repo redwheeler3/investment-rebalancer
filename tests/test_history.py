@@ -57,7 +57,11 @@ class TestRecordValue:
         yesterday = (date.today() - timedelta(days=1)).isoformat()
         history_file.parent.mkdir(parents=True, exist_ok=True)
         with open(history_file, "w") as f:
-            f.write(json.dumps({"date": yesterday, "value": 490000.0}) + "\n")
+            f.write(json.dumps({
+                "date": yesterday,
+                "value": 490000.0,
+                "high": 490000.0,
+            }) + "\n")
 
         record_value(500000.0)
         lines = history_file.read_text().strip().splitlines()
@@ -70,7 +74,11 @@ class TestGetAllTimeHigh:
         history_file.parent.mkdir(parents=True, exist_ok=True)
         yesterday = (date.today() - timedelta(days=1)).isoformat()
         with open(history_file, "w") as f:
-            f.write(json.dumps({"date": yesterday, "value": 900000.0}) + "\n")
+            f.write(json.dumps({
+                "date": yesterday,
+                "value": 900000.0,
+                "high": 900000.0,
+            }) + "\n")
 
         ath = get_all_time_high(current_value=1000000.0)
         assert ath.is_new_ath is True
@@ -82,7 +90,11 @@ class TestGetAllTimeHigh:
         history_file.parent.mkdir(parents=True, exist_ok=True)
         past_date = (date.today() - timedelta(days=30)).isoformat()
         with open(history_file, "w") as f:
-            f.write(json.dumps({"date": past_date, "value": 1000000.0}) + "\n")
+            f.write(json.dumps({
+                "date": past_date,
+                "value": 1000000.0,
+                "high": 1000000.0,
+            }) + "\n")
 
         ath = get_all_time_high(current_value=900000.0)
         assert ath.is_new_ath is False
@@ -115,7 +127,11 @@ class TestGetAllTimeHigh:
         history_file.parent.mkdir(parents=True, exist_ok=True)
         past_date = (date.today() - timedelta(days=10)).isoformat()
         with open(history_file, "w") as f:
-            f.write(json.dumps({"date": past_date, "value": 800000.0}) + "\n")
+            f.write(json.dumps({
+                "date": past_date,
+                "value": 800000.0,
+                "high": 800000.0,
+            }) + "\n")
 
         ath = get_all_time_high(current_value=720000.0)
         assert abs(ath.drawdown_pct - (-10.0)) < 0.01
@@ -133,8 +149,16 @@ class TestGetYearToDateHistory:
         last_year = date(date.today().year - 1, 6, 15).isoformat()
         this_year = date(date.today().year, 2, 1).isoformat()
         with open(history_file, "w") as f:
-            f.write(json.dumps({"date": last_year, "value": 400000.0}) + "\n")
-            f.write(json.dumps({"date": this_year, "value": 450000.0}) + "\n")
+            f.write(json.dumps({
+                "date": last_year,
+                "value": 400000.0,
+                "high": 400000.0,
+            }) + "\n")
+            f.write(json.dumps({
+                "date": this_year,
+                "value": 450000.0,
+                "high": 450000.0,
+            }) + "\n")
 
         result = get_year_to_date_history(current_value=500000.0)
         dates = [p.date for p in result]
@@ -145,7 +169,11 @@ class TestGetYearToDateHistory:
         history_file.parent.mkdir(parents=True, exist_ok=True)
         today = date.today().isoformat()
         with open(history_file, "w") as f:
-            f.write(json.dumps({"date": today, "value": 490000.0}) + "\n")
+            f.write(json.dumps({
+                "date": today,
+                "value": 490000.0,
+                "high": 490000.0,
+            }) + "\n")
 
         result = get_year_to_date_history(current_value=510000.0)
         today_point = [p for p in result if p.date == date.today()]

@@ -13,6 +13,7 @@ Persisting what we learn is valuable. For this project, that persistence lives i
 This app has no external consumers — keep it simple:
 
 - **No backward-compatibility wrappers.** When refactoring, remove the old interface entirely and update all call sites. Don't leave thin wrappers "just in case."
+- **Prefer owned migrations over compatibility branches.** If a change requires a new shape for repo-owned config, state, docs, or examples, update those files directly and make the code require the new invariant. Do not keep fallback logic for old shapes unless there is a specific, current reason the old shape must continue to run.
 - **Before making backward-incompatible changes**, warn the user: describe what's changing, which call sites will break, and what the risks are (e.g. runtime errors if something was missed). Then proceed only after acknowledgment.
 
 ## Code Style
