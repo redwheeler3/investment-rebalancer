@@ -575,12 +575,13 @@ Day P&L is **not** a history function — there's no `get_daily_change`. It's co
 
 ### History tracking (`history.py`)
 
-Simple JSONL file, one entry per day:
+Simple JSONL file, one entry per day. `value` is the latest recorded value for
+that day, while `high` preserves the highest intraday value seen that day:
 ```json
-{"date":"2026-01-15","value":1050000.00}
+{"date":"2026-01-15","value":1050000.00,"high":1060000.00}
 ```
 
-ATH detection compares live value against the historical max:
+ATH detection compares live value against the historical max daily `high`:
 ```python
 def get_all_time_high(current_value: float) -> AllTimeHigh:
     if current_value >= historical_max:

@@ -31,6 +31,7 @@ class TestRecordValue:
         assert len(lines) == 1
         entry = json.loads(lines[0])
         assert entry["value"] == 500000.0
+        assert entry["high"] == 500000.0
         assert entry["date"] == date.today().isoformat()
 
     def test_overwrites_same_day(self, history_file):
@@ -40,6 +41,16 @@ class TestRecordValue:
         assert len(lines) == 1
         entry = json.loads(lines[0])
         assert entry["value"] == 510000.0
+        assert entry["high"] == 510000.0
+
+    def test_preserves_intraday_high_when_latest_value_is_lower(self, history_file):
+        record_value(510000.0)
+        record_value(500000.0)
+        lines = history_file.read_text().strip().splitlines()
+        assert len(lines) == 1
+        entry = json.loads(lines[0])
+        assert entry["value"] == 500000.0
+        assert entry["high"] == 510000.0
 
     def test_appends_new_day(self, history_file):
         # Seed with yesterday's entry
@@ -77,6 +88,21 @@ class TestGetAllTimeHigh:
         assert ath.is_new_ath is False
         assert ath.value == 1000000.0
         assert abs(ath.drawdown_pct - (-10.0)) < 0.01
+
+    def test_uses_recorded_intraday_high_for_ath(self, history_file):
+        today = date.today().isoformat()
+        history_file.parent.mkdir(parents=True, exist_ok=True)
+        with open(history_file, "w") as f:
+            f.write(json.dumps({
+                "date": today,
+                "value": 900000.0,
+                "high": 1000000.0,
+            }) + "\n")
+
+        ath = get_all_time_high(current_value=950000.0)
+        assert ath.is_new_ath is False
+        assert ath.value == 1000000.0
+        assert ath.date == today
 
     def test_no_history(self, history_file):
         """First run — current value is the ATH."""

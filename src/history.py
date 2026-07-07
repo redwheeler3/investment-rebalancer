@@ -3,7 +3,8 @@ Portfolio history tracking module.
 
 Records daily portfolio values to a JSON Lines file, calculates the all-time high,
 and exposes filtered history views for reporting.
-One entry per day — multiple runs on the same day overwrite with the latest value.
+One entry per day — multiple runs on the same day keep the latest value and
+the highest intraday value.
 """
 
 import json
@@ -36,6 +37,8 @@ def record_value(total_value_cad: float) -> None:
     Record today's portfolio value in the history file.
 
     If an entry for today already exists, it's updated with the latest value.
+    The entry also keeps the highest value seen that day, so intraday ATHs are
+    not lost when a later run records a lower latest value.
     Creates the data/ directory and history file if they don't exist.
 
     Args:
@@ -44,16 +47,20 @@ def record_value(total_value_cad: float) -> None:
     today = date.today().isoformat()
     history = _load_history()
 
+    rounded_value = round(total_value_cad, 2)
+
     # Update or append today's entry
     updated = False
     for entry in history:
         if entry["date"] == today:
-            entry["value"] = round(total_value_cad, 2)
+            previous_high = _entry_high(entry)
+            entry["value"] = rounded_value
+            entry["high"] = max(previous_high, rounded_value)
             updated = True
             break
 
     if not updated:
-        history.append({"date": today, "value": round(total_value_cad, 2)})
+        history.append({"date": today, "value": rounded_value, "high": rounded_value})
 
     _save_history(history)
 
@@ -78,8 +85,8 @@ def get_all_time_high(current_value: float) -> AllTimeHigh:
 
     # Find the historical best (if any)
     if history:
-        best = max(history, key=lambda e: e["value"])
-        historical_max = best["value"]
+        best = max(history, key=_entry_high)
+        historical_max = _entry_high(best)
         historical_date = best["date"]
     else:
         historical_max = 0.0
@@ -157,6 +164,11 @@ def _load_history() -> list:
         return entries
     except (json.JSONDecodeError, IOError):
         return []
+
+
+def _entry_high(entry: dict) -> float:
+    """Return an entry's recorded high, falling back to value for older rows."""
+    return float(entry.get("high", entry["value"]))
 
 
 def _save_history(history: list) -> None:
