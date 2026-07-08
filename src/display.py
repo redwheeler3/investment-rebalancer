@@ -395,8 +395,9 @@ def display_year_to_date_chart(history_points: list, console_height: int | None 
     start_of_year = date(today.year, 1, 1)
     total_days = max(1, (today - start_of_year).days)
     values = [point.value for point in history_points]
+    high_values = [point.high for point in history_points]
     min_value = min(values)
-    max_value = max(values)
+    max_value = max(high_values)
     midpoint_value = (min_value + max_value) / 2
 
     top_label = _format_compact_money(max_value)

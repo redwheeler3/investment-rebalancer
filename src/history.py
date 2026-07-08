@@ -30,6 +30,7 @@ class HistoryPoint:
 
     date: date
     value: float
+    high: float
 
 
 def record_value(total_value_cad: float) -> None:
@@ -120,22 +121,28 @@ def get_year_to_date_history(current_value: float) -> list[HistoryPoint]:
     today = date.today()
     start_of_year = date(today.year, 1, 1)
 
-    latest_by_day: dict[date, float] = {}
+    latest_by_day: dict[date, tuple[float, float]] = {}
     for entry in _load_history():
         try:
             entry_date = date.fromisoformat(entry["date"])
             entry_value = float(entry["value"])
+            entry_high = float(entry["high"])
         except (KeyError, TypeError, ValueError):
             continue
 
         if start_of_year <= entry_date <= today:
-            latest_by_day[entry_date] = entry_value
+            latest_by_day[entry_date] = (entry_value, entry_high)
 
-    # Always use the live value for today
-    latest_by_day[today] = current_value
+    # Always use the live value for today while preserving any recorded intraday high.
+    _today_value, today_high = latest_by_day.get(today, (current_value, current_value))
+    latest_by_day[today] = (current_value, max(today_high, current_value))
 
     return [
-        HistoryPoint(date=entry_date, value=latest_by_day[entry_date])
+        HistoryPoint(
+            date=entry_date,
+            value=latest_by_day[entry_date][0],
+            high=latest_by_day[entry_date][1],
+        )
         for entry_date in sorted(latest_by_day)
     ]
 

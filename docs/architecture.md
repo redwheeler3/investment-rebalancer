@@ -589,6 +589,10 @@ def get_all_time_high(current_value: float) -> AllTimeHigh:
     return AllTimeHigh(value=historical_max, date=historical_date, is_new_ath=False, ...)
 ```
 
+The YTD chart plots daily `value` points so the latest line reflects the current
+portfolio value, but its vertical scale and footer `High` use daily `high` so an
+intraday peak remains visible after a later lower run.
+
 ### Display (`display.py`)
 
 Uses the Rich library for terminal rendering. The YTD chart is built entirely in-memory from text characters:

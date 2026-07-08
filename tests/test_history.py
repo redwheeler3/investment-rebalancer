@@ -142,6 +142,7 @@ class TestGetYearToDateHistory:
         result = get_year_to_date_history(current_value=500000.0)
         assert len(result) == 1
         assert result[0].value == 500000.0
+        assert result[0].high == 500000.0
         assert result[0].date == date.today()
 
     def test_excludes_last_year(self, history_file):
@@ -179,3 +180,20 @@ class TestGetYearToDateHistory:
         today_point = [p for p in result if p.date == date.today()]
         assert len(today_point) == 1
         assert today_point[0].value == 510000.0  # Live value, not recorded
+        assert today_point[0].high == 510000.0
+
+    def test_preserves_today_intraday_high_with_live_value_override(self, history_file):
+        history_file.parent.mkdir(parents=True, exist_ok=True)
+        today = date.today().isoformat()
+        with open(history_file, "w") as f:
+            f.write(json.dumps({
+                "date": today,
+                "value": 490000.0,
+                "high": 520000.0,
+            }) + "\n")
+
+        result = get_year_to_date_history(current_value=510000.0)
+        today_point = [p for p in result if p.date == date.today()]
+        assert len(today_point) == 1
+        assert today_point[0].value == 510000.0
+        assert today_point[0].high == 520000.0
