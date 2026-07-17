@@ -33,6 +33,18 @@ def _format_money(amount: float, currency: str = "CAD") -> str:
     return f"{prefix}{amount:,.2f}"
 
 
+def _format_money_colored(
+    amount: float, currency: str = "CAD", positive_style: str = ""
+) -> str:
+    """Format a money amount, rendering negative values in red.
+
+    Positive/zero values use ``positive_style`` (empty for default color).
+    """
+    text = _format_money(amount, currency)
+    style = "red" if _normalize_amount(amount) < 0 else positive_style
+    return f"[{style}]{text}[/{style}]" if style else text
+
+
 def _format_shares(quantity: float) -> str:
     """Format a share quantity for display."""
     return f"{int(quantity):,}" if quantity == int(quantity) else f"{quantity:,.2f}"
@@ -756,9 +768,9 @@ def display_account_summary(accounts: list, usd_to_cad_rate: float):
             acct.owner,
             acct.account_type,
             acct.number,
-            _format_money(total_value_cad),
-            _format_money(acct.cash_cad),
-            _format_money(acct.cash_usd, "USD"),
+            _format_money_colored(total_value_cad),
+            _format_money_colored(acct.cash_cad),
+            _format_money_colored(acct.cash_usd, "USD"),
             f"{pos_count} ({pos_symbols})" if pos_count > 0 else "0",
         )
 
@@ -768,10 +780,10 @@ def display_account_summary(accounts: list, usd_to_cad_rate: float):
         "[bold]Total[/bold]",
         "",
         "",
-        f"[bold green]{_format_money(total_value_sum)}[/bold green]",
-        f"[bold]{_format_money(total_cash_cad_sum)}[/bold]",
-        f"[bold]{_format_money(total_cash_usd_sum, 'USD')}[/bold]",
-        f"[bold]{_format_money(total_positions_value_sum)}[/bold]",
+        f"[bold]{_format_money_colored(total_value_sum, positive_style='green')}[/bold]",
+        f"[bold]{_format_money_colored(total_cash_cad_sum)}[/bold]",
+        f"[bold]{_format_money_colored(total_cash_usd_sum, 'USD')}[/bold]",
+        f"[bold]{_format_money_colored(total_positions_value_sum)}[/bold]",
     )
 
     console.print(table)
