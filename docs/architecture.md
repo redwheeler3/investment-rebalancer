@@ -571,7 +571,7 @@ ytd_history = get_year_to_date_history(current_value=portfolio.total_value_cad)
 
 Both history functions take the **live portfolio value** directly — they don't depend on what's been written to disk yet. This was a deliberate design choice to avoid ordering bugs.
 
-Day P&L is **not** a history function — there's no `get_daily_change`. It's computed in `display.py` (`_compute_portfolio_day_pnl`) from each holding's `prev_close_price`, which is fetched from daily candles during quote enrichment (see Stage 3). The previous close is selected as the latest candle strictly *before* the quote's own last-trade date, so weekend/holiday runs compare against the right trading session rather than the calendar day.
+Day P&L is **not** a history function — there's no `get_daily_change`. It's computed in `display.py` (`_compute_portfolio_day_pnl`) from each holding's `prev_close_price`, which is fetched from daily candles during quote enrichment (see Stage 3). The previous close is selected as the latest candle strictly *before* the quote's own last-trade date, so weekend/holiday runs compare against the right trading session rather than the calendar day. Questrade returns candle-specific HTTP 404s for valid private-price products with no historical series (such as RBS private-credit funds); for those, the current price is used as the prior close, producing a legitimate zero Day P&L.
 
 ### History tracking (`history.py`)
 

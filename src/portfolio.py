@@ -9,6 +9,8 @@ and projects what the portfolio would look like after a set of trades.
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 
+import requests
+
 
 def _coerce_numeric(value, default: float = 0.0) -> float:
     """Convert an API field to float, defaulting to 0.0 for None."""
@@ -421,14 +423,22 @@ def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
             holding.current_price = float(quote.get("lastTradePrice") or 0) or holding.current_price
             quote_trade_dates[symbol] = _get_quote_trade_date(quote)
 
-    # Fetch previous close for each symbol via daily candles
+    # Fetch previous close for each symbol via daily candles.
     for symbol_id, symbol in symbol_id_map.items():
         if symbol in portfolio.holdings:
-            portfolio.holdings[symbol].prev_close_price = _get_prev_close_price(
-                client,
-                symbol_id,
-                exclude_date=quote_trade_dates.get(symbol),
-            )
+            holding = portfolio.holdings[symbol]
+            try:
+                prev_close = _get_prev_close_price(
+                    client,
+                    symbol_id,
+                    exclude_date=quote_trade_dates.get(symbol),
+                )
+            except requests.HTTPError as error:
+                if getattr(error.response, "status_code", None) != 404:
+                    raise
+                prev_close = holding.current_price
+
+            holding.prev_close_price = prev_close
 
 
 def get_current_allocations(portfolio: PortfolioSummary, usd_to_cad_rate: float, excluded_symbols: set = None) -> dict:

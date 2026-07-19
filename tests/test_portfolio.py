@@ -3,6 +3,8 @@
 from unittest.mock import patch, MagicMock
 from datetime import date
 
+import requests
+
 from src.portfolio import (
     calculate_allocations_for_values,
     calculate_accuracy,
@@ -400,6 +402,33 @@ class TestFetchQuotesForHoldings:
         fetch_quotes_for_holdings(portfolio, [client])
 
         assert portfolio.holdings["ABC.TO"].prev_close_price == 102.0
+
+    def test_candle_404_for_private_price_product_is_zero_day_pnl(self):
+        account = AccountInfo(
+            number="11111",
+            account_type="TFSA",
+            client_account_type="Individual",
+            owner="Alice",
+            positions=[
+                Position("RBS2061Q", 77104999, 14, 70000.0, 5000.0, "CAD", "11111", "TFSA", "Alice"),
+            ],
+        )
+        portfolio = PortfolioSummary(
+            accounts=[account],
+            holdings={
+                "RBS2061Q": HoldingSummary(value_cad=70000.0, total_quantity=14, current_price=5000.0),
+            },
+            total_value_cad=70000.0,
+        )
+        client = MagicMock()
+        client.get_quote.return_value = [{"symbol": "RBS2061Q", "lastTradePrice": 5000.0}]
+        client.get_candles.side_effect = requests.HTTPError(response=MagicMock(status_code=404))
+
+        fetch_quotes_for_holdings(portfolio, [client])
+        pnl, pct = _compute_portfolio_day_pnl(portfolio, usd_to_cad_rate=1.36)
+
+        assert portfolio.holdings["RBS2061Q"].prev_close_price == 5000.0
+        assert (pnl, pct) == (0.0, 0.0)
 
 
 # ══════════════════════════════════════════════════════════════════
