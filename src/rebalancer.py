@@ -300,7 +300,9 @@ class RebalancePlanner:
             starter_changes += self._sell_overweight_starters()
             starter_changes += self._buy_underweight_starters()
 
-            cash_changes = self._deploy_residual_cash()
+            cash_changes = self._deploy_residual_cash(
+                allow_best_available_fx=starter_changes > 0,
+            )
 
             if starter_changes == 0 and cash_changes == 0:
                 break
@@ -762,8 +764,14 @@ class RebalancePlanner:
 
         return None
 
-    def _deploy_residual_cash(self) -> int:
-        """Minimize stranded cash, same-currency first."""
+    def _deploy_residual_cash(self, *, allow_best_available_fx: bool) -> int:
+        """Minimize stranded cash, same-currency first.
+
+        A best-available cross-currency buy is permitted only after a
+        threshold-triggered starter trade in this round.  Unlike a genuinely
+        underweight FX buy, it exists solely to deploy residual cash, so a
+        standalone conversion would create avoidable FX churn.
+        """
         trades_added = 0
         while True:
             made_trade = False
@@ -820,8 +828,9 @@ class RebalancePlanner:
                             note="Leftover cash buy (requires FX)",
                             dlr_quotes=self.dlr_quotes,
                         )
-                        # Fall back to best-available (any drift)
-                        if trade is None:
+                        # A standalone FX conversion is not justified merely
+                        # to deploy residual cash into a non-underweight holding.
+                        if trade is None and allow_best_available_fx:
                             trade = self._build_cash_minimizing_buy(
                                 acct, source_currency, buy_currency, projected_drifts,
                             )

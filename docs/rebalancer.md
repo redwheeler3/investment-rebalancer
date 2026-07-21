@@ -11,7 +11,7 @@ The planner is built around these rules (defined in the project README). They're
 1. **Treat all accounts as one household portfolio** — Drift is measured at the total-portfolio level, not per account.
 2. **Sell overweight positions and buy underweight positions** — The planner starts with symbols whose drift is materially away from target.
 3. **Use a drift threshold to avoid tiny starter trades** — The configured `drift_trade_threshold_pct` suppresses trades for symbols that are only slightly off target.
-4. **Minimize free cash whenever practical** — Useful account-level cash is deployed even when no symbol is far enough from target to start a normal rebalance.
+4. **Minimize free cash whenever practical** — Useful account-level cash is deployed even when no symbol is far enough from target to start a normal rebalance. A standalone FX conversion is excluded when it would only fund a best-available fallback buy.
 5. **Only buy symbols that already exist in the account** — An account's current holdings define its buyable universe.
 6. **Prefer same-currency deployment before cross-currency deployment** — Same-currency buys come before CAD/USD conversion. Cross-currency funding is still used when needed.
 7. **Allow account-constrained cash deployment, then clean up globally** — If cash lands in an account with limited options, deploy it there first. If that creates excess exposure, sell the excess from another account where proceeds can fund underweight buys.
@@ -85,7 +85,9 @@ def build(self) -> list:
         starter_changes += self._sell_overweight_starters()
         starter_changes += self._buy_underweight_starters()
 
-        cash_changes = self._deploy_residual_cash()
+        cash_changes = self._deploy_residual_cash(
+            allow_best_available_fx=starter_changes > 0,
+        )
 
         if starter_changes == 0 and cash_changes == 0:
             break                    # Converged — no more drift to fix
@@ -401,7 +403,7 @@ def _deploy_residual_cash(self) -> int:
 
 2. **`_build_cash_minimizing_same_currency_buy`** — Fallback if no underweight symbols exist. Buys the *least overweight* symbol — the goal is "don't leave cash idle" not "fix drift."
 
-3. **`_build_cash_minimizing_cross_currency_buy`** — Same fallback logic but with FX conversion.
+3. **`_build_cash_minimizing_cross_currency_buy`** — Same fallback logic but with FX conversion. This is available only in a round that has already produced a threshold-triggered starter trade; a genuinely underweight cross-currency buy remains available regardless.
 
 ### How `cash_deploy.py` picks candidates
 

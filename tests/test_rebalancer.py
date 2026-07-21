@@ -642,6 +642,27 @@ class TestPlannerCashDeployment:
         assert all(t.symbol in {"VSP.TO", "ZMMK.TO"} for t in buy_trades)
         assert sum(t.estimated_value for t in buy_trades) >= 5900.0
 
+    def test_does_not_convert_currency_for_standalone_best_available_buy(self):
+        """Residual cash alone must not trigger an FX fallback conversion."""
+        usd_to_cad_rate = 1.36
+        portfolio = _build_test_portfolio([{
+            "number": "11111", "type": "RRSP", "owner": "Alice",
+            "cash_cad": 0.0, "cash_usd": 1000.0,
+            "positions": [
+                {"symbol": "VSP.TO", "qty": 1000, "price": 100.0, "currency": "CAD"},
+            ],
+        }], usd_to_cad_rate)
+        vsp_target = 100000.0 / portfolio.total_value_cad * 100
+        targets = {
+            "VSP.TO": vsp_target,
+            "USD": 100 - vsp_target,
+            "CAD": 0.0,
+        }
+
+        trades = calculate_trades(portfolio, targets, usd_to_cad_rate, 10.49, 0.5, set(), None)
+
+        assert trades == []
+
     def test_zero_value_portfolio_returns_no_trades(self):
         """Empty portfolio should produce no trades."""
         portfolio = PortfolioSummary(
