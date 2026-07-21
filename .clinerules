@@ -20,8 +20,13 @@ This app has no external consumers — keep it simple:
 
 - Prefer one function that handles multiple cases via parameters over duplicated functions with near-identical logic.
 - **Treat the root cause, not the symptom.** Before writing a fix, identify the underlying logic failure and address it directly. Don't add guards or workarounds that produce the correct output while leaving the underlying flaw in place. Ask "what general invariant is being violated?" and fix that — if your first idea only handles the exact case observed (e.g. "skip accounts with one position"), keep thinking until you find the condition covering all variants. The user shouldn't have to guide you to the deeper fix through a series of "what about X?" questions.
+- **Comments describe the present, not the past — no tombstones.** A comment or docstring states what the code does *now* — never "(X was removed)", "the old Y", "formerly", "no longer …", or dated change notes. Keep forward-useful rationale but phrase it present-tense ("same-currency only: an FX conversion is only justified by closing a real underweight"), not as history. Fix a tombstone when you work near it. History lives in git.
 
 ## Git
 
-- **Never commit without explicit user approval.** When changes are ready to commit, present a summary of what will be committed and ask for confirmation before running `git commit`.
+- **Never commit without explicit user approval.** When changes are ready to commit, present a summary of what will be committed and ask for confirmation before running `git commit`. One approval authorizes exactly one commit.
 - **Always commit directly to `main` — never create feature branches.** This is a solo project with trunk-based development; commit to mainline every time.
+- **Commit messages: hybrid Conventional Commits.** Subject is `type(scope): summary` — lowercase type and scope, imperative mood, no trailing period, ≤ ~72 chars.
+  - **type:** `feat` (user-facing) · `fix` · `docs` (docs/rules, no behavior change) · `refactor` (behavior-preserving) · `test` · `chore` · `perf` · `style`. Mostly-docs edits are `docs` even if a stray code line moved.
+  - **scope:** the domain area, reused not invented — `rebalancer`, `display`, `fx_rate`, `fx_conversions`, `fx_math`, `history`, `portfolio`, `tactical`, `docs`. Optional only when a change truly spans many areas.
+  - **body (default yes, blank line first):** explain *why* / the tradeoff / the bug's cause — not a restatement of the diff. A sentence is fine. Skip only for a genuinely self-explanatory subject.
