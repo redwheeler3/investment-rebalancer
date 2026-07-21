@@ -11,9 +11,9 @@ The planner is built around these rules (defined in the project README). They're
 1. **Treat all accounts as one household portfolio** — Drift is measured at the total-portfolio level, not per account.
 2. **Sell overweight positions and buy underweight positions** — The planner starts with symbols whose drift is materially away from target.
 3. **Use a drift threshold to avoid tiny starter trades** — The configured `drift_trade_threshold_pct` suppresses trades for symbols that are only slightly off target.
-4. **Minimize free cash whenever practical** — Useful account-level cash is deployed even when no symbol is far enough from target to start a normal rebalance. A standalone FX conversion is excluded when it would only fund a best-available fallback buy.
+4. **Minimize free cash whenever practical** — Useful account-level cash is deployed even when no symbol is far enough from target to start a normal rebalance. Cross-currency (FX) deployment is used only to close a real underweight; foreign cash with no same-currency home is handled by the post-rebalance conversion sweep.
 5. **Only buy symbols that already exist in the account** — An account's current holdings define its buyable universe.
-6. **Prefer same-currency deployment before cross-currency deployment** — Same-currency buys come before CAD/USD conversion. Cross-currency funding is still used when needed.
+6. **Prefer same-currency deployment before cross-currency deployment** — Same-currency buys come before CAD/USD conversion. Cross-currency funding is used only to close a real underweight, never merely to park residual cash.
 7. **Allow account-constrained cash deployment, then clean up globally** — If cash lands in an account with limited options, deploy it there first. If that creates excess exposure, sell the excess from another account where proceeds can fund underweight buys.
 8. **Avoid obviously wasteful churn** — Don't create trade patterns that undo each other without improving drift or reducing idle cash.
 9. **Use whole-share, real-side pricing** — Sells use bid pricing. Buys use ask pricing. Whole shares only.
@@ -85,9 +85,7 @@ def build(self) -> list:
         starter_changes += self._sell_overweight_starters()
         starter_changes += self._buy_underweight_starters()
 
-        cash_changes = self._deploy_residual_cash(
-            allow_best_available_fx=starter_changes > 0,
-        )
+        cash_changes = self._deploy_residual_cash()
 
         if starter_changes == 0 and cash_changes == 0:
             break                    # Converged — no more drift to fix
@@ -373,21 +371,19 @@ def _deploy_residual_cash(self) -> int:
                         ..., source_currency=currency, buy_currency=currency, ...
                     )
                     if trade is None:
-                        trade = self._build_cash_minimizing_same_currency_buy(...)
+                        trade = self._build_cash_minimizing_buy(acct, currency, ...)
                     if trade is None:
                         break
                     self.plan.add_trade(trade)
                     made_trade = True
 
-            # Pass 2: Cross-currency buys (conversion needed)
+            # Pass 2: Cross-currency buys — ONLY to close a real underweight.
             for source_currency in ("CAD", "USD"):
                 buy_currency = "USD" if source_currency == "CAD" else "CAD"
                 while True:
                     trade = build_underweight_buy(
                         ..., source_currency=source_currency, buy_currency=buy_currency, ...
                     )
-                    if trade is None:
-                        trade = self._build_cash_minimizing_cross_currency_buy(...)
                     if trade is None:
                         break
                     self.plan.add_trade(trade)
@@ -401,9 +397,9 @@ def _deploy_residual_cash(self) -> int:
 
 1. **`build_underweight_buy`** (from `cash_deploy.py`) — Buy the most underweight symbol in this account that matches the currency. Iterates through candidates if the top pick is too expensive. Caps at the number of shares needed to close the gap. Handles both same-currency (`source_currency == buy_currency`) and cross-currency cases.
 
-2. **`_build_cash_minimizing_same_currency_buy`** — Fallback if no underweight symbols exist. Buys the *least overweight* symbol — the goal is "don't leave cash idle" not "fix drift."
+2. **`_build_cash_minimizing_buy`** — Same-currency-only fallback if no underweight symbols exist. Buys the *least overweight* symbol — the goal is "don't leave cash idle" not "fix drift."
 
-3. **`_build_cash_minimizing_cross_currency_buy`** — Same fallback logic but with FX conversion. This is available only in a round that has already produced a threshold-triggered starter trade; a genuinely underweight cross-currency buy remains available regardless.
+Cross-currency deployment (Pass 2) fires only through `build_underweight_buy` — i.e. only to close a genuine underweight — so it always pays its fixed FX cost (fee + spread) in exchange for a real drift reduction. Foreign cash with no same-currency home and no underweight to fund is left for the post-rebalance conversion sweep (see `fx_conversions.py`), which moves it into the account's home currency.
 
 ### How `cash_deploy.py` picks candidates
 
@@ -673,8 +669,7 @@ Each `TradeRecommendation` carries a `note` string displayed in the output. Here
 | `Underweight buy (requires FX)` | Layer 2: Same as above but no same-currency cash — triggered cross-currency conversion | BUY 62 IVV — CAD converted to USD via Norbert's Gambit |
 | `Leftover cash buy` | Layer 3: Account has leftover same-currency cash, buying the most underweight symbol available | Account has $800 CAD remaining, buys 7 more ZMMK.TO |
 | `Leftover cash buy (requires FX)` | Layer 3: Same as above but spending foreign-currency cash via conversion | Account has $200 CAD remaining, only holds USD symbols — convert and buy |
-| `Best available buy` | Layer 3 fallback: No underweight symbols available in this account/currency, but cash exists — buy the least overweight symbol to minimize idle cash | All symbols at target, but $50 CAD sitting in account — buy 1 share of least-drifted holding |
-| `Best available buy (requires FX)` | Layer 3 fallback with conversion: Same as above but funded by converting the other currency | Same situation but with foreign cash |
+| `Best available buy` | Layer 3 fallback (same-currency only): No underweight symbols available in this account/currency, but cash exists — buy the least overweight symbol to minimize idle cash | All symbols at target, but $50 CAD sitting in account — buy 1 share of least-drifted holding |
 
 ### How Notes Flow Through Netting
 
@@ -719,7 +714,7 @@ Here's what happens for a typical run with VSP.TO overweight and IVV underweight
 
 5.   _deploy_residual_cash()
      → acct_A has $95 CAD remaining after trades
-     → build_same_currency_buy → ZMMK.TO still underweight → buy 1 more
+     → build_underweight_buy (same-currency) → ZMMK.TO still underweight → buy 1 more
      → No more cash to deploy
 
 6. build() → Round 2
@@ -778,99 +773,45 @@ Round 1 — Layer 1 (Sells):
 
 Round 1 — Layer 2 (Buys):
   QQQ is underweight by -1.4%
-  → shares_for_drift_gap($1M, -1.4%, US$512, "USD", 1.36) = 20 shares
+  → shares_for_drift_gap($1M, -1.4%, US$512, "USD", 1.36) ≈ 23 shares
   → _eligible_buy_accounts: acct_A holds QQQ
   → _buy_in_account: same-currency (USD) cash = $0
   → total_buying_power includes cross-currency:
       $100,000 CAD → ~US$73,000 (after Norbert's Gambit math)
   → affordable = floor($73,000 / $512) = 142 shares
-  → quantity = min(20, 142) = 20 shares   ← capped at drift gap!
+  → quantity = min(23, 142) = 23 shares   ← capped at drift gap!
   → fund_buy: native USD ($0) < cost → convert from CAD
-  → BUY 20 QQQ in acct_A (requires FX)
-  → Ledger deducts ~$14,000 CAD equivalent
+  → BUY 23 QQQ in acct_A (requires FX)   ← closes the real underweight only
+  → Ledger deducts ~$16,000 CAD equivalent
 
 Round 1 — Layer 3 (Residual Cash):
   acct_A still has ~$86,000 CAD after the QQQ buy
-  
+
   build_underweight_buy(source=CAD, buy=CAD): No CAD-denominated symbols → skip
   build_underweight_buy(source=CAD, buy=USD):
     → QQQ is the only candidate in this account
-    → But QQQ is no longer underweight after the 20-share buy!
-    → Falls through to _build_cash_minimizing_cross_currency_buy
-    → QQQ is the "best available" (only option in this account)
-    → Buys as many QQQ shares as the remaining CAD can fund via FX
-    → BUY ~120 QQQ in acct_A (best available buy, requires FX)
-  
-  After this: acct_A's CAD is fully deployed. QQQ is now massively
-  OVERWEIGHT at the household level. But the cash-minimizing rule
-  (Rule 7: "Allow account-constrained cash deployment, then clean up globally")
-  demanded it — there's nowhere else for the money to go.
+    → QQQ is no longer underweight after the 23-share buy → skip
+  → acct_A's ~$86,000 CAD is left in place for this run.
 
-Round 2 — Layer 1 (Sells):
-  QQQ drift is now ~+8% — massively overweight
-  → shares_for_drift_gap($1M, 8%, US$512, "USD", 1.36) = ~115 shares
-  → allocate_sell: Which accounts hold QQQ?
-      acct_A has ~280 shares (original 140 + 140 just bought)
-      acct_B has 45 shares
-  → Sorting: acct_A has underweight alternatives? No (only QQQ)
-              acct_B has underweight alternatives? Yes (holds VUN.TO, XEF.TO)
-  → acct_B ranks first! Sell 45 from acct_B (all it has)
-  → Still need ~70 more → sell 70 from acct_A
-  → SELL 45 QQQ in acct_B, SELL 70 QQQ in acct_A
-
-Round 2 — Layer 2 (Buys):
-  acct_B now has ~US$23,000 from the QQQ sale
-  VUN.TO is underweight → BUY VUN.TO in acct_B (requires FX: USD→CAD)
-  XEF.TO is underweight → BUY XEF.TO in acct_B (requires FX: USD→CAD)
-  acct_B's USD proceeds redeployed into underweight CAD positions
-
-  acct_A has ~US$35,840 from its QQQ sale. But QQQ is at target now.
-  No underweight symbol exists in acct_A → Layer 2 does nothing for acct_A.
-
-Round 2 — Layer 3 (Residual Cash):
-  acct_A has ~US$35,840 sitting idle from the sell!
-  build_same_currency_buy: QQQ is USD, check if underweight... drift ≈ 0, not < 0 → skip
-  _build_cash_minimizing_same_currency_buy:
-    → QQQ is the "best available" (only USD symbol in acct_A)
-    → BUY ~70 QQQ in acct_A (best available buy)
-  
-  ⚠️ This is the critical step the scenario hinges on:
-  The sell proceeds from acct_A STAY in acct_A (ledger is per-account).
-  Since QQQ is the only option, the cash immediately gets redeployed
-  back into QQQ. The sell and re-buy cancel each other out in netting!
-
-Subsequent rounds (3–10):
-  The algorithm oscillates: QQQ is overweight → sell from acct_A →
-  proceeds stay in acct_A → re-buy QQQ → still overweight → repeat.
-  
-  But trade netting collapses every sell+re-buy pair into nothing.
-  The only REAL change was Round 2's sell of 45 QQQ from acct_B
-  (those proceeds went into VUN.TO/XEF.TO and stayed there).
+  The post-rebalance sweep handles the leftover CAD (see Scenario 6).
+  acct_A's only position (QQQ) is USD, so USD is its single "home" currency;
+  the sweep converts the ~$86,000 CAD into USD (Buy DLR.TO → journal →
+  Sell DLR.U.TO). Next run, that cash is USD and deploys into QQQ
+  same-currency.
 
 Trade netting (final output):
-  acct_A: BUY 20 + BUY 120 + (SELL 70 + BUY 70) × N = NET BUY ~140 QQQ
-            ↑ The sell/re-buy pairs cancel out!
-  acct_B: NET SELL 45 QQQ, NET BUY VUN.TO + XEF.TO
+  acct_A: NET BUY 23 QQQ  (+ a CAD→USD conversion from the sweep)
+  acct_B: small same-currency underweight top-ups
 
 Final result:
-  acct_A ends up FULL of QQQ with minimal cash:
-  - Original 140 shares + ~140 new shares ≈ 280 QQQ total
-  - The entire $100K CAD was converted to USD and deployed into QQQ
-  - This is the only possible outcome given the account constraint
-
-  acct_B contributes to household rebalancing:
-  - Sold all 45 QQQ (reducing household QQQ overweight slightly)
-  - Bought underweight VUN.TO + XEF.TO with the proceeds
-
-  Household QQQ is still overweight (~+6%) after all trades.
-  The algorithm cannot fix this further because:
-  1. acct_A's cash is "trapped" — any sell produces USD that just
-     gets re-invested into QQQ (only option in that account)
-  2. Cash cannot move between accounts
-  3. The only relief valve was acct_B's 45 shares
+  - QQQ's genuine -1.4% underweight is closed by the 23-share buy.
+  - The bulk of the deposit ($86K) is parked as USD cash by the sweep,
+    ready to buy QQQ on the next run once it is same-currency.
+  - No sell/re-buy oscillation, because the planner never force-bought QQQ
+    past target in the first place.
 ```
 
-**Key insight:** Cash deposited into a single-symbol account is effectively "trapped" in that symbol. The planner cannot move money between accounts — it can only trade within each account's ledger. When QQQ is sold from acct_A, the USD proceeds stay in acct_A's ledger and get immediately redeployed into QQQ (the only option). The sell-then-rebuy is a no-op that trade netting collapses. The real rebalancing comes from *other* accounts that hold QQQ plus alternatives — selling their QQQ and buying underweight stuff instead.
+**Key insight:** Cash deposited into a single-symbol account is deployed in two steps. Same-round, the planner buys only the genuine underweight gap — it will not burn an FX conversion to push a holding *past* target just to empty the account. The remaining foreign-relative cash is moved to the account's home currency by the post-rebalance sweep, so the following run can deploy it same-currency.
 
 ---
 
@@ -941,7 +882,7 @@ Round 1 — Layer 3 (Residual Cash):
   acct_B: All CAD was consumed by the QQQ FX conversion. ~$0 left. Done.
   
   acct_A: Has $12,560 + $300 = $12,860 CAD from VUN.TO sale proceeds!
-  → build_same_currency_buy(acct_A, CAD, threshold=0.0):
+  → build_underweight_buy(acct_A, CAD, threshold=0.0):
       → underweight_candidates: ZAG.TO drift -0.8% < -0.0% → underweight!
       → shares_to_close_underweight: ceil(0.8% × $1M / $10.85) = 738 shares
       → affordable = floor($12,860 / $10.85) = 1,185 shares
@@ -949,8 +890,8 @@ Round 1 — Layer 3 (Residual Cash):
   → BUY 738 ZAG.TO in acct_A ("Leftover cash buy")
 
   acct_A: Still has $12,860 - (738 × $10.85) = $4,857 CAD remaining
-  → build_same_currency_buy: ZAG.TO drift now ≈ 0% → not underweight → skip
-  → _build_cash_minimizing_same_currency_buy:
+  → build_underweight_buy (same-currency): ZAG.TO drift now ≈ 0% → not underweight → skip
+  → _build_cash_minimizing_buy:
       → ZAG.TO (~0%), XEF.TO (+0.3%), VUN.TO (~0%) all buyable
       → ZAG.TO or VUN.TO (both ~0%) → lowest drift wins
       → BUY 78 VUN.TO in acct_A ("Best available buy")
@@ -1059,8 +1000,8 @@ Round 1 — Layer 2 (Buys):
 
 Round 1 — Layer 3 (Residual Cash):
   acct_B still has ~$6,049 CAD (VUN.TO sell proceeds not yet spent)
-  → build_same_currency_buy: ZAG.TO at ~0% is NOT underweight → skip
-  → _build_cash_minimizing_same_currency_buy:
+  → build_underweight_buy (same-currency): ZAG.TO at ~0% is NOT underweight → skip
+  → _build_cash_minimizing_buy:
       ZAG.TO (~0%) is "best available" in acct_B (lowest drift)
       → BUY ~557 ZAG.TO in acct_B ("Best available buy")
   → This pushes ZAG.TO to ~+0.8% overweight at the household level!
@@ -1116,8 +1057,8 @@ Other accounts:
 Neither VUN.TO nor XBB.TO is underweight in Bob RRSP. Normal underweight buys return nothing.
 
 Fallback chain:
-  1. build_same_currency_buy → no underweight candidates → returns None
-  2. _build_cash_minimizing_same_currency_buy kicks in
+  1. build_underweight_buy (same-currency) → no underweight candidates → returns None
+  2. _build_cash_minimizing_buy kicks in (same-currency only)
      → _account_buyable_candidates(underweight_only=False)
      → Computes _cascade_score for each candidate:
          VUN.TO: Alice TFSA holds VUN.TO and has ZAG.TO at -0.8%
@@ -1176,8 +1117,9 @@ Account "Alice TFSA":
   Cash USD: $12
 
 Post-trade planning (fx_conversions.py):
-  All positions are USD → this is a "single-currency account"
-  CAD cash ($500) > fee ($10.49) → eligible for sweep
+  Home currencies = {USD} (only USD positions have a positive target)
+  → exactly one home → eligible for sweep; CAD is the stranded side
+  CAD cash ($500) > fee ($10.49) → sweep it into USD
   
   Sweep logic:
     cad_for_shares = $500 - $10.49 = $489.51
@@ -1190,9 +1132,20 @@ Post-trade planning (fx_conversions.py):
   the sweep shares are ADDED to the existing conversion (same journal entry).
 ```
 
-**Key insight:** The sweep logic in `fx_conversions.py` runs *after* the rebalancer. It detects "orphaned" foreign cash that can never be productively used and folds it into the conversion plan. This prevents the slow accumulation of small unusable cash balances over time.
+**Key insight:** The sweep logic in `fx_conversions.py` runs *after* the rebalancer. It detects "orphaned" foreign cash that can never be productively used and folds it into the conversion plan, preventing the slow accumulation of small unusable cash balances over time. Because the rebalancer deploys residual cash only same-currency, the sweep is the sole rescue path for stranded foreign cash — so it must catch every case.
 
-The sweep is gated on the account holding positions in **exactly one** currency (`len(pos_currencies) == 1`). **Mixed-currency accounts are deliberately skipped:** their foreign cash isn't stranded — the planner's same-currency "best available" fallback can deploy it without an FX round-trip, so converting it here would be wasteful. The sweep is also symmetric: the example above shows a USD-only account sweeping leftover CAD, but a CAD-only account with leftover USD sweeps the other direction (Buy DLR.U.TO → Sell DLR.TO) the same way.
+The sweep is gated on the account having **exactly one home currency**, where a "home currency" is one in which the account holds a post-trade position with a positive target (`_positive_target_currency_homes`). The stranded (non-home) currency's cash is swept into the home currency. Three cases follow from this:
+
+- **One home** (e.g. a USD-only account, or a mixed account whose CAD side is all at target while a target-0 USD wind-down is being sold off): the non-home cash is swept. This is the case shown above.
+- **Two homes** (a genuinely mixed account with positive targets on *both* sides): neither currency is stranded — the planner deploys each side same-currency — so nothing is swept and no wasteful FX round-trip occurs.
+- **Zero homes** (only cash and/or target-0 wind-down positions): neither currency has a deployable home, so converting would just strand the cash in the other currency. Nothing is swept.
+
+Two subtleties make this robust:
+
+1. **Post-trade positions.** Home detection uses quantities *after* the planned trades. A target-0 position (e.g. an untargeted AMZN) fully sold within the plan correctly stops anchoring its currency as a home, so its USD proceeds sweep into the real (CAD) home rather than strand. This also relies on `shares_for_drift_gap` fully liquidating such positions — see the floating-point nudge note in the sizing math — otherwise a 1-share sliver would keep the currency looking occupied.
+2. **Target-0 positions never count as homes.** They are only ever sold, never bought, so cash in their currency has nowhere to be deployed.
+
+The sweep is symmetric: the example above shows a USD-home account sweeping leftover CAD, but a CAD-home account with leftover USD sweeps the other direction (Buy DLR.U.TO → Sell DLR.TO) the same way.
 
 ---
 
@@ -1229,8 +1182,7 @@ rebalancer.py
 │   ├── _deploy_residual_cash()     # Layer 3: spend remaining cash
 │   ├── _cascade_score()            # Score a symbol by downstream rebalancing potential
 │   ├── _account_buyable_candidates()  # Find buyable symbols in an account
-│   ├── _build_cash_minimizing_same_currency_buy()   # Fallback: best available
-│   └── _build_cash_minimizing_cross_currency_buy()  # Fallback: best available + FX
+│   └── _build_cash_minimizing_buy()   # Fallback: best available (same-currency only)
 ├── shares_for_drift_gap()          # Sizing: shares needed for drift
 ├── max_sellable_without_crossing() # Sizing: max safe sell
 ├── allocate_sell()                 # Multi-account sell distribution

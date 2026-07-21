@@ -481,7 +481,7 @@ shares_affordable = floor((cad_available - fee) / cad_buy_price)
 dlr_shares = min(shares_needed, shares_affordable)
 ```
 
-It also handles **sweep logic** — if an account holds positions in only one currency but has leftover cash in the *other* currency after trades, that cash is structurally stranded (the rebalancer can't deploy it without an FX conversion), so the sweep converts it. This runs in both directions (leftover CAD in a USD-only account, and leftover USD in a CAD-only account). **Mixed-currency accounts are deliberately skipped** — their foreign cash is deployable by the planner's same-currency "best available" fallback, so converting it here would force an unnecessary round-trip.
+It also handles **sweep logic** — after trades, cash sitting in a currency the rebalancer can't deploy is structurally stranded, so the sweep converts it into the account's *home* currency. An account's home currencies are those in which it holds a post-trade position with a positive target; the sweep fires only when there is **exactly one** home, and converts the other currency's cash into it. This runs in both directions (leftover CAD swept into a USD home, and leftover USD swept into a CAD home). Accounts with **two** homes (genuinely mixed, positive targets on both sides) are skipped — their foreign cash is deployable same-currency by the planner, so converting here would force an unnecessary round-trip. Accounts with **zero** homes (only cash and/or target-0 wind-down positions) are also skipped, since the cash would just strand in the other currency. Because the rebalancer deploys residual cash only same-currency, this sweep is the sole rescue path for stranded foreign cash — including the proceeds of a target-0 wind-down (e.g. an untargeted holding being sold off) in an otherwise single-home mixed account.
 
 ### The math layer (`fx_math.py`)
 
@@ -530,22 +530,24 @@ if net_cash.usd < 0 and net_cash.cad > 0:
 
 #### Stage 3: Sweep Logic (Same Module)
 
-After required conversions are planned, the sweep detects leftover cash in the "wrong" currency — but only in **single-currency** accounts, where that cash is genuinely stranded:
+After required conversions are planned, the sweep detects leftover cash in a currency the account can't deploy and moves it into the account's home currency. Eligibility is keyed on having exactly one home currency, computed from *post-trade* positions with a positive target:
 
 ```python
-# Only single-currency accounts qualify; mixed accounts are skipped because
-# the planner can deploy their foreign cash without an FX round-trip.
-pos_currencies = {p.currency for p in acct.positions if p.quantity > 0}
-if len(pos_currencies) != 1:
-    continue
+# A currency is a "home" if the account holds a post-trade position in it
+# with a positive target — i.e. somewhere the planner could deploy cash.
+# Target-0 wind-down positions never count, and a position fully sold in the
+# plan stops counting (post-trade quantity, not pre-trade).
+homes = _positive_target_currency_homes(acct, trades, targets)
+if len(homes) != 1:
+    continue  # two homes → deployable same-currency; zero homes → nowhere to go
 
-# USD-only account with leftover CAD → sweep CAD into USD
-if pos_currencies == {"USD"} and remaining_cad > fee:
+# home == USD, leftover CAD → sweep CAD into USD
+if homes == {"USD"} and remaining_cad > fee:
     sweep_shares = floor((remaining_cad - fee) / cad_buy_price)
-# CAD-only account with leftover USD → sweep USD into CAD (symmetric)
+# home == CAD, leftover USD → sweep USD into CAD (symmetric)
 ```
 
-The sweep runs in both directions and augments an existing conversion if one was already planned (same journal, no extra fee), or creates a standalone conversion if needed.
+The sweep runs in both directions and augments an existing conversion if one was already planned (same journal, no extra fee), or creates a standalone conversion if needed. Using post-trade positions is what lets it rescue the proceeds of a fully-liquidated target-0 position: once that position is sold, its currency is no longer a home, so the proceeds sweep into the real home currency instead of stranding.
 
 #### Why Three Stages?
 

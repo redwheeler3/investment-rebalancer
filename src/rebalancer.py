@@ -300,9 +300,7 @@ class RebalancePlanner:
             starter_changes += self._sell_overweight_starters()
             starter_changes += self._buy_underweight_starters()
 
-            cash_changes = self._deploy_residual_cash(
-                allow_best_available_fx=starter_changes > 0,
-            )
+            cash_changes = self._deploy_residual_cash()
 
             if starter_changes == 0 and cash_changes == 0:
                 break
@@ -694,16 +692,17 @@ class RebalancePlanner:
     def _build_cash_minimizing_buy(
         self,
         acct,
-        source_currency: str,
-        buy_currency: str,
+        currency: str,
         drifts: dict[str, float],
     ):
-        """Spend available cash on the best affordable buyable symbol.
+        """Spend available same-currency cash on the best affordable buyable symbol.
 
-        Handles both same-currency (source_currency == buy_currency) and
-        cross-currency (source_currency != buy_currency) deployment. This is
-        the "best available" fallback used when no symbol is still underweight
-        but cash would otherwise be left stranded.
+        This is the "best available" fallback used when no symbol is still
+        underweight but same-currency cash would otherwise be left stranded.
+        It never crosses the currency boundary: a cross-currency conversion
+        (Norbert's Gambit) carries a fixed fee and spread, so it is only ever
+        justified by closing a real underweight, not by parking residual cash
+        in a holding that is already at or above target.
 
         Candidates are ordered by cascade potential first (symbols with the
         most total underweight drift in other accounts that hold them), then
@@ -712,21 +711,11 @@ class RebalancePlanner:
         correct by selling from an account with underweight alternatives —
         effectively routing the cash to where it's most needed.
         """
-        requires_fx = source_currency != buy_currency
-        if requires_fx:
-            available_cash = cross_currency_buying_power(
-                self.ledger.cash(acct.number, source_currency),
-                source_currency,
-                self.usd_to_cad_rate,
-                self.fee_cad,
-                dlr_quotes=self.dlr_quotes,
-            )
-        else:
-            available_cash = self.ledger.same_currency_buying_power(acct.number, buy_currency)
+        available_cash = self.ledger.same_currency_buying_power(acct.number, currency)
         if available_cash <= 0:
             return None
 
-        candidates = self._account_buyable_candidates(acct, buy_currency, drifts, underweight_only=False)
+        candidates = self._account_buyable_candidates(acct, currency, drifts, underweight_only=False)
         if not candidates:
             return None
 
@@ -736,17 +725,7 @@ class RebalancePlanner:
                 continue
 
             cost_native = quantity * ask_price_native
-            if requires_fx:
-                self.ledger.fund_buy(
-                    acct.number,
-                    buy_currency,
-                    cost_native,
-                    dlr_quotes=self.dlr_quotes,
-                )
-                note = "Best available buy (requires FX)"
-            else:
-                self.ledger.balances[acct.number][buy_currency] -= cost_native
-                note = "Best available buy"
+            self.ledger.balances[acct.number][currency] -= cost_native
 
             return TradeRecommendation(
                 symbol=symbol,
@@ -756,21 +735,24 @@ class RebalancePlanner:
                 account_type=acct.account_type,
                 owner=acct.owner,
                 price=ask_price_native,
-                currency=buy_currency,
+                currency=currency,
                 estimated_value=cost_native,
-                note=note,
-                requires_fx=requires_fx,
+                note="Best available buy",
+                requires_fx=False,
             )
 
         return None
 
-    def _deploy_residual_cash(self, *, allow_best_available_fx: bool) -> int:
+    def _deploy_residual_cash(self) -> int:
         """Minimize stranded cash, same-currency first.
 
-        A best-available cross-currency buy is permitted only after a
-        threshold-triggered starter trade in this round.  Unlike a genuinely
-        underweight FX buy, it exists solely to deploy residual cash, so a
-        standalone conversion would create avoidable FX churn.
+        Cross-currency deployment is only ever done to close a real underweight
+        (``build_underweight_buy``): a Norbert's Gambit conversion carries a
+        fixed fee and spread, so it is never justified merely to park residual
+        cash in a holding that is already at or above target. Best-available
+        (any-drift) deployment therefore stays strictly same-currency. Foreign
+        cash with no same-currency home is instead handled by the post-rebalance
+        conversion sweep in ``fx_conversions``.
         """
         trades_added = 0
         while True:
@@ -798,7 +780,7 @@ class RebalancePlanner:
                         # Fall back to best-available (any drift) to avoid stranded cash
                         if trade is None:
                             trade = self._build_cash_minimizing_buy(
-                                acct, currency, currency, projected_drifts,
+                                acct, currency, projected_drifts,
                             )
                         if trade is None:
                             break
@@ -808,11 +790,10 @@ class RebalancePlanner:
                         trades_added += 1
                         projected_drifts = self.plan.drifts()
 
-                # Cross-currency deployment
+                # Cross-currency deployment — only to close a real underweight.
                 for source_currency in ("CAD", "USD"):
                     buy_currency = "USD" if source_currency == "CAD" else "CAD"
                     while True:
-                        # First try underweight-only buys (drift-aware)
                         trade = build_underweight_buy(
                             acct,
                             self.ledger.balances,
@@ -828,12 +809,6 @@ class RebalancePlanner:
                             note="Leftover cash buy (requires FX)",
                             dlr_quotes=self.dlr_quotes,
                         )
-                        # A standalone FX conversion is not justified merely
-                        # to deploy residual cash into a non-underweight holding.
-                        if trade is None and allow_best_available_fx:
-                            trade = self._build_cash_minimizing_buy(
-                                acct, source_currency, buy_currency, projected_drifts,
-                            )
                         if trade is None:
                             break
 
@@ -866,7 +841,12 @@ def shares_for_drift_gap(
 
     gap_cad = abs(drift_pct / 100.0) * total_value_cad
     gap_native = gap_cad / usd_to_cad_rate if currency == "USD" else gap_cad
-    shares = int(math.floor(gap_native / price_native))
+    # Nudge before flooring: the drift→shares round-trip (dollars → drift % →
+    # dollars → ÷ FX rate) accumulates binary floating-point error that can land
+    # a whole-share result a hair below an integer (e.g. 19.9999999998), which
+    # would otherwise floor down and under-sell by one share — notably leaving a
+    # 1-share sliver when fully liquidating a target-0 position.
+    shares = int(math.floor(gap_native / price_native + 1e-9))
     if shares == 0:
         one_share_cad = to_cad(price_native, currency, usd_to_cad_rate)
         if one_share_cad < 2 * gap_cad:

@@ -359,6 +359,7 @@ def run_rebalancer():
         portfolio.accounts,
         usd_to_cad_rate,
         dlr_quotes,
+        resolved_targets,
         norberts_gambit_fee_cad,
     )
     report = build_report_data(

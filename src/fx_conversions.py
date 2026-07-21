@@ -122,11 +122,41 @@ def _build_usd_to_cad_conversion(
     )
 
 
+def _positive_target_currency_homes(acct, trades: list, targets: dict) -> set:
+    """Return the currencies in which an account has a deployable home.
+
+    A currency is a "home" when, *after the planned trades*, the account still
+    holds at least one position in that currency whose target is positive. That
+    is exactly the condition under which the rebalancer's same-currency
+    deployment can put cash in that currency to work.
+
+    Post-trade quantities matter because a target-0 position being wound down
+    (e.g. an untargeted AMZN) may be fully sold within the plan — its currency
+    should not count as a home just because the position existed pre-trade.
+    Target-0 positions never count regardless: they are only ever sold, never
+    bought, so cash in their currency has nowhere to go.
+    """
+    deltas: dict[str, int] = {}
+    for trade in trades:
+        if trade.account_number != acct.number:
+            continue
+        delta = trade.quantity if trade.action == "BUY" else -trade.quantity
+        deltas[trade.symbol] = deltas.get(trade.symbol, 0) + delta
+
+    homes = set()
+    for pos in acct.positions:
+        post_trade_qty = pos.quantity + deltas.get(pos.symbol, 0)
+        if post_trade_qty > 0 and targets.get(pos.symbol, 0.0) > 0:
+            homes.add(pos.currency)
+    return homes
+
+
 def calculate_currency_needs(
     trades: list,
     accounts: list,
     usd_to_cad_rate: float,
     dlr_quotes: DlrQuotes,
+    targets: dict,
     norberts_gambit_fee_cad: float = 10.49,
 ) -> list:
     """
@@ -144,6 +174,8 @@ def calculate_currency_needs(
         accounts: List of AccountInfo objects.
         usd_to_cad_rate: Current exchange rate.
         dlr_quotes: DLR quote bundle used for conservative Norbert's Gambit math.
+        targets: Resolved target allocations, used to decide which currency an
+            account can actually deploy cash in (its "home" currency).
         norberts_gambit_fee_cad: Trading fee in CAD for Norbert's Gambit.
 
     Returns:
@@ -194,22 +226,28 @@ def calculate_currency_needs(
         if required_conversion is not None:
             conversions.append(required_conversion)
 
-    # ── Sweep: convert stranded foreign cash in single-currency accounts ──
-    # Foreign cash is only "stranded" when every position in the account is
-    # denominated in the other currency — making it structurally impossible
-    # for the rebalancer to deploy the cash without FX conversion.
+    # ── Sweep: convert stranded foreign cash into the account's home currency ──
+    # Cash is "stranded" when it sits in a currency the rebalancer cannot
+    # deploy — i.e. the account holds no post-trade position in that currency
+    # with a positive target. The sweep converts it into the account's *home*
+    # currency: the one currency in which the account does have such a position.
     #
-    # Mixed-currency accounts (e.g. Margin accounts holding both IVV and
-    # VSP.TO) are intentionally excluded: any foreign cash there is
-    # deployable by the rebalancer's cascade logic (the "best available"
-    # fallback will buy into an existing same-currency position when a
-    # trade fires). Converting it here would cause an unnecessary round-trip.
+    # Only accounts with exactly one home currency are swept:
+    #   - Two homes (a genuinely mixed account with real targets on both sides):
+    #     foreign cash is deployable same-currency by the rebalancer, so
+    #     converting it here would cause an unnecessary round-trip.
+    #   - Zero homes (only cash and/or target-0 wind-down positions): neither
+    #     currency has a deployable home, so a conversion would strand the cash
+    #     just as thoroughly in the other currency.
+    # This subsumes the old single-currency-account rule while also rescuing
+    # foreign cash — including the proceeds of a target-0 wind-down — in mixed
+    # accounts whose stranded side has no positive-target position.
     for acct in accounts:
-        pos_currencies = {p.currency for p in acct.positions if p.quantity > 0}
-        if not pos_currencies or len(pos_currencies) > 1:
-            continue  # Skip empty and mixed-currency accounts (see note above)
+        homes = _positive_target_currency_homes(acct, trades, targets)
+        if len(homes) != 1:
+            continue  # See note above: only an unambiguous single home is swept.
 
-        position_currency = next(iter(pos_currencies))
+        position_currency = next(iter(homes))
 
         # Remaining cash after trades
         impact = account_impact.get(acct.number)

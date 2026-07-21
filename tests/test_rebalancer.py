@@ -69,6 +69,19 @@ class TestSharesForDriftGap:
         shares = shares_for_drift_gap(1000000.0, 1.0, 33.33, "CAD", 1.36)
         assert shares == 300  # floor(10000/33.33) = 300
 
+    def test_no_fp_undersell_on_full_liquidation(self):
+        """The drift→shares round-trip must not strand a share to FP error.
+
+        A target-0 position worth exactly 20 shares should size to a full 20.
+        Here total_value=118720, the position is 20 × $100 USD (=$2000 /
+        $2720 CAD), so drift = 2720/118720×100. Without an epsilon nudge the
+        USD gap comes back as 1999.9999999999998 and floors to 19, under-selling
+        by one share and leaving a sliver.
+        """
+        drift = (20 * 100 * 1.36) / 118720.0 * 100
+        shares = shares_for_drift_gap(118720.0, drift, 100.0, "USD", 1.36)
+        assert shares == 20
+
 
 class TestMaxSellableWithoutCrossingTarget:
     def test_basic_calculation(self):
@@ -662,6 +675,44 @@ class TestPlannerCashDeployment:
         trades = calculate_trades(portfolio, targets, usd_to_cad_rate, 10.49, 0.5, set(), None)
 
         assert trades == []
+
+    def test_starter_trade_does_not_unlock_cross_fx_best_available(self):
+        """A best-available buy must never cross currencies, even mid-round.
+
+        Account 1 holds only a CAD position (no USD symbol to buy) but has
+        stranded USD cash; its VCN is already overweight, so any USD deployment
+        there would be a best-available buy into a non-underweight holding.
+        Account 2 has an overweight/underweight pair that fires starter trades.
+        A best-available buy in account 1 would only reduce drift by chance, so
+        no FX conversion is justified — the USD cash must stay put (to be handled
+        by the post-rebalance sweep instead).
+        """
+        portfolio = _build_test_portfolio([
+            {
+                "number": "1", "type": "RRSP", "owner": "Alice",
+                "cash_cad": 0.0, "cash_usd": 5000.0,
+                "positions": [
+                    {"symbol": "VCN.TO", "qty": 500, "price": 50.0, "currency": "CAD"},
+                ],
+            },
+            {
+                "number": "2", "type": "TFSA", "owner": "Alice",
+                "cash_cad": 0.0, "cash_usd": 0.0,
+                "positions": [
+                    {"symbol": "VCN.TO", "qty": 2000, "price": 50.0, "currency": "CAD"},
+                    {"symbol": "VUN.TO", "qty": 100, "price": 60.0, "currency": "CAD"},
+                ],
+            },
+        ])
+        targets = {"VCN.TO": 40.0, "VUN.TO": 25.0, "USD": 20.0, "CAD": 15.0}
+
+        trades = calculate_trades(portfolio, targets, 1.36, 10.49, 0.5, set(), None)
+
+        # Starter trades still fire in account 2.
+        assert any(t.account_number == "2" for t in trades)
+        # But nothing crosses currencies, and account 1's USD cash is untouched.
+        assert all(not t.requires_fx for t in trades)
+        assert all(t.account_number != "1" for t in trades)
 
     def test_zero_value_portfolio_returns_no_trades(self):
         """Empty portfolio should produce no trades."""
