@@ -916,7 +916,7 @@ Round 1 — Layer 3 (Residual Cash):
   → build_deploy_cash_underweight (same-currency): ZAG.TO drift now ≈ 0% → not underweight → skip
   → _build_deploy_cash_any:
       → ZAG.TO (~0%), XEF.TO (+0.3%), VUN.TO (~0%) all buyable
-      → ZAG.TO or VUN.TO (both ~0%) → lowest drift wins
+      → sorted by cascade score first; among ~equal cascade, lowest drift breaks the tie
       → BUY 78 VUN.TO in acct_A ("Deploy cash (any)")
   → Remaining ~$1,006 < $10.85 (ZAG.TO) → done
 
@@ -933,7 +933,7 @@ Trade netting:
 Final trades presented to user:
   SELL 200 VUN.TO in Bob Margin
   SELL 124 VUN.TO in Alice RRSP
-  BUY 18 QQQ in Bob Margin (requires currency conversion)
+  BUY 18 QQQ in Bob Margin (FX)
   BUY 738 ZAG.TO in Alice RRSP
 ```
 
@@ -945,7 +945,7 @@ Final trades presented to user:
 
 3. **ZAG.TO was below the starter threshold but above the residual threshold.** At -0.8%, ZAG.TO didn't qualify for a Layer 2 "underweight buy" (which requires drift < -1.0%). But Layer 3's residual cash deployment uses threshold 0.0% — any negative drift qualifies. This is Rule 4 in action: "minimize free cash whenever practical."
 
-4. **Trade netting cleaned up Account A.** The planner sold 202 VUN.TO, then bought back 78 as "best available." Netting collapses this to a clean SELL 124. The user sees the net effect, not the intermediate churn.
+4. **Trade netting cleaned up Account A.** The planner sold 202 VUN.TO, then bought back 78 as a "Deploy cash (any)" buy. Netting collapses this to a clean SELL 124. The user sees the net effect, not the intermediate churn.
 
 ---
 
@@ -1025,7 +1025,7 @@ Round 1 — Layer 3 (Residual Cash):
   acct_B still has ~$6,049 CAD (VUN.TO sell proceeds not yet spent)
   → build_deploy_cash_underweight (same-currency): ZAG.TO at ~0% is NOT underweight → skip
   → _build_deploy_cash_any:
-      ZAG.TO (~0%) is "best available" in acct_B (lowest drift)
+      ZAG.TO is the only buyable non-underweight holding in acct_B → wins by default
       → BUY ~557 ZAG.TO in acct_B ("Deploy cash (any)")
   → This pushes ZAG.TO to ~+0.8% overweight at the household level!
 
@@ -1053,13 +1053,13 @@ The cascade:
   2. VUN.TO sell from acct_B (has ZAG.TO as underweight alternative) → $6K CAD
   3. ZAG.TO buy in acct_C consumes most of the XEF.TO proceeds (Layer 2)
   4. Remaining CAD in acct_C → 12 QQQ (cross-currency, Layer 2)
-  5. acct_B's $6K → ZAG.TO "best available" buy (Layer 3) → overshoots ZAG.TO
+  5. acct_B's $6K → ZAG.TO "Deploy cash (any)" buy (Layer 3) → overshoots ZAG.TO
   6. Round 2: ZAG.TO overweight → sell from acct_C (has QQQ alternative)
   7. Those proceeds fund 8 more QQQ in acct_C → QQQ gap fully closed!
   8. The $6K effectively "routed through" ZAG.TO in acct_B → acct_C → QQQ
 ```
 
-**Key insight:** No cash moves between accounts — each account acts independently. But *household-level drift measurement* acts as the coordination signal that makes independent per-account decisions produce a globally coherent result. acct_B buys ZAG.TO because that's its only option (Rule 4). This changes the household drift for ZAG.TO, which Round 2 picks up. acct_C then sells its own ZAG.TO because the household says it's overweight and acct_C has a better use for the proceeds (underweight QQQ). Neither account "knows about" the other — they're both just reacting to the same shared drift numbers. The emergent result is that acct_B ends up holding more ZAG.TO and acct_C ends up holding more QQQ, and the QQQ gap gets fully closed across two rounds. This is why the iterative multi-round design matters: Round 1's "best available" overshoot creates a signal that Round 2 can act on.
+**Key insight:** No cash moves between accounts — each account acts independently. But *household-level drift measurement* acts as the coordination signal that makes independent per-account decisions produce a globally coherent result. acct_B buys ZAG.TO because that's its only option (Rule 4). This changes the household drift for ZAG.TO, which Round 2 picks up. acct_C then sells its own ZAG.TO because the household says it's overweight and acct_C has a better use for the proceeds (underweight QQQ). Neither account "knows about" the other — they're both just reacting to the same shared drift numbers. The emergent result is that acct_B ends up holding more ZAG.TO and acct_C ends up holding more QQQ, and the QQQ gap gets fully closed across two rounds. This is why the iterative multi-round design matters: Round 1's "Deploy cash (any)" overshoot creates a signal that Round 2 can act on.
 
 ---
 
@@ -1099,7 +1099,7 @@ Round 2: VUN.TO drift pushes past threshold → sell from Alice TFSA
          → ZAG.TO gap gets filled using those proceeds.
 ```
 
-**Key insight:** The "best available" fallback doesn't just deploy cash into the *least bad* option — it picks the option most likely to trigger a useful cascade in a subsequent round. The `_cascade_score` of a symbol is the total underweight drift in other accounts that also hold it. Buying a high-cascade symbol now may overshoot the household allocation, which Round 2 corrects by selling from the *right* account — one that has underweight alternatives to absorb the proceeds.
+**Key insight:** The `Deploy cash (any)` fallback doesn't just deploy cash into the *least bad* option — it picks the option most likely to trigger a useful cascade in a subsequent round. The `_cascade_score` of a symbol is the total underweight drift in other accounts that also hold it. Buying a high-cascade symbol now may overshoot the household allocation, which Round 2 corrects by selling from the *right* account — one that has underweight alternatives to absorb the proceeds.
 
 When no symbol has cascade potential (all other holders are balanced), the fallback degrades gracefully to lowest-drift ordering.
 
@@ -1172,6 +1172,60 @@ The sweep is symmetric: the example above shows a USD-home account sweeping left
 
 ---
 
+### Scenario 7: Cross-Currency Cascade — Unsticking an Overweight Across the Currency Boundary
+
+**Setup:** This is the hardest case the planner handles. An overweight holding sits in an account that has *no underweight of its own*, and the only underweight symbols in the household live in a **different account and a different currency**. A naive planner leaves the overweight stuck: selling it just produces cash that gets re-bought into the same symbol (its only same-currency option), netting to nothing. The advance is that residual-cash deployment compares cascade potential *across* the CAD/USD boundary and routes the proceeds to the side that can actually unlock a rebalance.
+
+```
+Initial state (total ≈ $944,800):
+  Account "Alice RRSP" (acct_A):
+    IVV: 300 shares @ US$600 = ~$244,800 CAD   → 25.9% (target 20% → +5.9% OVER)
+    VSP.TO: 2,000 @ $68 = $136,000             → part of the VSP household total
+  Account "Bob Margin" (acct_B):
+    VSP.TO: 8,000 @ $68 = $544,000             → VSP household total 72.0% (target 55% → +17% OVER)
+    XSH.TO: 200 @ $50 = $10,000                → 1.1% (target 12.5% → −11.4% UNDER)
+    ZMMK.TO: 200 @ $50 = $10,000               → 1.1% (target 12.5% → −11.4% UNDER)
+
+  The problem: IVV (USD) is overweight, but acct_A holds no underweight symbol.
+  The only underweights (XSH.TO, ZMMK.TO) are CAD, and live only in acct_B.
+```
+
+**Why the naive result is "IVV stuck at 0 sold":** IVV's proceeds are USD. Account A's only USD symbol is IVV itself, so same-currency best-available would just re-buy IVV — a sell/re-buy that nets to zero. To be productive, the USD must cross into CAD and buy VSP.TO in acct_A. But VSP is *overweight*, so it's not an underweight buy — it only makes sense as a **cascade**: over-buying VSP in acct_A pushes the household VSP further over, which lets acct_B sell *more* VSP and funnel the proceeds into its underweight XSH/ZMMK.
+
+**What the planner does:**
+
+```
+Cascade scores (from acct_A's perspective):
+  IVV  → 0.00   (re-buying IVV unlocks nothing downstream)
+  VSP.TO → 22.88 (acct_B holds VSP AND has −11.4% + −11.4% of underweight to unlock)
+
+Layer 3 best-available (_build_deploy_cash_any) for acct_A's USD:
+  → same-currency USD candidate: IVV (cascade 0)
+  → cross-currency CAD candidate: VSP.TO (cascade 22.88)
+  → 22.88 > 0 and > 0, and strictly higher than same-currency → convert USD→CAD, buy VSP.TO
+```
+
+Final netted trades:
+```
+  SELL  3175 VSP.TO   acct_B  CAD   "Overweight sell"
+  SELL    68 IVV      acct_A  USD   "Overweight sell"
+  BUY   2162 ZMMK.TO  acct_B  CAD   "Underweight buy"
+  BUY   2156 XSH.TO   acct_B  CAD   "Underweight buy"
+  BUY    817 VSP.TO   acct_A  CAD   "Deploy cash (any) (FX)"   ← the cross-currency cascade buy
+  sweep: USD_TO_CAD, 4117 DLR shares in acct_A                 ← remaining IVV proceeds converted
+```
+
+**The chain:**
+1. VSP is massively overweight → acct_B sells 3,175 VSP and funds its own underweight XSH/ZMMK directly.
+2. IVV is overweight in acct_A → 68 shares sell, producing USD.
+3. That USD has no productive same-currency home (re-buying IVV = cascade 0), but VSP.TO on the CAD side scores 22.88 → the planner converts and buys 817 VSP.TO in acct_A (`Deploy cash (any) (FX)`).
+4. That over-buys household VSP, which a later round absorbs by selling still more VSP from acct_B into the underweight names — the cascade.
+5. Whatever IVV proceeds don't fit a whole-share cascade buy are swept USD→CAD (4,117 DLR shares) so they land in the deployable currency for next run rather than stranding.
+
+**Key insight:** The move that makes this work is treating "which currency to deploy into" as a **cascade decision, not a same-currency default**. `_build_deploy_cash_any` takes the top candidate on *each* side and picks the higher cascade score, preferring same-currency only on ties. Crossing the boundary is gated on **strictly positive** cascade potential (Scenario 4's rule, now applied across currencies) — so cash crosses only when doing so genuinely unlocks a downstream rebalance, never just to park it in an at-target holding. This is the difference between IVV staying stuck forever and the household actually converging.
+
+---
+
 ### How These Scenarios Interact With the Rules
 
 | Scenario | Primary Rules Exercised |
@@ -1182,6 +1236,7 @@ The sweep is symmetric: the example above shows a USD-home account sweeping left
 | 4. Best-available cash deployment | Rule 4 ("Minimize free cash whenever practical"), Rule 5 ("Only buy symbols that already exist in the account") |
 | 5. Trade netting | Rule 8 ("Avoid obviously wasteful churn") |
 | 6. Cross-currency sweep | Rule 4 ("Minimize free cash whenever practical"), Rule 6 ("Prefer same-currency deployment before cross-currency deployment") |
+| 7. Cross-currency cascade | Rule 1 ("Treat all accounts as one household portfolio"), Rule 4 ("Minimize free cash whenever practical"), Rule 6 ("Prefer same-currency deployment before cross-currency deployment") |
 
 ---
 
