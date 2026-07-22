@@ -27,7 +27,7 @@ from dataclasses import dataclass, field
 
 from src.fx_math import consume_cross_currency_cash, cross_currency_buying_power, to_cad
 from src.portfolio import get_current_allocations, get_drifts, get_holdings_view, simulate_rebalance
-from src.cash_deploy import build_underweight_buy
+from src.cash_deploy import build_deploy_cash_underweight
 from src.models import TradeRecommendation
 
 # Maximum optimisation rounds before stopping
@@ -479,7 +479,7 @@ class RebalancePlanner:
             price=ask_price_native,
             currency=currency,
             estimated_value=cost_native,
-            note="Underweight buy (requires FX)" if converted else "Underweight buy",
+            note="Underweight buy (FX)" if converted else "Underweight buy",
             requires_fx=converted,
         ))
         return quantity
@@ -689,70 +689,116 @@ class RebalancePlanner:
             )
         return candidates
 
-    def _build_cash_minimizing_buy(
+    def _build_deploy_cash_any(
         self,
         acct,
-        currency: str,
+        source_currency: str,
         drifts: dict[str, float],
     ):
-        """Spend available same-currency cash on the best affordable buyable symbol.
+        """Deploy an account's residual ``source_currency`` cash to the highest-cascade holding.
 
-        This is the "best available" fallback used when no symbol is still
-        underweight but same-currency cash would otherwise be left stranded.
-        It never crosses the currency boundary: a cross-currency conversion
-        (Norbert's Gambit) carries a fixed fee and spread, so it is only ever
-        justified by closing a real underweight, not by parking residual cash
-        in a holding that is already at or above target.
+        This is the "best available" deployment used when no symbol is still
+        underweight but cash would otherwise sit idle (earning nothing). The
+        cash flows to wherever it has the most potential to be useful, which
+        may mean crossing the currency boundary.
 
-        Candidates are ordered by cascade potential first (symbols with the
-        most total underweight drift in other accounts that hold them), then
-        by lowest drift as a tiebreaker. Buying a high-cascade symbol may
-        overshoot the household allocation, which a subsequent round will
-        correct by selling from an account with underweight alternatives —
-        effectively routing the cash to where it's most needed.
+        Both currencies are considered: the best same-currency candidate and
+        the best cross-currency candidate (each already the top of its
+        cascade-sorted list). We deploy into whichever has the higher cascade
+        score — the total underweight drift it can unlock in other accounts
+        that hold it — since buying a high-cascade symbol overshoots the
+        household allocation and a later round corrects it by selling from an
+        account with underweight alternatives, routing the cash to where it's
+        most needed. Ties favour the same-currency buy, which avoids a
+        Norbert's Gambit conversion. A cross-currency win pays that conversion
+        cost; the next round then deploys the converted cash same-currency.
         """
-        available_cash = self.ledger.same_currency_buying_power(acct.number, currency)
-        if available_cash <= 0:
+        source_cash = self.ledger.same_currency_buying_power(acct.number, source_currency)
+        if source_cash <= 0:
             return None
 
+        other_currency = "USD" if source_currency == "CAD" else "CAD"
+
+        same = self._top_buyable_candidate(acct, source_currency, drifts)
+        cross = self._top_buyable_candidate(acct, other_currency, drifts)
+
+        # Choose the destination with the higher cascade score; prefer the
+        # same-currency buy on ties so we don't convert without a reason.
+        # A same-currency buy is free to fire even at zero cascade (no FX cost),
+        # but crossing the currency boundary is only worth a Norbert's Gambit
+        # conversion when the destination has real cascade potential — otherwise
+        # we'd pay a fee to park cash in an at-target holding with no downstream
+        # benefit. Genuinely stranded foreign cash is instead handled by the
+        # post-rebalance conversion sweep in ``fx_conversions``.
+        if same is not None and (cross is None or same[2] >= cross[2]):
+            symbol, ask_price_native, _cascade = same
+            buy_currency = source_currency
+            requires_fx = False
+            available_cash = source_cash
+        elif cross is not None and cross[2] > 0:
+            symbol, ask_price_native, _cascade = cross
+            buy_currency = other_currency
+            requires_fx = True
+            available_cash = cross_currency_buying_power(
+                source_cash,
+                source_currency,
+                self.usd_to_cad_rate,
+                self.fee_cad,
+                dlr_quotes=self.dlr_quotes,
+            )
+        else:
+            return None
+
+        quantity = int(math.floor(available_cash / ask_price_native))
+        if quantity <= 0:
+            return None
+
+        cost_native = quantity * ask_price_native
+        if requires_fx:
+            self.ledger.fund_buy(
+                acct.number,
+                buy_currency,
+                cost_native,
+                dlr_quotes=self.dlr_quotes,
+            )
+        else:
+            self.ledger.balances[acct.number][buy_currency] -= cost_native
+
+        return TradeRecommendation(
+            symbol=symbol,
+            action="BUY",
+            quantity=quantity,
+            account_number=acct.number,
+            account_type=acct.account_type,
+            owner=acct.owner,
+            price=ask_price_native,
+            currency=buy_currency,
+            estimated_value=cost_native,
+            note="Deploy cash (any) (FX)" if requires_fx else "Deploy cash (any)",
+            requires_fx=requires_fx,
+        )
+
+    def _top_buyable_candidate(self, acct, currency: str, drifts: dict[str, float]):
+        """Return the highest-cascade buyable ``(symbol, ask_price, cascade)`` in a currency, or None."""
         candidates = self._account_buyable_candidates(acct, currency, drifts, underweight_only=False)
         if not candidates:
             return None
-
-        for _drift_pct, symbol, ask_price_native in candidates:
-            quantity = int(math.floor(available_cash / ask_price_native))
-            if quantity <= 0:
-                continue
-
-            cost_native = quantity * ask_price_native
-            self.ledger.balances[acct.number][currency] -= cost_native
-
-            return TradeRecommendation(
-                symbol=symbol,
-                action="BUY",
-                quantity=quantity,
-                account_number=acct.number,
-                account_type=acct.account_type,
-                owner=acct.owner,
-                price=ask_price_native,
-                currency=currency,
-                estimated_value=cost_native,
-                note="Best available buy",
-                requires_fx=False,
-            )
-
-        return None
+        _drift_pct, symbol, ask_price_native = candidates[0]
+        return symbol, ask_price_native, self._cascade_score(symbol, acct.number, drifts)
 
     def _deploy_residual_cash(self) -> int:
-        """Minimize stranded cash, same-currency first.
+        """Minimize stranded cash, deploying it where it can be most useful.
 
-        Cross-currency deployment is only ever done to close a real underweight
-        (``build_underweight_buy``): a Norbert's Gambit conversion carries a
-        fixed fee and spread, so it is never justified merely to park residual
-        cash in a holding that is already at or above target. Best-available
-        (any-drift) deployment therefore stays strictly same-currency. Foreign
-        cash with no same-currency home is instead handled by the post-rebalance
-        conversion sweep in ``fx_conversions``.
+        Two layers run per account, each preferring same-currency before
+        cross-currency (an FX buy pays a Norbert's Gambit conversion, so a
+        same-currency option of equal value wins):
+
+        1. Underweight buys (``build_deploy_cash_underweight``) — close a real drift
+           gap, same-currency first, then cross-currency.
+        2. Best-available deployment (``_build_deploy_cash_any``) — once
+           nothing is underweight, route leftover cash to the highest-cascade
+           holding, comparing same- and cross-currency destinations so idle
+           cash flows to where it has the most potential to be useful.
         """
         trades_added = 0
         while True:
@@ -760,58 +806,45 @@ class RebalancePlanner:
             projected_drifts = self.plan.drifts()
 
             for acct in self.portfolio.accounts:
-                # Same-currency deployment
-                for currency in ("CAD", "USD"):
-                    while True:
-                        # First try underweight-only buys (drift-aware)
-                        trade = build_underweight_buy(
-                            acct,
-                            self.ledger.balances,
-                            self.holdings_view,
-                            projected_drifts,
-                            self.hidden_symbols,
-                            self.portfolio.total_value_cad,
-                            self.usd_to_cad_rate,
-                            source_currency=currency,
-                            buy_currency=currency,
-                            underweight_threshold_pct=0.0,
-                            note="Leftover cash buy",
-                        )
-                        # Fall back to best-available (any drift) to avoid stranded cash
-                        if trade is None:
-                            trade = self._build_cash_minimizing_buy(
-                                acct, currency, projected_drifts,
-                            )
-                        if trade is None:
-                            break
-
-                        self.plan.add_trade(trade)
-                        made_trade = True
-                        trades_added += 1
-                        projected_drifts = self.plan.drifts()
-
-                # Cross-currency deployment — only to close a real underweight.
+                # Underweight buys — same-currency first, then cross-currency.
                 for source_currency in ("CAD", "USD"):
-                    buy_currency = "USD" if source_currency == "CAD" else "CAD"
+                    same_currency = source_currency
+                    cross_currency = "USD" if source_currency == "CAD" else "CAD"
+                    for buy_currency in (same_currency, cross_currency):
+                        requires_fx = buy_currency != source_currency
+                        while True:
+                            trade = build_deploy_cash_underweight(
+                                acct,
+                                self.ledger.balances,
+                                self.holdings_view,
+                                projected_drifts,
+                                self.hidden_symbols,
+                                self.portfolio.total_value_cad,
+                                self.usd_to_cad_rate,
+                                source_currency=source_currency,
+                                buy_currency=buy_currency,
+                                underweight_threshold_pct=0.0,
+                                fee_cad=self.fee_cad if requires_fx else 0.0,
+                                note="Deploy cash (underweight) (FX)" if requires_fx else "Deploy cash (underweight)",
+                                dlr_quotes=self.dlr_quotes if requires_fx else None,
+                            )
+                            if trade is None:
+                                break
+                            self.plan.add_trade(trade)
+                            made_trade = True
+                            trades_added += 1
+                            projected_drifts = self.plan.drifts()
+
+                # Best-available deployment for any leftover cash. This routes
+                # to the highest-cascade holding across both currencies, so it
+                # subsumes same- and cross-currency deployment in one call.
+                for source_currency in ("CAD", "USD"):
                     while True:
-                        trade = build_underweight_buy(
-                            acct,
-                            self.ledger.balances,
-                            self.holdings_view,
-                            projected_drifts,
-                            self.hidden_symbols,
-                            self.portfolio.total_value_cad,
-                            self.usd_to_cad_rate,
-                            source_currency=source_currency,
-                            buy_currency=buy_currency,
-                            underweight_threshold_pct=0.0,
-                            fee_cad=self.fee_cad,
-                            note="Leftover cash buy (requires FX)",
-                            dlr_quotes=self.dlr_quotes,
+                        trade = self._build_deploy_cash_any(
+                            acct, source_currency, projected_drifts,
                         )
                         if trade is None:
                             break
-
                         self.plan.add_trade(trade)
                         made_trade = True
                         trades_added += 1

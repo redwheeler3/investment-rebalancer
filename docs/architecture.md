@@ -147,7 +147,7 @@ Deploy thresholds trigger going **down** (into drawdown). Recovery thresholds tr
 
 ```
 Deploy:    -10% → level_1,   -20% → level_2,   -30% → level_3
-Recovery:  -15% → level_1,    -5% → level_1,    +5% → baseline
+Recovery:  -15% → level_2,    -5% → level_1,    +5% → baseline
 ```
 
 This means:

@@ -3,7 +3,7 @@
 Builds buy trades from available cash after the planner's main sell/buy passes:
 
 - **underweight_candidates** — find account-local underweight holdings in a currency
-- **build_underweight_buy** — build one buy trade funded by available cash
+- **build_deploy_cash_underweight** — build one buy trade funded by available cash
   (handles both same-currency and cross-currency depending on parameters)
 """
 
@@ -58,7 +58,7 @@ def underweight_candidates(
     return candidates
 
 
-def build_underweight_buy(
+def build_deploy_cash_underweight(
     acct,
     cash_by_account: dict[str, dict[str, float]],
     holdings: dict,

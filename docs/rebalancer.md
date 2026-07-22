@@ -11,9 +11,9 @@ The planner is built around these rules (defined in the project README). They're
 1. **Treat all accounts as one household portfolio** — Drift is measured at the total-portfolio level, not per account.
 2. **Sell overweight positions and buy underweight positions** — The planner starts with symbols whose drift is materially away from target.
 3. **Use a drift threshold to avoid tiny starter trades** — The configured `drift_trade_threshold_pct` suppresses trades for symbols that are only slightly off target.
-4. **Minimize free cash whenever practical** — Useful account-level cash is deployed even when no symbol is far enough from target to start a normal rebalance. Cross-currency (FX) deployment is used only to close a real underweight; foreign cash with no same-currency home is handled by the post-rebalance conversion sweep.
+4. **Minimize free cash whenever practical** — Useful account-level cash is deployed even when no symbol is far enough from target to start a normal rebalance. Idle cash flows to where it is most useful: to a real underweight when one exists, otherwise (best-available) to the holding with the most cascade potential. Crossing the currency boundary for a best-available buy is only worth a conversion when the destination has cascade potential; genuinely stranded foreign cash is instead handled by the post-rebalance conversion sweep.
 5. **Only buy symbols that already exist in the account** — An account's current holdings define its buyable universe.
-6. **Prefer same-currency deployment before cross-currency deployment** — Same-currency buys come before CAD/USD conversion. Cross-currency funding is used only to close a real underweight, never merely to park residual cash.
+6. **Prefer same-currency deployment before cross-currency deployment** — Same-currency buys come before CAD/USD conversion, since a same-currency option of equal value avoids a Norbert's Gambit fee. Cross-currency funding is used when it closes a real underweight, or when a best-available buy on the other side has strictly higher cascade potential than anything same-currency.
 7. **Allow account-constrained cash deployment, then clean up globally** — If cash lands in an account with limited options, deploy it there first. If that creates excess exposure, sell the excess from another account where proceeds can fund underweight buys.
 8. **Avoid obviously wasteful churn** — Don't create trade patterns that undo each other without improving drift or reducing idle cash.
 9. **Use whole-share, real-side pricing** — Sells use bid pricing. Buys use ask pricing. Whole shares only.
@@ -156,7 +156,6 @@ sell_trades = allocate_sell(
     self.portfolio.accounts,
     effective_drift=current_drifts,
     transient_symbols=self.hidden_symbols,
-    drift_trade_threshold_pct=self.drift_trade_threshold_pct,
     position_deltas=self.plan.position_deltas(),
     productive_accounts=productive,
 )
@@ -181,18 +180,18 @@ if productive_accounts is not None:
 holders.sort(
     key=lambda a: (
         1 if _has_underweight_alternatives(a, symbol, ...) else 0,
-        _effective_qty(a, symbol, position_deltas),
+        effective_qty(a, symbol, position_deltas),
     ),
     reverse=True,
 )
 ```
 
-**What `_has_underweight_alternatives` checks:** Can this account's sell proceeds be immediately redeployed? It scans the account's other positions for anything with drift below -threshold.
+**What `_has_underweight_alternatives` checks:** Can this account's sell proceeds be immediately redeployed? It scans the account's other positions for anything below target — *any* negative drift qualifies (`drift < 0`), matching what residual-cash deployment will actually buy.
 
-**What `_effective_qty` does:** Returns the position size *adjusted for trades already planned this round*. Prevents over-selling when multiple rounds target the same account.
+**What `effective_qty` does:** Returns the position size *adjusted for trades already planned this round*. Prevents over-selling when multiple rounds target the same account.
 
 ```python
-def _effective_qty(account, symbol, position_deltas):
+def effective_qty(account, symbol, position_deltas):
     original = int(get_position_quantity(account, symbol))
     delta = position_deltas.get((account.number, symbol), 0)
     return max(0, original + delta)
@@ -257,7 +256,11 @@ buying_power = self.ledger.total_buying_power(acct.number, currency, dlr_quotes=
 
 # Not enough? Try raising cash first
 if buying_power < ask_price_native:
-    self._raise_cash_in_account(acct, symbol, currency, ask_price_native)
+    self._raise_cash_in_account(
+        acct, symbol, currency,
+        target_native=remaining_shares * ask_price_native,
+        min_useful_native=ask_price_native,
+    )
     buying_power = self.ledger.total_buying_power(...)  # Recalculate
 
 affordable = int(math.floor(buying_power / ask_price_native))
@@ -268,7 +271,7 @@ converted = self.ledger.fund_buy(acct.number, currency, cost_native, dlr_quotes=
 
 self.plan.add_trade(TradeRecommendation(
     ...,
-    note="Underweight buy (requires FX)" if converted else "Underweight buy",
+    note="Underweight buy (FX)" if converted else "Underweight buy",
     requires_fx=converted,
 ))
 ```
@@ -304,7 +307,10 @@ def fund_buy(self, account_number, currency, cost_native, dlr_quotes=None) -> bo
 When an account wants to buy IVV (USD) but has no USD and no CAD to convert, the planner can sell overweight *same-currency* holdings in that account:
 
 ```python
-def _raise_cash_in_account(self, acct, buy_symbol, currency, minimum_needed_native):
+def _raise_cash_in_account(self, acct, buy_symbol, currency,
+                           target_native, min_useful_native=None):
+    if min_useful_native is None:
+        min_useful_native = target_native
     drifts = self.plan.drifts()
     candidates = []
 
@@ -326,27 +332,36 @@ def _raise_cash_in_account(self, acct, buy_symbol, currency, minimum_needed_nati
         candidates.append((drift_pct, pos.symbol, bid_price, max_sellable))
 ```
 
+Two parameters, not one: `target_native` is how much cash we'd *like* to raise (enough for all `remaining_shares`), while `min_useful_native` is the floor below which raising cash is pointless (one share of the buy symbol). Callers pass `target_native=remaining_shares * ask_price`, `min_useful_native=ask_price`.
+
 **`max_sellable_without_crossing_target`** — this is the safety valve:
 
 ```python
 def max_sellable_without_crossing_target(total_value_cad, drift_pct, price, currency, rate):
     per_share_drift_pct = (to_cad(price, currency, rate) / total_value_cad) * 100.0
-    return int(math.floor(drift_pct / per_share_drift_pct))
+    return int(math.floor((drift_pct + 1e-9) / per_share_drift_pct))
 ```
 
-It calculates: "each share I sell reduces drift by X%. I have Y% of positive drift. So I can sell at most Y/X shares before going negative."
+It calculates: "each share I sell reduces drift by X%. I have Y% of positive drift. So I can sell at most Y/X shares before going negative." (The `+ 1e-9` nudge absorbs floating-point error at exact share boundaries — see [the floating-point nudge](#fp-nudge).)
 
-Then it sells the most overweight candidates first, stopping as soon as enough cash is raised:
+Then it runs a **dry-run first**: it simulates selling the most overweight candidates until the target is met, and only commits the "Funding sell" trades if the simulated proceeds reach `min_useful_native`. This prevents orphaned sells that raise cash but not enough to buy even one share of the target:
 
 ```python
 candidates.sort(key=lambda item: item[0], reverse=True)  # Most overweight first
+simulated_cash = current_cash
+planned_sells = []
 for _drift_pct, symbol, bid_price, max_sellable in candidates:
-    shortfall = minimum_needed_native - current_cash
+    shortfall = target_native - simulated_cash
     if shortfall <= 0:
-        break  # We have enough
-
+        break  # Simulated enough
     sell_qty = min(max_sellable, ceil(shortfall / bid_price))
-    # Create "Funding sell" trade...
+    simulated_cash += bid_price * sell_qty
+    planned_sells.append((symbol, sell_qty, bid_price, ...))
+
+# Only commit if the dry-run cleared the minimum-useful floor
+if simulated_cash < min_useful_native:
+    return
+# ... commit each planned sell as a "Funding sell" trade
 ```
 
 ---
@@ -355,7 +370,7 @@ for _drift_pct, symbol, bid_price, max_sellable in candidates:
 
 Cash can remain in accounts from rounding, pre-existing balances, dividends, or partial fills. This layer minimizes idle cash and runs even when no starter sell or buy was needed.
 
-### The two-pass approach
+### The two-layer approach
 
 ```python
 def _deploy_residual_cash(self) -> int:
@@ -364,42 +379,39 @@ def _deploy_residual_cash(self) -> int:
         projected_drifts = self.plan.drifts()
 
         for acct in self.portfolio.accounts:
-            # Pass 1: Same-currency buys (no conversion cost)
-            for currency in ("CAD", "USD"):
-                while True:
-                    trade = build_underweight_buy(
-                        ..., source_currency=currency, buy_currency=currency, ...
-                    )
-                    if trade is None:
-                        trade = self._build_cash_minimizing_buy(acct, currency, ...)
-                    if trade is None:
-                        break
-                    self.plan.add_trade(trade)
-                    made_trade = True
-
-            # Pass 2: Cross-currency buys — ONLY to close a real underweight.
+            # Layer 1: underweight buys — same-currency first, then cross-currency.
             for source_currency in ("CAD", "USD"):
-                buy_currency = "USD" if source_currency == "CAD" else "CAD"
+                cross = "USD" if source_currency == "CAD" else "CAD"
+                for buy_currency in (source_currency, cross):
+                    while True:
+                        trade = build_deploy_cash_underweight(
+                            ..., source_currency=source_currency,
+                            buy_currency=buy_currency, ...
+                        )
+                        if trade is None:
+                            break
+                        self.plan.add_trade(trade); made_trade = True
+
+            # Layer 2: best-available deployment for leftover cash. One call per
+            # source currency; it compares same- vs cross-currency internally.
+            for source_currency in ("CAD", "USD"):
                 while True:
-                    trade = build_underweight_buy(
-                        ..., source_currency=source_currency, buy_currency=buy_currency, ...
+                    trade = self._build_deploy_cash_any(
+                        acct, source_currency, projected_drifts,
                     )
                     if trade is None:
                         break
-                    self.plan.add_trade(trade)
-                    made_trade = True
+                    self.plan.add_trade(trade); made_trade = True
 
         if not made_trade:
             break  # No more cash to deploy anywhere
 ```
 
-### The fallback chain for each account/currency
+### The two layers
 
-1. **`build_underweight_buy`** (from `cash_deploy.py`) — Buy the most underweight symbol in this account that matches the currency. Iterates through candidates if the top pick is too expensive. Caps at the number of shares needed to close the gap. Handles both same-currency (`source_currency == buy_currency`) and cross-currency cases.
+1. **`build_deploy_cash_underweight`** (from `cash_deploy.py`) — Buy the most underweight symbol in this account that matches the buy currency. Iterates through candidates if the top pick is too expensive. Caps at the number of shares needed to close the gap. Handles both same-currency (`source_currency == buy_currency`) and cross-currency cases. Cross-currency underweight buys are always allowed — closing a real drift gap justifies the conversion fee regardless of cascade.
 
-2. **`_build_cash_minimizing_buy`** — Same-currency-only fallback if no underweight symbols exist. Buys the *least overweight* symbol — the goal is "don't leave cash idle" not "fix drift."
-
-Cross-currency deployment (Pass 2) fires only through `build_underweight_buy` — i.e. only to close a genuine underweight — so it always pays its fixed FX cost (fee + spread) in exchange for a real drift reduction. Foreign cash with no same-currency home and no underweight to fund is left for the post-rebalance conversion sweep (see `fx_conversions.py`), which moves it into the account's home currency.
+2. **`_build_deploy_cash_any`** — Best-available deployment once nothing is underweight. For a given source currency it takes the top (highest-cascade) buyable candidate on *each* side and deploys into whichever has the higher cascade score, preferring the same-currency buy on ties (no conversion fee). Crossing the currency boundary here is gated on cascade potential: the cross-currency buy only fires when its cascade score is **strictly positive** — otherwise a conversion would pay a fee to park cash in an at-target holding with no downstream benefit. Genuinely stranded foreign cash (no cascade destination) is left for the post-rebalance conversion sweep (see `fx_conversions.py`), which moves it into the account's home currency.
 
 ### How `cash_deploy.py` picks candidates
 
@@ -422,9 +434,9 @@ def underweight_candidates(acct, holdings, drifts, hidden_symbols, currency, thr
     return candidates
 ```
 
-### The "best available" fallback (`_account_buyable_candidates`)
+### The best-available candidate list (`_account_buyable_candidates`)
 
-When `underweight_only=False`, this returns ALL buyable symbols sorted by drift — the least overweight / most underweight one wins:
+When `underweight_only=False`, this returns ALL buyable symbols in the currency (any drift, but only those with a target > 0), sorted by **cascade score** — the symbol most likely to unlock a productive sell elsewhere wins, with lowest drift as the tiebreaker:
 
 ```python
 def _account_buyable_candidates(self, acct, currency, drifts, *, underweight_only):
@@ -439,9 +451,15 @@ def _account_buyable_candidates(self, acct, currency, drifts, *, underweight_onl
 
         candidates.append((drift_pct, pos.symbol, ask_price))
 
-    candidates.sort(key=lambda item: item[0])  # Lowest drift first
+    if underweight_only:
+        candidates.sort(key=lambda item: item[0])  # Most underweight first
+    else:
+        # Highest cascade score first, lowest drift as tiebreaker
+        candidates.sort(key=lambda item: (-self._cascade_score(item[1], acct.number, drifts), item[0]))
     return candidates
 ```
+
+`_build_deploy_cash_any` calls this for both the source currency and the other currency, takes the top (highest-cascade) candidate from each via `_top_buyable_candidate`, and deploys into whichever has the higher cascade score — see [Layer 3](#layer-3-residual-cash-deployment-_deploy_residual_cash).
 
 ---
 
@@ -634,19 +652,21 @@ class CashLedger:
 ```python
 gap_cad = abs(drift_pct / 100.0) * total_value_cad
 gap_native = gap_cad / usd_to_cad_rate if currency == "USD" else gap_cad
-shares = floor(gap_native / price_native)
+shares = floor(gap_native / price_native + 1e-9)
 ```
 
 For sells: uses bid price (what you'd get). For buys: uses ask price (what you'd pay).
+
+<a id="fp-nudge"></a>**The `+ 1e-9` nudge.** The drift→shares round-trip (dollars → drift % → dollars → ÷ FX rate) accumulates binary floating-point error that can land a whole-share result a hair below an integer (e.g. `19.9999999998`). Without the nudge, `floor` drops it and under-sells by one share — notably leaving a 1-share sliver when fully liquidating a target-0 position, which would keep that position (and its currency) alive when it should be fully cleared. The same nudge appears in `max_sellable_without_crossing_target` below.
 
 ### `max_sellable_without_crossing_target` — Safety limit on sells
 
 ```python
 per_share_drift_pct = (to_cad(price, currency, rate) / total_value_cad) * 100.0
-return floor(drift_pct / per_share_drift_pct)
+return floor((drift_pct + 1e-9) / per_share_drift_pct)
 ```
 
-Example: If each VSP.TO share represents 0.0034% of drift, and drift is +2.3%, you can sell at most 676 shares before crossing zero.
+Example: If each VSP.TO share represents 0.0034% of drift, and drift is +2.3%, you can sell at most 676 shares before crossing zero. (The `+ 1e-9` nudge is the same floating-point guard described [above](#fp-nudge).)
 
 ---
 
@@ -663,17 +683,20 @@ Each `TradeRecommendation` carries a `note` string displayed in the output. Here
 
 ### Buy Notes
 
+Notes are terse because the display column is narrow. The `(FX)` suffix marks a buy funded by a Norbert's Gambit conversion; the `Action` column already shows `BUY`, so the word "buy" is omitted. The two `Deploy cash` notes come from Layer 3 (residual cash deployment) and share a family name — the qualifier says whether the buy was restricted to underweight holdings or free to pick any holding by cascade potential.
+
 | Note | When | Example |
 |------|------|---------|
-| `Underweight buy` | Layer 2: Symbol drift below threshold, buying with same-currency cash | BUY 1495 ZMMK.TO — funded by CAD cash from VSP.TO sells |
-| `Underweight buy (requires FX)` | Layer 2: Same as above but no same-currency cash — triggered cross-currency conversion | BUY 62 IVV — CAD converted to USD via Norbert's Gambit |
-| `Leftover cash buy` | Layer 3: Account has leftover same-currency cash, buying the most underweight symbol available | Account has $800 CAD remaining, buys 7 more ZMMK.TO |
-| `Leftover cash buy (requires FX)` | Layer 3: Same as above but spending foreign-currency cash via conversion | Account has $200 CAD remaining, only holds USD symbols — convert and buy |
-| `Best available buy` | Layer 3 fallback (same-currency only): No underweight symbols available in this account/currency, but cash exists — buy the least overweight symbol to minimize idle cash | All symbols at target, but $50 CAD sitting in account — buy 1 share of least-drifted holding |
+| `Underweight buy` | Starter buy (Layer 2): symbol materially underweight, funded with same-currency cash | BUY 1495 ZMMK.TO — funded by CAD cash from VSP.TO sells |
+| `Underweight buy (FX)` | Starter buy: same as above but no same-currency cash — triggered a cross-currency conversion | BUY 62 IVV — CAD converted to USD via Norbert's Gambit |
+| `Deploy cash (underweight)` | Residual (Layer 3, `build_deploy_cash_underweight`): leftover cash buys an underweight holding (any negative drift) | Account has $800 CAD remaining, buys 7 more ZMMK.TO |
+| `Deploy cash (underweight) (FX)` | Same as above but funded cross-currency to close a real underweight | Account has $200 CAD remaining, only holds USD underweight symbols — convert and buy |
+| `Deploy cash (any)` | Residual (Layer 3, `_build_deploy_cash_any`): nothing underweight, so leftover cash buys the highest-cascade holding to minimize idle cash | All symbols at/above target, but $50 CAD sits idle — buy 1 share of the highest-cascade holding |
+| `Deploy cash (any) (FX)` | Same as above but crossing currencies, because the other side's best holding has strictly higher cascade potential | USD cash sits in a CAD-only-underweight household — convert and buy the high-cascade CAD holding |
 
 ### How Notes Flow Through Netting
 
-When `net_trades()` consolidates multiple trades for the same (symbol, account), the note from the **first** trade of each type (buy or sell) is preserved. So if a position was bought in Layer 2 ("Underweight buy") and again in Layer 3 ("Leftover cash buy"), the final netted trade keeps "Underweight buy" since it was the first buy note recorded.
+When `net_trades()` consolidates multiple trades for the same (symbol, account), the note from the **first** trade of each type (buy or sell) is preserved. So if a position was bought as a starter ("Underweight buy") and again in Layer 3 ("Deploy cash (underweight)"), the final netted trade keeps "Underweight buy" since it was the first buy note recorded.
 
 ---
 
@@ -714,7 +737,7 @@ Here's what happens for a typical run with VSP.TO overweight and IVV underweight
 
 5.   _deploy_residual_cash()
      → acct_A has $95 CAD remaining after trades
-     → build_underweight_buy (same-currency) → ZMMK.TO still underweight → buy 1 more
+     → build_deploy_cash_underweight (same-currency) → ZMMK.TO still underweight → buy 1 more
      → No more cash to deploy
 
 6. build() → Round 2
@@ -781,14 +804,14 @@ Round 1 — Layer 2 (Buys):
   → affordable = floor($73,000 / $512) = 142 shares
   → quantity = min(23, 142) = 23 shares   ← capped at drift gap!
   → fund_buy: native USD ($0) < cost → convert from CAD
-  → BUY 23 QQQ in acct_A (requires FX)   ← closes the real underweight only
+  → BUY 23 QQQ in acct_A (FX)   ← closes the real underweight only
   → Ledger deducts ~$16,000 CAD equivalent
 
 Round 1 — Layer 3 (Residual Cash):
   acct_A still has ~$86,000 CAD after the QQQ buy
 
-  build_underweight_buy(source=CAD, buy=CAD): No CAD-denominated symbols → skip
-  build_underweight_buy(source=CAD, buy=USD):
+  build_deploy_cash_underweight(source=CAD, buy=CAD): No CAD-denominated symbols → skip
+  build_deploy_cash_underweight(source=CAD, buy=USD):
     → QQQ is the only candidate in this account
     → QQQ is no longer underweight after the 23-share buy → skip
   → acct_A's ~$86,000 CAD is left in place for this run.
@@ -870,7 +893,7 @@ Round 1 — Layer 2 (Buys):
       affordable = floor(US$9,291 / US$512) = 18 shares
       quantity = min(28, 18) = 18  ← cash-limited
       fund_buy: $0 native USD < cost → converts all from CAD
-  → BUY 18 QQQ in acct_B (requires FX)
+  → BUY 18 QQQ in acct_B (FX)
   → Remaining 10 QQQ unfilled (not enough cash anywhere that holds QQQ)
 
   ZAG.TO drift is -0.8% → NOT < -1.0% threshold → skipped by Layer 2
@@ -882,19 +905,19 @@ Round 1 — Layer 3 (Residual Cash):
   acct_B: All CAD was consumed by the QQQ FX conversion. ~$0 left. Done.
   
   acct_A: Has $12,560 + $300 = $12,860 CAD from VUN.TO sale proceeds!
-  → build_underweight_buy(acct_A, CAD, threshold=0.0):
+  → build_deploy_cash_underweight(acct_A, CAD, threshold=0.0):
       → underweight_candidates: ZAG.TO drift -0.8% < -0.0% → underweight!
       → shares_to_close_underweight: ceil(0.8% × $1M / $10.85) = 738 shares
       → affordable = floor($12,860 / $10.85) = 1,185 shares
       → quantity = min(738, 1,185) = 738  ← capped at drift gap
-  → BUY 738 ZAG.TO in acct_A ("Leftover cash buy")
+  → BUY 738 ZAG.TO in acct_A ("Deploy cash (underweight)")
 
   acct_A: Still has $12,860 - (738 × $10.85) = $4,857 CAD remaining
-  → build_underweight_buy (same-currency): ZAG.TO drift now ≈ 0% → not underweight → skip
-  → _build_cash_minimizing_buy:
+  → build_deploy_cash_underweight (same-currency): ZAG.TO drift now ≈ 0% → not underweight → skip
+  → _build_deploy_cash_any:
       → ZAG.TO (~0%), XEF.TO (+0.3%), VUN.TO (~0%) all buyable
       → ZAG.TO or VUN.TO (both ~0%) → lowest drift wins
-      → BUY 78 VUN.TO in acct_A ("Best available buy")
+      → BUY 78 VUN.TO in acct_A ("Deploy cash (any)")
   → Remaining ~$1,006 < $10.85 (ZAG.TO) → done
 
 Round 2 — Layer 1 (Sells):
@@ -995,15 +1018,15 @@ Round 1 — Layer 2 (Buys):
       quantity = min(20, 12) = 12  ← limited by available cash!
       _raise_cash_in_account: looks for same-currency (USD) overweight
         positions in acct_C — none exist (only CAD positions). No help.
-      → BUY 12 QQQ in acct_C (requires FX)
+      → BUY 12 QQQ in acct_C (FX)
       → Remaining 8 shares unfilled (no more accounts hold QQQ)
 
 Round 1 — Layer 3 (Residual Cash):
   acct_B still has ~$6,049 CAD (VUN.TO sell proceeds not yet spent)
-  → build_underweight_buy (same-currency): ZAG.TO at ~0% is NOT underweight → skip
-  → _build_cash_minimizing_buy:
+  → build_deploy_cash_underweight (same-currency): ZAG.TO at ~0% is NOT underweight → skip
+  → _build_deploy_cash_any:
       ZAG.TO (~0%) is "best available" in acct_B (lowest drift)
-      → BUY ~557 ZAG.TO in acct_B ("Best available buy")
+      → BUY ~557 ZAG.TO in acct_B ("Deploy cash (any)")
   → This pushes ZAG.TO to ~+0.8% overweight at the household level!
 
   acct_C has tiny leftover → mop-up trades
@@ -1020,7 +1043,7 @@ Round 2 — Layer 2 (Buys):
   QQQ is still underweight (~-0.7%)
   → _eligible_buy_accounts: acct_C holds QQQ + now has ~$6,000 CAD
   → total_buying_power ≈ US$4,400 → affordable = 8 more QQQ
-  → BUY 8 QQQ in acct_C (requires FX)
+  → BUY 8 QQQ in acct_C (FX)
   → QQQ drift now ~0%
 
 Round 2 onwards: all drifts < threshold → converged.
@@ -1057,8 +1080,8 @@ Other accounts:
 Neither VUN.TO nor XBB.TO is underweight in Bob RRSP. Normal underweight buys return nothing.
 
 Fallback chain:
-  1. build_underweight_buy (same-currency) → no underweight candidates → returns None
-  2. _build_cash_minimizing_buy kicks in (same-currency only)
+  1. build_deploy_cash_underweight (same-currency) → no underweight candidates → returns None
+  2. _build_deploy_cash_any kicks in (compares same- vs cross-currency by cascade)
      → _account_buyable_candidates(underweight_only=False)
      → Computes _cascade_score for each candidate:
          VUN.TO: Alice TFSA holds VUN.TO and has ZAG.TO at -0.8%
@@ -1068,7 +1091,7 @@ Fallback chain:
      → Sort key: (-cascade_score, drift_pct)
          VUN.TO: (-0.8, +0.3%) ranks FIRST
          XBB.TO: (-0.0, +0.1%) ranks second
-     → BUY 32 VUN.TO @ $62.18 = $1,989.76 ("Best available buy")
+     → BUY 32 VUN.TO @ $62.18 = $1,989.76 ("Deploy cash (any)")
 
 Result: Cash is deployed into VUN.TO, overshooting its household allocation.
 Round 2: VUN.TO drift pushes past threshold → sell from Alice TFSA
@@ -1089,7 +1112,7 @@ When no symbol has cascade potential (all other holders are balanced), the fallb
 ```
 Raw trades generated by planner:
   Round 1, Layer 1: SELL 200 VUN.TO in acct_A @ $62.18 ("Overweight sell")
-  Round 1, Layer 3: BUY 12 VUN.TO in acct_A @ $62.18 ("Leftover cash buy")
+  Round 1, Layer 3: BUY 12 VUN.TO in acct_A @ $62.18 ("Deploy cash (underweight)")
 
 After net_trades():
   key = ("VUN.TO", "acct_A")
@@ -1142,7 +1165,7 @@ The sweep is gated on the account having **exactly one home currency**, where a 
 
 Two subtleties make this robust:
 
-1. **Post-trade positions.** Home detection uses quantities *after* the planned trades. A target-0 position (e.g. an untargeted AMZN) fully sold within the plan correctly stops anchoring its currency as a home, so its USD proceeds sweep into the real (CAD) home rather than strand. This also relies on `shares_for_drift_gap` fully liquidating such positions — see the floating-point nudge note in the sizing math — otherwise a 1-share sliver would keep the currency looking occupied.
+1. **Post-trade positions.** Home detection uses quantities *after* the planned trades. A target-0 position (e.g. an untargeted AMZN) fully sold within the plan correctly stops anchoring its currency as a home, so its USD proceeds sweep into the real (CAD) home rather than strand. This also relies on `shares_for_drift_gap` fully liquidating such positions — see [the floating-point nudge](#fp-nudge) in the sizing math — otherwise a 1-share sliver would keep the currency looking occupied.
 2. **Target-0 positions never count as homes.** They are only ever sold, never bought, so cash in their currency has nowhere to be deployed.
 
 The sweep is symmetric: the example above shows a USD-home account sweeping leftover CAD, but a CAD-home account with leftover USD sweeps the other direction (Buy DLR.U.TO → Sell DLR.TO) the same way.
@@ -1156,7 +1179,7 @@ The sweep is symmetric: the example above shows a USD-home account sweeping left
 | 1. Large cash deposit (single USD stock) | Rule 5 ("Only buy symbols that already exist in the account"), Rule 7 ("Allow account-constrained cash deployment, then clean up globally"), Rule 4 ("Minimize free cash whenever practical") |
 | 2. Sell allocation split | Rule 2 ("Sell overweight positions and buy underweight positions"), Rule 5 ("Only buy symbols that already exist in the account"), Rule 4 ("Minimize free cash whenever practical"), Rule 8 ("Avoid obviously wasteful churn") |
 | 3. Multi-account chain reaction | Rule 1 ("Treat all accounts as one household portfolio"), Rule 5 ("Only buy symbols that already exist in the account"), Rule 6 ("Prefer same-currency deployment before cross-currency deployment") |
-| 4. Best available fallback | Rule 4 ("Minimize free cash whenever practical"), Rule 5 ("Only buy symbols that already exist in the account") |
+| 4. Best-available cash deployment | Rule 4 ("Minimize free cash whenever practical"), Rule 5 ("Only buy symbols that already exist in the account") |
 | 5. Trade netting | Rule 8 ("Avoid obviously wasteful churn") |
 | 6. Cross-currency sweep | Rule 4 ("Minimize free cash whenever practical"), Rule 6 ("Prefer same-currency deployment before cross-currency deployment") |
 
@@ -1182,12 +1205,12 @@ rebalancer.py
 │   ├── _deploy_residual_cash()     # Layer 3: spend remaining cash
 │   ├── _cascade_score()            # Score a symbol by downstream rebalancing potential
 │   ├── _account_buyable_candidates()  # Find buyable symbols in an account
-│   └── _build_cash_minimizing_buy()   # Fallback: best available (same-currency only)
+│   └── _build_deploy_cash_any()   # Deploy leftover cash to highest-cascade holding (same- or cross-currency)
 ├── shares_for_drift_gap()          # Sizing: shares needed for drift
-├── max_sellable_without_crossing() # Sizing: max safe sell
+├── max_sellable_without_crossing_target() # Sizing: max safe sell
 ├── allocate_sell()                 # Multi-account sell distribution
 ├── find_accounts_for_symbol()      # Account lookup
 ├── get_position_quantity()         # Position lookup
-├── _effective_qty()                # Position adjusted for planned trades
+├── effective_qty()                 # Position adjusted for planned trades
 └── _has_underweight_alternatives() # Can proceeds be redeployed?
 ```

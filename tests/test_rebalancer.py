@@ -195,7 +195,7 @@ class TestNetTrades:
                 symbol="VCN.TO", action="BUY", quantity=50,
                 account_number="11111", account_type="TFSA",
                 owner="Alice", price=51.0, currency="CAD",
-                estimated_value=2550.0, note="Leftover cash buy",
+                estimated_value=2550.0, note="Deploy cash (underweight)",
             ),
         ]
         result = net_trades(trades)
@@ -236,7 +236,7 @@ class TestNetTrades:
                 symbol="VCN.TO", action="BUY", quantity=25,
                 account_number="11111", account_type="TFSA",
                 owner="Alice", price=50.0, currency="CAD",
-                estimated_value=1250.0, note="Leftover cash buy",
+                estimated_value=1250.0, note="Deploy cash (underweight)",
             ),
         ]
         result = net_trades(trades)
@@ -655,8 +655,16 @@ class TestPlannerCashDeployment:
         assert all(t.symbol in {"VSP.TO", "ZMMK.TO"} for t in buy_trades)
         assert sum(t.estimated_value for t in buy_trades) >= 5900.0
 
-    def test_does_not_convert_currency_for_standalone_best_available_buy(self):
-        """Residual cash alone must not trigger an FX fallback conversion."""
+    def test_no_cross_fx_best_available_without_cascade_benefit(self):
+        """A best-available buy only crosses currencies when it unlocks a cascade.
+
+        A single account holds $100k VSP.TO (CAD) plus idle USD. VSP is the only
+        buyable symbol, and with just one account it has zero cascade score —
+        buying it can't unlock a productive sell anywhere. Converting the USD to
+        buy more VSP would pay a Norbert's Gambit fee for no downstream benefit,
+        so the cross-currency best-available is suppressed. The idle USD is left
+        for the post-rebalance sweep instead.
+        """
         usd_to_cad_rate = 1.36
         portfolio = _build_test_portfolio([{
             "number": "11111", "type": "RRSP", "owner": "Alice",
@@ -676,22 +684,23 @@ class TestPlannerCashDeployment:
 
         assert trades == []
 
-    def test_starter_trade_does_not_unlock_cross_fx_best_available(self):
-        """A best-available buy must never cross currencies, even mid-round.
+    def test_cross_fx_best_available_fires_when_it_unlocks_a_cascade(self):
+        """Idle cash crosses currencies when the destination has cascade potential.
 
-        Account 1 holds only a CAD position (no USD symbol to buy) but has
-        stranded USD cash; its VCN is already overweight, so any USD deployment
-        there would be a best-available buy into a non-underweight holding.
-        Account 2 has an overweight/underweight pair that fires starter trades.
-        A best-available buy in account 1 would only reduce drift by chance, so
-        no FX conversion is justified — the USD cash must stay put (to be handled
-        by the post-rebalance sweep instead).
+        Account 1 holds only IVV (USD, overweight) plus idle USD; its only
+        cross-currency buyable is VCN.TO (CAD), which is overweight in account 1
+        but underweight elsewhere — so VCN has a positive cascade score. Buying
+        VCN in account 1 overshoots the household, which a later round corrects
+        by selling VCN from account 2 (where it can fund the underweight VUN.TO).
+        The best-available deployment therefore converts the USD and buys VCN,
+        routing the cash to where it is most useful.
         """
         portfolio = _build_test_portfolio([
             {
                 "number": "1", "type": "RRSP", "owner": "Alice",
                 "cash_cad": 0.0, "cash_usd": 5000.0,
                 "positions": [
+                    {"symbol": "IVV", "qty": 400, "price": 100.0, "currency": "USD"},
                     {"symbol": "VCN.TO", "qty": 500, "price": 50.0, "currency": "CAD"},
                 ],
             },
@@ -704,15 +713,17 @@ class TestPlannerCashDeployment:
                 ],
             },
         ])
-        targets = {"VCN.TO": 40.0, "VUN.TO": 25.0, "USD": 20.0, "CAD": 15.0}
+        targets = {"IVV": 40.0, "VCN.TO": 35.0, "VUN.TO": 25.0, "CAD": 0.0, "USD": 0.0}
 
         trades = calculate_trades(portfolio, targets, 1.36, 10.49, 0.5, set(), None)
 
-        # Starter trades still fire in account 2.
-        assert any(t.account_number == "2" for t in trades)
-        # But nothing crosses currencies, and account 1's USD cash is untouched.
-        assert all(not t.requires_fx for t in trades)
-        assert all(t.account_number != "1" for t in trades)
+        # A cross-currency best-available buy fires, routing account 1's USD
+        # into VCN.TO (its high-cascade CAD holding).
+        fx_buys = [
+            t for t in trades
+            if t.action == "BUY" and t.requires_fx and t.account_number == "1"
+        ]
+        assert fx_buys, "expected a cross-currency best-available buy in account 1"
 
     def test_zero_value_portfolio_returns_no_trades(self):
         """Empty portfolio should produce no trades."""
