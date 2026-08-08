@@ -39,7 +39,7 @@ fx_target_rules:
     cad_symbol: XSP.TO
     min_usd_to_cad_rate: 1.0
     max_usd_to_cad_rate: 1.5
-    target_rounding_step: 1
+    target_rounding_step: 1  # Percentage-point increment for resolved targets; prevents small FX changes from shifting them.
 
 # Tactical defensive deployment.
 # Dynamically shifts the fixed/equity allocation based on portfolio drawdown
