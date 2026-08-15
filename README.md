@@ -410,14 +410,35 @@ cd investment-rebalancer
 ### 2. Install dependencies and encryption tools
 
 ```bash
-pip install -r requirements.txt
+python -m pip install -r requirements.txt
 ```
 
-Install [SOPS](https://github.com/getsops/sops/releases) and
-[age](https://github.com/FiloSottile/age/releases), and make sure `sops` and
-`age-keygen` are available on `PATH`. SOPS encrypts the tokens and every
-app-managed file under `data/`; age provides the local identity used to decrypt
-them.
+On Windows, install the maintained SOPS and age packages with WinGet:
+
+```powershell
+winget install --id SecretsOPerationS.SOPS --exact
+winget install --id FiloSottile.age --exact
+```
+
+On macOS, or Linux with Homebrew installed:
+
+```bash
+brew install sops age
+```
+
+For other platforms, use the official [SOPS](https://github.com/getsops/sops/releases)
+and [age](https://github.com/FiloSottile/age/releases) release packages. Make
+sure `sops` and `age-keygen` are available on `PATH`:
+
+```bash
+sops --version
+age-keygen --version
+```
+
+Do not use `pip install sops`: that package is the obsolete, unmaintained Python
+implementation rather than the current SOPS CLI. SOPS encrypts the tokens and
+every app-managed file under `data/`; age provides the local identity used to
+decrypt them.
 
 ### 3. Create a private state repo
 
@@ -542,8 +563,9 @@ data/portfolio_history.jsonl
 ```
 
 If the file doesn't exist yet, the app creates it as SOPS ciphertext when it
-first records a value. To import existing plaintext JSONL, encrypt it as an
-opaque binary document before committing it:
+first records a value. Because JSONL is a sequence of JSON objects rather than
+one JSON document, encrypt existing plaintext JSONL as a byte-for-byte binary
+payload before committing it:
 
 ```bash
 sops --config .sops.yaml encrypt --input-type binary --output-type binary \
@@ -563,7 +585,7 @@ sops --config .sops.yaml encrypt --in-place data/fx_targets_state.json
 
 Point the environment variable at the root of your private state repo.
 
-#### Windows - persistent user variable
+#### Windows
 
 In **Command Prompt**:
 
@@ -573,19 +595,7 @@ setx REBALANCER_STATE_DIR "C:\Users\you\Documents\investment-rebalancer-state"
 
 Then close and reopen your terminal or VS Code.
 
-#### Windows - temporary for current shell
-
-```cmd
-set REBALANCER_STATE_DIR=C:\Users\you\Documents\investment-rebalancer-state
-```
-
-#### macOS / Linux - temporary for current shell
-
-```bash
-export REBALANCER_STATE_DIR="/Users/you/Documents/investment-rebalancer-state"
-```
-
-#### macOS / Linux - persistent
+#### macOS / Linux
 
 Add this to your shell profile such as `~/.zshrc` or `~/.bashrc`:
 
@@ -593,11 +603,7 @@ Add this to your shell profile such as `~/.zshrc` or `~/.bashrc`:
 export REBALANCER_STATE_DIR="/Users/you/Documents/investment-rebalancer-state"
 ```
 
-Then reload your shell:
-
-```bash
-source ~/.zshrc
-```
+Then close and reopen your terminal.
 
 ### 9. Run the rebalancer
 
@@ -606,11 +612,6 @@ Once the environment variable is set, your normal command stays simple:
 ```bash
 python main.py
 ```
-
-The interactive run requires every account listed in `config/settings.yaml` to
-connect successfully. If a token file is missing or one login fails, the app
-stops before fetching portfolio data, evaluating tactical state, recording
-history, or calculating trades; it never produces a partial-household report.
 
 ---
 
