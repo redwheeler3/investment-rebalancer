@@ -59,6 +59,7 @@ CAD/USD planning, and Questrade-specific workflow details.
 ## Features
 
 - **Unified Portfolio View** — Aggregates all accounts into one portfolio view
+- **Fail-Closed Account Loading** — Stops before portfolio evaluation if any configured Questrade account is unavailable
 - **Target Allocation Tracking** — Compares holdings against configurable targets
 - **Accuracy Score** — Single percentage showing how close the portfolio is to target
 - **Smart Trade Placement** — Only recommends trades in accounts that already hold the position
@@ -605,6 +606,11 @@ Once the environment variable is set, your normal command stays simple:
 ```bash
 python main.py
 ```
+
+The interactive run requires every account listed in `config/settings.yaml` to
+connect successfully. If a token file is missing or one login fails, the app
+stops before fetching portfolio data, evaluating tactical state, recording
+history, or calculating trades; it never produces a partial-household report.
 
 ---
 

@@ -41,9 +41,10 @@ state workflow without introducing an external secrets service.
    token already issued if later processing fails, and serialize overlapping
    sync runs.
 9. After the encrypted workflow is verified, remove plaintext tokens and
-   app-managed data from the private repository's Git history and
-   regenerate/re-authorize the Questrade credentials so any previously retained
-   token is invalid.
+   app-managed data from the private repository's Git history. Confirm that the
+   newest plaintext refresh token was redeemed by a successful encrypted run;
+   Questrade refresh tokens are single-use, so that rotation invalidates the
+   plaintext token chain retained in history.
 10. While updating the workflow, pin third-party GitHub Actions to reviewed,
    full commit SHAs. This is inexpensive defense-in-depth, not the main purpose
    of the change.
@@ -69,6 +70,9 @@ the cutover before force-pushing rewritten history.
 - A comprehensive Python dependency-locking project. Exact dependency locks
   may be worthwhile later, but they are not required to correct the plaintext
   credential design.
+- Revoking and re-authorizing the Questrade application after a confirmed
+  successful rotation. Reserve full revocation for a suspected compromise or
+  an uncertain token-rotation chain.
 
 ## Proposed Cutover Sequence
 
@@ -88,9 +92,9 @@ the cutover before force-pushing rewritten history.
    the newly rotated ciphertext.
 7. Back up the private repository, rewrite its history to remove plaintext
    tokens and app-managed data, then force-push the verified rewritten history.
-8. Revoke or regenerate the Questrade authorization after the rewrite, seed the
-   newly issued credentials through the encrypted path, and verify both local
-   and scheduled runs again.
+8. Confirm the encrypted workflow redeemed the newest plaintext refresh token
+   and persisted its replacement as ciphertext. Fully revoke and re-authorize
+   only if that rotation cannot be verified or compromise is suspected.
 9. Re-enable the schedule and replace or reclone any stale local copies of the
    private repository.
 

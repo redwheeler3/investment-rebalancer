@@ -12,6 +12,7 @@ Usage:
 import os
 import subprocess
 import sys
+
 import yaml
 
 # Ensure UTF-8 output on Windows (prevents UnicodeEncodeError with Rich)
@@ -21,21 +22,25 @@ if sys.platform == "win32":
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8")
 
-from src.questrade_client import QuestradeClient
-from src.portfolio import build_allocation_snapshot, build_portfolio, fetch_quotes_for_holdings
-from src.report_builder import build_report_data
-from src.display import display_full_report, console
+from src.display import console, display_full_report
 from src.encrypted_state import EncryptedStateError, validate_encrypted_state_files
-from src.fx_rate import get_usd_to_cad_rate, fetch_dlr_quotes
 from src.fx_conversions import calculate_currency_needs
-from src.history import record_value, get_all_time_high
-from src.paths import get_config_dir, get_state_root, get_tokens_dir
+from src.fx_rate import fetch_dlr_quotes, get_usd_to_cad_rate
 from src.fx_targets import resolve_targets
+from src.history import get_all_time_high, record_value
 from src.models import get_transient_status
+from src.paths import get_config_dir, get_state_root, get_tokens_dir
+from src.portfolio import (
+    build_allocation_snapshot,
+    build_portfolio,
+    fetch_quotes_for_holdings,
+)
+from src.questrade_client import QuestradeClient
 from src.rebalancer import calculate_trades
+from src.report_builder import build_report_data
 from src.tactical import (
-    parse_tactical_config,
     evaluate_tactical_posture,
+    parse_tactical_config,
     resolve_tactical_targets,
 )
 
@@ -81,14 +86,15 @@ def load_config() -> tuple:
                 f"Account #{index} must define both owner_name and token_file in config/settings.yaml."
             )
 
-        accounts.append({
-            "owner_name": owner_name,
-            "token_file": token_file,
-            "account_type_display_overrides": {
-                str(key): str(value)
-                for key, value in overrides.items()
-            },
-        })
+        accounts.append(
+            {
+                "owner_name": owner_name,
+                "token_file": token_file,
+                "account_type_display_overrides": {
+                    str(key): str(value) for key, value in overrides.items()
+                },
+            }
+        )
 
     targets = data.get("targets", {})
     transient_symbols = data.get("transient_symbols", [])
@@ -150,11 +156,13 @@ def run_scheduled_sync():
             client = QuestradeClient(
                 str(token_file),
                 name,
-                account_type_display_overrides=account["account_type_display_overrides"],
+                account_type_display_overrides=account[
+                    "account_type_display_overrides"
+                ],
             )
             clients.append(client)
             print(f"  ✓ {name} token refreshed successfully")
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - refresh every account before reporting failures
             print(f"  ✗ {name} token refresh FAILED: {e}")
             all_ok = False
 
@@ -188,23 +196,27 @@ def run_scheduled_sync():
                     print(f"  ✓ Tactical regime: {posture.regime}")
 
             # Compute accuracy for drift alerting
-            resolved_targets = resolve_targets(targets, fx_target_rules, usd_to_cad_rate)
+            resolved_targets = resolve_targets(
+                targets, fx_target_rules, usd_to_cad_rate
+            )
             if tactical_config:
                 resolved_targets = resolve_tactical_targets(
                     resolved_targets, posture, tactical_config
                 )
-            hidden_symbols = set(
-                s for s in transient_symbols if s in portfolio.holdings
-            )
+            hidden_symbols = {
+                symbol for symbol in transient_symbols if symbol in portfolio.holdings
+            }
             snapshot = build_allocation_snapshot(
-                portfolio, resolved_targets, usd_to_cad_rate,
+                portfolio,
+                resolved_targets,
+                usd_to_cad_rate,
                 excluded_symbols=hidden_symbols,
             )
             accuracy = snapshot.accuracy
             print(f"  ✓ Accuracy: {accuracy:.1f}%")
         except EncryptedStateError:
             raise
-        except Exception as e:
+        except Exception as e:  # noqa: BLE001 - market snapshot is explicitly best-effort
             print(f"  ⚠ Could not snapshot portfolio value: {e}")
 
     # Write accuracy to GitHub Actions output (if running in CI)
@@ -217,29 +229,41 @@ def run_scheduled_sync():
 
 
 def _connect_clients(accounts: list[dict]) -> list:
-    """Connect to all configured Questrade accounts."""
+    """Connect to every configured Questrade account or fail closed."""
     console.print("  [dim]Connecting to Questrade...[/dim]")
     clients = []
+    failed_accounts = []
     tokens_dir = get_tokens_dir()
 
     for account in accounts:
         name = account["owner_name"]
         token_path = tokens_dir / account["token_file"]
-        if token_path.exists():
-            try:
-                clients.append(QuestradeClient(
+        if not token_path.exists():
+            console.print(
+                f"  [red]✗ {name} connection failed: token file not found[/red]"
+            )
+            failed_accounts.append(name)
+            continue
+
+        try:
+            clients.append(
+                QuestradeClient(
                     str(token_path),
                     name,
-                    account_type_display_overrides=account["account_type_display_overrides"],
-                ))
-                console.print(f"  [green]✓[/green] {name} connected")
-            except Exception as e:
-                console.print(f"  [red]✗ {name} connection failed: {e}[/red]")
+                    account_type_display_overrides=account[
+                        "account_type_display_overrides"
+                    ],
+                )
+            )
+            console.print(f"  [green]✓[/green] {name} connected")
+        except Exception as e:  # noqa: BLE001 - attempt every configured account before failing
+            console.print(f"  [red]✗ {name} connection failed: {e}[/red]")
+            failed_accounts.append(name)
 
-    if not clients:
+    if failed_accounts:
         console.print(
-            "[red]ERROR: No Questrade connections established. "
-            "Check the tokens in your private state repo.[/red]"
+            "[red]ERROR: Rebalancing requires every configured Questrade account. "
+            f"Unavailable: {', '.join(failed_accounts)}. No portfolio state was evaluated.[/red]"
         )
         sys.exit(1)
 
@@ -276,7 +300,9 @@ def _fetch_dlr_quotes(client):
             f"${dlr_quotes.usd_sell_price:.2f} / ${dlr_quotes.usd_buy_price:.2f}[/dim]"
         )
     else:
-        console.print("  [yellow]Could not fetch DLR quotes — DLR share counts will be unavailable[/yellow]")
+        console.print(
+            "  [yellow]Could not fetch DLR quotes — DLR share counts will be unavailable[/yellow]"
+        )
     return dlr_quotes
 
 
@@ -300,7 +326,9 @@ def _render_report(
         transient_alerts=report.transient_alerts,
         usd_to_cad_rate=usd_to_cad_rate,
         projected_accuracy=projected_snapshot.accuracy if projected_snapshot else None,
-        projected_allocations=projected_snapshot.allocations if projected_snapshot else None,
+        projected_allocations=projected_snapshot.allocations
+        if projected_snapshot
+        else None,
         all_time_high=report.all_time_high,
         ytd_history=report.ytd_history,
         drift_trade_threshold_pct=drift_trade_threshold_pct,
@@ -394,13 +422,18 @@ def _pull_latest():
     try:
         result = subprocess.run(
             ["git", "pull", "--ff-only"],
-            cwd=str(state_root), capture_output=True, text=True,
+            cwd=str(state_root),
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if result.returncode == 0:
             if "Already up to date." in result.stdout:
                 console.print("  [dim]Remote is up to date — no changes pulled[/dim]")
             else:
-                console.print("  [green]✓[/green] [dim]Pulled latest changes from remote[/dim]")
+                console.print(
+                    "  [green]✓[/green] [dim]Pulled latest changes from remote[/dim]"
+                )
         else:
             stderr = result.stderr.strip()
             console.print(
@@ -425,12 +458,17 @@ def _push_synced_files():
         # Check if there are changes to push (tokens or data)
         result = subprocess.run(
             ["git", "diff", "--quiet", "tokens/", "data/"],
-            cwd=str(state_root), capture_output=True,
+            cwd=str(state_root),
+            capture_output=True,
+            check=False,
         )
         # Also check for newly created token or data files.
         untracked = subprocess.run(
             ["git", "ls-files", "--others", "--exclude-standard", "tokens/", "data/"],
-            cwd=str(state_root), capture_output=True, text=True,
+            cwd=str(state_root),
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if result.returncode == 0 and not untracked.stdout.strip():
             console.print("\n  [dim]No local changes to push[/dim]")
@@ -438,21 +476,33 @@ def _push_synced_files():
 
         subprocess.run(
             ["git", "add", "tokens/", "data/"],
-            cwd=str(state_root), check=True, capture_output=True,
+            cwd=str(state_root),
+            check=True,
+            capture_output=True,
         )
         subprocess.run(
             ["git", "commit", "-m", "🔄 Auto-sync encrypted application state"],
-            cwd=str(state_root), check=True, capture_output=True,
+            cwd=str(state_root),
+            check=True,
+            capture_output=True,
         )
         subprocess.run(
             ["git", "push"],
-            cwd=str(state_root), check=True, capture_output=True,
+            cwd=str(state_root),
+            check=True,
+            capture_output=True,
         )
-        console.print("\n  [green]✓[/green] [dim]Pushed updated private state to remote[/dim]")
+        console.print(
+            "\n  [green]✓[/green] [dim]Pushed updated private state to remote[/dim]"
+        )
     except FileNotFoundError:
-        console.print("\n  [yellow]⚠ git not found — remember to push your private state repo manually[/yellow]")
+        console.print(
+            "\n  [yellow]⚠ git not found — remember to push your private state repo manually[/yellow]"
+        )
     except subprocess.CalledProcessError:
-        console.print("\n  [yellow]⚠ Could not auto-push — remember to push your private state repo manually[/yellow]")
+        console.print(
+            "\n  [yellow]⚠ Could not auto-push — remember to push your private state repo manually[/yellow]"
+        )
 
 
 def main():
