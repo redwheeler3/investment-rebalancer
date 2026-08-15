@@ -8,8 +8,8 @@ when there is exactly one such currency.
 
 from src.fx_conversions import calculate_currency_needs
 from src.fx_rate import DlrQuotes
-from src.portfolio import AccountInfo, Position
 from src.models import TradeRecommendation
+from src.portfolio import AccountInfo, Position
 
 
 def _dlr():
@@ -25,16 +25,28 @@ def _dlr():
 
 def _pos(symbol, qty, price, currency, acct):
     return Position(
-        symbol=symbol, symbol_id=abs(hash(symbol)) % 100000, quantity=qty,
-        market_value=qty * price, current_price=price, currency=currency,
-        account_number=acct, account_type="Margin", owner="Alice",
+        symbol=symbol,
+        symbol_id=abs(hash(symbol)) % 100000,
+        quantity=qty,
+        market_value=qty * price,
+        current_price=price,
+        currency=currency,
+        account_number=acct,
+        account_type="Margin",
+        owner="Alice",
     )
 
 
 def _sell(symbol, qty, price, currency, acct):
     return TradeRecommendation(
-        symbol=symbol, action="SELL", quantity=qty, account_number=acct,
-        account_type="Margin", owner="Alice", price=price, currency=currency,
+        symbol=symbol,
+        action="SELL",
+        quantity=qty,
+        account_number=acct,
+        account_type="Margin",
+        owner="Alice",
+        price=price,
+        currency=currency,
         estimated_value=qty * price,
     )
 
@@ -43,8 +55,12 @@ class TestSweepHomeCurrency:
     def test_single_currency_account_still_swept(self):
         """Baseline: a CAD-only account with stranded USD cash sweeps USD→CAD."""
         acct = AccountInfo(
-            number="1", account_type="Margin", client_account_type="Individual",
-            owner="Alice", cash_cad=0.0, cash_usd=3000.0,
+            number="1",
+            account_type="Margin",
+            client_account_type="Individual",
+            owner="Alice",
+            cash_cad=0.0,
+            cash_usd=3000.0,
             positions=[_pos("VCN.TO", 200, 50.0, "CAD", "1")],
         )
         targets = {"VCN.TO": 100.0}
@@ -62,8 +78,12 @@ class TestSweepHomeCurrency:
         converting here would be an unnecessary round-trip.
         """
         acct = AccountInfo(
-            number="1", account_type="Margin", client_account_type="Individual",
-            owner="Alice", cash_cad=0.0, cash_usd=3000.0,
+            number="1",
+            account_type="Margin",
+            client_account_type="Individual",
+            owner="Alice",
+            cash_cad=0.0,
+            cash_usd=3000.0,
             positions=[
                 _pos("VCN.TO", 200, 50.0, "CAD", "1"),
                 _pos("IVV", 100, 50.0, "USD", "1"),
@@ -83,10 +103,14 @@ class TestSweepHomeCurrency:
         should sweep into the account's real (CAD) home rather than strand.
         """
         acct = AccountInfo(
-            number="1", account_type="Margin", client_account_type="Individual",
-            owner="Alice", cash_cad=0.0, cash_usd=0.0,
+            number="1",
+            account_type="Margin",
+            client_account_type="Individual",
+            owner="Alice",
+            cash_cad=0.0,
+            cash_usd=0.0,
             positions=[
-                _pos("AMZN", 20, 100.0, "USD", "1"),   # target 0 → auto-sell
+                _pos("AMZN", 20, 100.0, "USD", "1"),  # target 0 → auto-sell
                 _pos("VCN.TO", 200, 50.0, "CAD", "1"),  # real home
             ],
         )
@@ -108,8 +132,12 @@ class TestSweepHomeCurrency:
         currency, so no conversion is generated.
         """
         acct = AccountInfo(
-            number="1", account_type="Margin", client_account_type="Individual",
-            owner="Alice", cash_cad=0.0, cash_usd=3000.0,
+            number="1",
+            account_type="Margin",
+            client_account_type="Individual",
+            owner="Alice",
+            cash_cad=0.0,
+            cash_usd=3000.0,
             positions=[_pos("AMZN", 20, 100.0, "USD", "1")],  # target 0
         )
         targets = {"VCN.TO": 100.0}  # nothing this account holds is targeted
@@ -126,8 +154,12 @@ class TestSweepHomeCurrency:
         home and stranded CAD sweeps into it.
         """
         acct = AccountInfo(
-            number="1", account_type="Margin", client_account_type="Individual",
-            owner="Alice", cash_cad=2000.0, cash_usd=0.0,
+            number="1",
+            account_type="Margin",
+            client_account_type="Individual",
+            owner="Alice",
+            cash_cad=2000.0,
+            cash_usd=0.0,
             positions=[
                 _pos("VCN.TO", 100, 50.0, "CAD", "1"),
                 _pos("IVV", 50, 50.0, "USD", "1"),
@@ -139,4 +171,6 @@ class TestSweepHomeCurrency:
         conv = calculate_currency_needs(trades, [acct], 1.36, _dlr(), targets, 10.49)
 
         # CAD cash (original 2000 + 5000 proceeds) sweeps toward the USD home.
-        assert any(c.direction == "CAD_TO_USD" and c.account_number == "1" for c in conv)
+        assert any(
+            c.direction == "CAD_TO_USD" and c.account_number == "1" for c in conv
+        )

@@ -12,7 +12,6 @@ from pathlib import Path
 
 from src.paths import get_state_root
 
-
 SOPS_CONFIG_FILENAME = ".sops.yaml"
 SOPS_EXECUTABLE_ENV = "SOPS_EXECUTABLE"
 SOPS_TIMEOUT_SECONDS = 30
@@ -28,7 +27,9 @@ def read_encrypted_json(path: Path) -> dict:
     try:
         value = json.loads(plaintext.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise EncryptedStateError(f"Decrypted state at '{path}' is not valid JSON.") from exc
+        raise EncryptedStateError(
+            f"Decrypted state at '{path}' is not valid JSON."
+        ) from exc
     if not isinstance(value, dict):
         raise EncryptedStateError(f"Decrypted state at '{path}' must be a JSON object.")
     return value
@@ -46,7 +47,9 @@ def read_encrypted_text(path: Path) -> str:
     try:
         return plaintext.decode("utf-8")
     except UnicodeDecodeError as exc:
-        raise EncryptedStateError(f"Decrypted state at '{path}' is not UTF-8 text.") from exc
+        raise EncryptedStateError(
+            f"Decrypted state at '{path}' is not UTF-8 text."
+        ) from exc
 
 
 def write_encrypted_text(path: Path, value: str) -> None:
@@ -107,28 +110,28 @@ def _run_sops(operation: str, path: Path, content: bytes, file_type: str) -> byt
     if operation == "encrypt":
         config_path = state_root / SOPS_CONFIG_FILENAME
         if not config_path.is_file():
-            raise EncryptedStateError(
-                f"Missing SOPS configuration at '{config_path}'."
-            )
+            raise EncryptedStateError(f"Missing SOPS configuration at '{config_path}'.")
         command.extend(["--config", str(config_path)])
 
-    command.extend([
-        operation,
-        "--filename-override",
-        relative_path,
-        "--input-type",
-        file_type,
-        "--output-type",
-        file_type,
-    ])
+    command.extend(
+        [
+            operation,
+            "--filename-override",
+            relative_path,
+            "--input-type",
+            file_type,
+            "--output-type",
+            file_type,
+        ]
+    )
 
     try:
         result = subprocess.run(
             command,
             input=content,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            capture_output=True,
             timeout=SOPS_TIMEOUT_SECONDS,
+            check=False,
         )
     except FileNotFoundError as exc:
         raise EncryptedStateError(

@@ -25,10 +25,15 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, field
 
-from src.fx_math import consume_cross_currency_cash, cross_currency_buying_power, to_cad
-from src.portfolio import get_current_allocations, get_drifts, get_holdings_view, simulate_rebalance
 from src.cash_deploy import build_deploy_cash_underweight
+from src.fx_math import consume_cross_currency_cash, cross_currency_buying_power, to_cad
 from src.models import TradeRecommendation
+from src.portfolio import (
+    get_current_allocations,
+    get_drifts,
+    get_holdings_view,
+    simulate_rebalance,
+)
 
 # Maximum optimisation rounds before stopping
 MAX_ROUNDS = 10
@@ -74,33 +79,37 @@ def net_trades(all_trades: list) -> list:
         net_quantity = total_buy_qty - total_sell_qty
         if net_quantity > 0:
             price = buy_price if buy_price > 0 else template.price
-            final_trades.append(TradeRecommendation(
-                symbol=symbol,
-                action="BUY",
-                quantity=net_quantity,
-                account_number=account_number,
-                account_type=template.account_type,
-                owner=template.owner,
-                price=price,
-                currency=template.currency,
-                estimated_value=price * net_quantity,
-                note=buy_note,
-                requires_fx=buy_requires_fx,
-            ))
+            final_trades.append(
+                TradeRecommendation(
+                    symbol=symbol,
+                    action="BUY",
+                    quantity=net_quantity,
+                    account_number=account_number,
+                    account_type=template.account_type,
+                    owner=template.owner,
+                    price=price,
+                    currency=template.currency,
+                    estimated_value=price * net_quantity,
+                    note=buy_note,
+                    requires_fx=buy_requires_fx,
+                )
+            )
         elif net_quantity < 0:
             price = sell_price if sell_price > 0 else template.price
-            final_trades.append(TradeRecommendation(
-                symbol=symbol,
-                action="SELL",
-                quantity=abs(net_quantity),
-                account_number=account_number,
-                account_type=template.account_type,
-                owner=template.owner,
-                price=price,
-                currency=template.currency,
-                estimated_value=price * abs(net_quantity),
-                note=sell_note,
-            ))
+            final_trades.append(
+                TradeRecommendation(
+                    symbol=symbol,
+                    action="SELL",
+                    quantity=abs(net_quantity),
+                    account_number=account_number,
+                    account_type=template.account_type,
+                    owner=template.owner,
+                    price=price,
+                    currency=template.currency,
+                    estimated_value=price * abs(net_quantity),
+                    note=sell_note,
+                )
+            )
 
     return final_trades
 
@@ -149,7 +158,9 @@ class TradePlan:
     usd_to_cad_rate: float
     hidden_symbols: set[str]
     trades: list[TradeRecommendation] = field(default_factory=list)
-    _netted_cache: list[TradeRecommendation] | None = field(default=None, init=False, repr=False)
+    _netted_cache: list[TradeRecommendation] | None = field(
+        default=None, init=False, repr=False
+    )
     _snapshot_cache: object | None = field(default=None, init=False, repr=False)
 
     def add_trade(self, trade: TradeRecommendation) -> None:
@@ -213,7 +224,9 @@ class CashLedger:
     def same_currency_buying_power(self, account_number: str, currency: str) -> float:
         return self.cash(account_number, currency)
 
-    def total_buying_power(self, account_number: str, buy_currency: str, dlr_quotes=None) -> float:
+    def total_buying_power(
+        self, account_number: str, buy_currency: str, dlr_quotes=None
+    ) -> float:
         native = self.cash(account_number, buy_currency)
         source_currency = "CAD" if buy_currency == "USD" else "USD"
         convertible = cross_currency_buying_power(
@@ -225,11 +238,15 @@ class CashLedger:
         )
         return native + convertible
 
-    def credit_sale(self, account_number: str, currency: str, proceeds_native: float) -> None:
+    def credit_sale(
+        self, account_number: str, currency: str, proceeds_native: float
+    ) -> None:
         self.balances.setdefault(account_number, {"CAD": 0.0, "USD": 0.0})
         self.balances[account_number][currency] += proceeds_native
 
-    def fund_buy(self, account_number: str, currency: str, cost_native: float, dlr_quotes=None) -> bool:
+    def fund_buy(
+        self, account_number: str, currency: str, cost_native: float, dlr_quotes=None
+    ) -> bool:
         """Spend native cash first, then convert the remainder if needed."""
         self.balances.setdefault(account_number, {"CAD": 0.0, "USD": 0.0})
         native_cash = self.cash(account_number, currency)
@@ -313,7 +330,8 @@ class RebalancePlanner:
         overweight_symbols = [
             (symbol, drift_pct)
             for symbol, drift_pct in drifts.items()
-            if symbol not in ("CAD", "USD") and drift_pct > self.drift_trade_threshold_pct
+            if symbol not in ("CAD", "USD")
+            and drift_pct > self.drift_trade_threshold_pct
         ]
         overweight_symbols.sort(key=lambda item: item[1], reverse=True)
 
@@ -355,7 +373,9 @@ class RebalancePlanner:
                 productive_accounts=productive,
             )
             for trade in sell_trades:
-                self.ledger.credit_sale(trade.account_number, currency, trade.estimated_value)
+                self.ledger.credit_sale(
+                    trade.account_number, currency, trade.estimated_value
+                )
                 self.plan.add_trade(trade)
                 count += 1
 
@@ -367,7 +387,8 @@ class RebalancePlanner:
         underweight_symbols = [
             (symbol, drift_pct)
             for symbol, drift_pct in drifts.items()
-            if symbol not in ("CAD", "USD") and drift_pct < -self.drift_trade_threshold_pct
+            if symbol not in ("CAD", "USD")
+            and drift_pct < -self.drift_trade_threshold_pct
         ]
         underweight_symbols.sort(key=lambda item: item[1])
 
@@ -410,7 +431,9 @@ class RebalancePlanner:
             if remaining <= 0:
                 break
 
-            quantity = self._buy_in_account(acct, symbol, ask_price_native, currency, remaining)
+            quantity = self._buy_in_account(
+                acct, symbol, ask_price_native, currency, remaining
+            )
             if quantity > 0:
                 remaining -= quantity
                 trades_added += 1
@@ -421,8 +444,12 @@ class RebalancePlanner:
         accounts = find_accounts_for_symbol(symbol, self.portfolio.accounts)
 
         def sort_key(account):
-            same_currency = self.ledger.same_currency_buying_power(account.number, currency)
-            total = self.ledger.total_buying_power(account.number, currency, dlr_quotes=self.dlr_quotes)
+            same_currency = self.ledger.same_currency_buying_power(
+                account.number, currency
+            )
+            total = self.ledger.total_buying_power(
+                account.number, currency, dlr_quotes=self.dlr_quotes
+            )
             return (
                 1 if same_currency > 0 else 0,
                 same_currency,
@@ -447,7 +474,9 @@ class RebalancePlanner:
         )
         if buying_power < ask_price_native:
             self._raise_cash_in_account(
-                acct, symbol, currency,
+                acct,
+                symbol,
+                currency,
                 target_native=remaining_shares * ask_price_native,
                 min_useful_native=ask_price_native,
             )
@@ -457,7 +486,7 @@ class RebalancePlanner:
                 dlr_quotes=self.dlr_quotes,
             )
 
-        affordable = int(math.floor(buying_power / ask_price_native))
+        affordable = math.floor(buying_power / ask_price_native)
         quantity = min(remaining_shares, affordable)
         if quantity <= 0:
             return 0
@@ -469,19 +498,21 @@ class RebalancePlanner:
             cost_native,
             dlr_quotes=self.dlr_quotes,
         )
-        self.plan.add_trade(TradeRecommendation(
-            symbol=symbol,
-            action="BUY",
-            quantity=quantity,
-            account_number=acct.number,
-            account_type=acct.account_type,
-            owner=acct.owner,
-            price=ask_price_native,
-            currency=currency,
-            estimated_value=cost_native,
-            note="Underweight buy (FX)" if converted else "Underweight buy",
-            requires_fx=converted,
-        ))
+        self.plan.add_trade(
+            TradeRecommendation(
+                symbol=symbol,
+                action="BUY",
+                quantity=quantity,
+                account_number=acct.number,
+                account_type=acct.account_type,
+                owner=acct.owner,
+                price=ask_price_native,
+                currency=currency,
+                estimated_value=cost_native,
+                note="Underweight buy (FX)" if converted else "Underweight buy",
+                requires_fx=converted,
+            )
+        )
         return quantity
 
     def _raise_cash_in_account(
@@ -549,7 +580,7 @@ class RebalancePlanner:
             if shortfall <= 0:
                 break
 
-            sell_qty = min(max_sellable, int(math.ceil(shortfall / bid_price_native)))
+            sell_qty = min(max_sellable, math.ceil(shortfall / bid_price_native))
             if sell_qty <= 0:
                 continue
 
@@ -577,7 +608,9 @@ class RebalancePlanner:
             self.ledger.credit_sale(acct.number, currency, trade.estimated_value)
             self.plan.add_trade(trade)
 
-    def _cascade_score(self, symbol: str, current_account_number: str, drifts: dict[str, float]) -> float:
+    def _cascade_score(
+        self, symbol: str, current_account_number: str, drifts: dict[str, float]
+    ) -> float:
         """Score a symbol by the total underweight drift it can unlock in other accounts.
 
         When the current account buys this symbol with leftover cash, it may
@@ -603,7 +636,9 @@ class RebalancePlanner:
                     score += abs(drift)
         return score
 
-    def _productive_accounts_for_sell(self, sell_symbol: str, drifts: dict[str, float]) -> set[str]:
+    def _productive_accounts_for_sell(
+        self, sell_symbol: str, drifts: dict[str, float]
+    ) -> set[str]:
         """Determine which accounts can productively use proceeds from selling a symbol.
 
         An account can productively use proceeds if it has:
@@ -615,18 +650,25 @@ class RebalancePlanner:
         productive = set()
 
         for acct in self.portfolio.accounts:
-            if not any(p.symbol == sell_symbol and p.quantity > 0 for p in acct.positions):
+            if not any(
+                p.symbol == sell_symbol and p.quantity > 0 for p in acct.positions
+            ):
                 continue
 
             if _has_underweight_alternatives(
-                acct, sell_symbol, drifts, self.hidden_symbols,
+                acct,
+                sell_symbol,
+                drifts,
+                self.hidden_symbols,
             ):
                 productive.add(acct.number)
                 continue
 
             if acct.number not in sell_cascade:
                 sell_cascade[acct.number] = self._cascade_score(
-                    sell_symbol, acct.number, drifts,
+                    sell_symbol,
+                    acct.number,
+                    drifts,
                 )
 
             for pos in acct.positions:
@@ -685,7 +727,10 @@ class RebalancePlanner:
             candidates.sort(key=lambda item: item[0])
         else:
             candidates.sort(
-                key=lambda item: (-self._cascade_score(item[1], acct.number, drifts), item[0])
+                key=lambda item: (
+                    -self._cascade_score(item[1], acct.number, drifts),
+                    item[0],
+                )
             )
         return candidates
 
@@ -713,7 +758,9 @@ class RebalancePlanner:
         Norbert's Gambit conversion. A cross-currency win pays that conversion
         cost; the next round then deploys the converted cash same-currency.
         """
-        source_cash = self.ledger.same_currency_buying_power(acct.number, source_currency)
+        source_cash = self.ledger.same_currency_buying_power(
+            acct.number, source_currency
+        )
         if source_cash <= 0:
             return None
 
@@ -749,7 +796,7 @@ class RebalancePlanner:
         else:
             return None
 
-        quantity = int(math.floor(available_cash / ask_price_native))
+        quantity = math.floor(available_cash / ask_price_native)
         if quantity <= 0:
             return None
 
@@ -780,11 +827,17 @@ class RebalancePlanner:
 
     def _top_buyable_candidate(self, acct, currency: str, drifts: dict[str, float]):
         """Return the highest-cascade buyable ``(symbol, ask_price, cascade)`` in a currency, or None."""
-        candidates = self._account_buyable_candidates(acct, currency, drifts, underweight_only=False)
+        candidates = self._account_buyable_candidates(
+            acct, currency, drifts, underweight_only=False
+        )
         if not candidates:
             return None
         _drift_pct, symbol, ask_price_native = candidates[0]
-        return symbol, ask_price_native, self._cascade_score(symbol, acct.number, drifts)
+        return (
+            symbol,
+            ask_price_native,
+            self._cascade_score(symbol, acct.number, drifts),
+        )
 
     def _deploy_residual_cash(self) -> int:
         """Minimize stranded cash, deploying it where it can be most useful.
@@ -825,7 +878,9 @@ class RebalancePlanner:
                                 buy_currency=buy_currency,
                                 underweight_threshold_pct=0.0,
                                 fee_cad=self.fee_cad if requires_fx else 0.0,
-                                note="Deploy cash (underweight) (FX)" if requires_fx else "Deploy cash (underweight)",
+                                note="Deploy cash (underweight) (FX)"
+                                if requires_fx
+                                else "Deploy cash (underweight)",
                                 dlr_quotes=self.dlr_quotes if requires_fx else None,
                             )
                             if trade is None:
@@ -841,7 +896,9 @@ class RebalancePlanner:
                 for source_currency in ("CAD", "USD"):
                     while True:
                         trade = self._build_deploy_cash_any(
-                            acct, source_currency, projected_drifts,
+                            acct,
+                            source_currency,
+                            projected_drifts,
                         )
                         if trade is None:
                             break
@@ -879,7 +936,7 @@ def shares_for_drift_gap(
     # a whole-share result a hair below an integer (e.g. 19.9999999998), which
     # would otherwise floor down and under-sell by one share — notably leaving a
     # 1-share sliver when fully liquidating a target-0 position.
-    shares = int(math.floor(gap_native / price_native + 1e-9))
+    shares = math.floor(gap_native / price_native + 1e-9)
     if shares == 0:
         one_share_cad = to_cad(price_native, currency, usd_to_cad_rate)
         if one_share_cad < 2 * gap_cad:
@@ -904,7 +961,7 @@ def max_sellable_without_crossing_target(
     if per_share_drift_pct <= 0:
         return 0
 
-    return int(math.floor((drift_pct + 1e-9) / per_share_drift_pct))
+    return math.floor((drift_pct + 1e-9) / per_share_drift_pct)
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -999,12 +1056,14 @@ def allocate_sell(
 
     holders.sort(
         key=lambda a: (
-            1 if _has_underweight_alternatives(
+            1
+            if _has_underweight_alternatives(
                 a,
                 symbol,
                 effective_drift,
                 transient_symbols,
-            ) else 0,
+            )
+            else 0,
             effective_qty(a, symbol, position_deltas),
         ),
         reverse=True,
@@ -1021,18 +1080,20 @@ def allocate_sell(
         shares_to_sell = min(remaining, held)
 
         if shares_to_sell > 0:
-            trades.append(TradeRecommendation(
-                symbol=symbol,
-                action="SELL",
-                quantity=shares_to_sell,
-                account_number=acct.number,
-                account_type=acct.account_type,
-                owner=acct.owner,
-                price=price,
-                currency=currency,
-                estimated_value=price * shares_to_sell,
-                note="Overweight sell",
-            ))
+            trades.append(
+                TradeRecommendation(
+                    symbol=symbol,
+                    action="SELL",
+                    quantity=shares_to_sell,
+                    account_number=acct.number,
+                    account_type=acct.account_type,
+                    owner=acct.owner,
+                    price=price,
+                    currency=currency,
+                    estimated_value=price * shares_to_sell,
+                    note="Overweight sell",
+                )
+            )
             remaining -= shares_to_sell
 
     return trades

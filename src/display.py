@@ -5,15 +5,16 @@ Pretty-prints portfolio status, allocation drift, and trade recommendations
 using the Rich library.
 """
 
-from datetime import date, datetime
+from datetime import UTC, date, datetime
 from textwrap import wrap
-from rich.console import Console
-from rich.table import Table
-from rich.panel import Panel
-from rich.text import Text
-from rich import box
-from src.portfolio import get_account_positions_value_cad, get_account_total_value_cad
 
+from rich import box
+from rich.console import Console
+from rich.panel import Panel
+from rich.table import Table
+from rich.text import Text
+
+from src.portfolio import get_account_positions_value_cad, get_account_total_value_cad
 
 console = Console()
 
@@ -116,15 +117,13 @@ def _add_drift_row(
 
 def display_header():
     """Display the application header."""
-    now = datetime.now().strftime("%Y-%m-%d %H:%M")
+    now = datetime.now(UTC).astimezone().strftime("%Y-%m-%d %H:%M")
     header = Text()
     header.append("PORTFOLIO REBALANCER", style="bold cyan")
     header.append(f"  —  {now}", style="dim")
     console.print()
     console.print(Panel(header, box=box.DOUBLE, style="cyan", expand=False))
     console.print()
-
-
 
 
 def display_holdings_summary(portfolio, usd_to_cad_rate: float):
@@ -162,8 +161,14 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
             price_change = price - prev_close
             change_pct = (price_change / prev_close) * 100.0
             day_pnl_native = price_change * qty
-            day_pnl_cad = day_pnl_native * usd_to_cad_rate if currency == "USD" else day_pnl_native
-            prev_value_cad = prev_close * qty * (usd_to_cad_rate if currency == "USD" else 1.0)
+            day_pnl_cad = (
+                day_pnl_native * usd_to_cad_rate
+                if currency == "USD"
+                else day_pnl_native
+            )
+            prev_value_cad = (
+                prev_close * qty * (usd_to_cad_rate if currency == "USD" else 1.0)
+            )
         else:
             change_pct = 0.0
             day_pnl_cad = 0.0
@@ -205,7 +210,11 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
         )
 
     # Total row
-    total_change_pct = (total_day_pnl_cad / total_value_for_pct * 100.0) if total_value_for_pct > 0 else 0.0
+    total_change_pct = (
+        (total_day_pnl_cad / total_value_for_pct * 100.0)
+        if total_value_for_pct > 0
+        else 0.0
+    )
     table.add_section()
     table.add_row(
         "[bold]Total[/bold]",
@@ -243,7 +252,9 @@ def display_all_time_high(ath, portfolio_value: float):
     )
 
 
-def _compute_portfolio_day_pnl(portfolio, usd_to_cad_rate: float) -> tuple[float, float]:
+def _compute_portfolio_day_pnl(
+    portfolio, usd_to_cad_rate: float
+) -> tuple[float, float]:
     """Compute total portfolio Day P&L and percentage from previous close prices.
 
     Returns (total_pnl_cad, total_change_pct).
@@ -260,11 +271,17 @@ def _compute_portfolio_day_pnl(portfolio, usd_to_cad_rate: float) -> tuple[float
             total_day_pnl_cad += price_change * qty * fx
             total_prev_value_cad += prev_close * qty * fx
 
-    total_change_pct = (total_day_pnl_cad / total_prev_value_cad * 100.0) if total_prev_value_cad > 0 else 0.0
+    total_change_pct = (
+        (total_day_pnl_cad / total_prev_value_cad * 100.0)
+        if total_prev_value_cad > 0
+        else 0.0
+    )
     return total_day_pnl_cad, total_change_pct
 
 
-def display_daily_change(portfolio_value: float, day_pnl_cad: float, day_pnl_pct: float):
+def display_daily_change(
+    portfolio_value: float, day_pnl_cad: float, day_pnl_pct: float
+):
     """Display the current portfolio value with day-over-day change from previous close."""
     if day_pnl_cad == 0 and day_pnl_pct == 0:
         console.print(
@@ -328,13 +345,19 @@ def _determine_chart_height(console_height: int) -> int:
     return max(4, console_height - reserved_rows - 2)
 
 
-def _build_vertical_tick_labels(min_value: float, max_value: float, chart_height: int) -> dict[int, str]:
+def _build_vertical_tick_labels(
+    min_value: float, max_value: float, chart_height: int
+) -> dict[int, str]:
     """Create evenly spaced Y-axis labels based on available chart height."""
     tick_count = max(3, min(6, (chart_height // 4) + 1))
     tick_labels = {}
 
     for tick_index in range(tick_count):
-        row = round(tick_index * (chart_height - 1) / (tick_count - 1)) if tick_count > 1 else 0
+        row = (
+            round(tick_index * (chart_height - 1) / (tick_count - 1))
+            if tick_count > 1
+            else 0
+        )
         value = (
             max_value - ((max_value - min_value) * tick_index / (tick_count - 1))
             if tick_count > 1
@@ -345,13 +368,21 @@ def _build_vertical_tick_labels(min_value: float, max_value: float, chart_height
     return tick_labels
 
 
-def _month_tick_candidates(start_of_year: date, today: date, chart_width: int, total_days: int) -> list[tuple[int, str]]:
+def _month_tick_candidates(
+    start_of_year: date, today: date, chart_width: int, total_days: int
+) -> list[tuple[int, str]]:
     """Return month-start tick candidates mapped onto the chart width."""
     candidates = []
     used_positions = set()
 
     for tick_date in _iter_month_starts(start_of_year, today):
-        x = 0 if total_days == 0 else round(((tick_date - start_of_year).days * (chart_width - 1)) / total_days)
+        x = (
+            0
+            if total_days == 0
+            else round(
+                ((tick_date - start_of_year).days * (chart_width - 1)) / total_days
+            )
+        )
         if x in used_positions:
             continue
         used_positions.add(x)
@@ -360,7 +391,9 @@ def _month_tick_candidates(start_of_year: date, today: date, chart_width: int, t
     return candidates
 
 
-def _tick_label_layout(ticks: list[tuple[int, str]], chart_width: int) -> list[tuple[int, str]] | None:
+def _tick_label_layout(
+    ticks: list[tuple[int, str]], chart_width: int
+) -> list[tuple[int, str]] | None:
     """Compute non-overlapping single-line positions for X-axis labels."""
     layout = []
     previous_end = -2
@@ -376,7 +409,9 @@ def _tick_label_layout(ticks: list[tuple[int, str]], chart_width: int) -> list[t
     return layout
 
 
-def _select_horizontal_ticks(start_of_year: date, today: date, chart_width: int, total_days: int) -> list[tuple[int, str]]:
+def _select_horizontal_ticks(
+    start_of_year: date, today: date, chart_width: int, total_days: int
+) -> list[tuple[int, str]]:
     """Choose a subset of month-start labels that fits the chart width cleanly."""
     candidates = _month_tick_candidates(start_of_year, today, chart_width, total_days)
     if not candidates:
@@ -403,7 +438,7 @@ def display_year_to_date_chart(history_points: list, console_height: int | None 
     if not history_points:
         return
 
-    today = date.today()
+    today = datetime.now(UTC).astimezone().date()
     start_of_year = date(today.year, 1, 1)
     total_days = max(1, (today - start_of_year).days)
     values = [point.value for point in history_points]
@@ -433,7 +468,9 @@ def display_year_to_date_chart(history_points: list, console_height: int | None 
     value_span = max_value - min_value
     row_labels = _build_vertical_tick_labels(min_value, max_value, chart_height)
     left_axis_width = max(len(label) for label in row_labels.values())
-    selected_ticks = _select_horizontal_ticks(start_of_year, today, chart_width, total_days)
+    selected_ticks = _select_horizontal_ticks(
+        start_of_year, today, chart_width, total_days
+    )
 
     def value_to_row(value: float) -> int:
         if value_span == 0:
@@ -465,7 +502,9 @@ def display_year_to_date_chart(history_points: list, console_height: int | None 
         previous_plot = (x, y)
 
     for x in range(chart_width):
-        first_drawn_row = next((row for row in range(chart_height) if grid[row][x] != " "), None)
+        first_drawn_row = next(
+            (row for row in range(chart_height) if grid[row][x] != " "), None
+        )
         if first_drawn_row is None:
             continue
         for y in range(first_drawn_row + 1, chart_height):
@@ -490,7 +529,9 @@ def display_year_to_date_chart(history_points: list, console_height: int | None 
     lines.append(f"{'':>{left_axis_width + 1}} {''.join(label_chars)}")
 
     lines.append("")
-    _append_wrapped_line(lines, f"Latest {_format_money(history_points[-1].value)}", panel_inner_width)
+    _append_wrapped_line(
+        lines, f"Latest {_format_money(history_points[-1].value)}", panel_inner_width
+    )
     _append_wrapped_line(lines, f"Low {_format_money(min_value)}", panel_inner_width)
     _append_wrapped_line(lines, f"High {_format_money(max_value)}", panel_inner_width)
 
@@ -507,7 +548,7 @@ def display_year_to_date_chart(history_points: list, console_height: int | None 
     console.print()
 
 
-def display_accuracy(current_accuracy: float, projected_accuracy: float = None):
+def display_accuracy(current_accuracy: float, projected_accuracy: float | None = None):
     """Display the portfolio accuracy score."""
     # Color based on accuracy
     if current_accuracy > 95:
@@ -517,7 +558,10 @@ def display_accuracy(current_accuracy: float, projected_accuracy: float = None):
     else:
         color = "red"
 
-    console.print(f"  [bold]Accuracy Score:[/bold]          [{color}]{current_accuracy:.1f}%[/{color}]", end="")
+    console.print(
+        f"  [bold]Accuracy Score:[/bold]          [{color}]{current_accuracy:.1f}%[/{color}]",
+        end="",
+    )
 
     if projected_accuracy is not None:
         if projected_accuracy > 95:
@@ -526,7 +570,9 @@ def display_accuracy(current_accuracy: float, projected_accuracy: float = None):
             proj_color = "yellow"
         else:
             proj_color = "red"
-        console.print(f"  →  [{proj_color}]{projected_accuracy:.1f}%[/{proj_color}]", end="")
+        console.print(
+            f"  →  [{proj_color}]{projected_accuracy:.1f}%[/{proj_color}]", end=""
+        )
 
     console.print()
 
@@ -644,7 +690,9 @@ def display_trades(trades: list):
         prev_account = account_key
 
         action_style = "green bold" if trade.action == "BUY" else "red bold"
-        account_label = _format_account_label(trade.owner, trade.account_type, trade.account_number)
+        account_label = _format_account_label(
+            trade.owner, trade.account_type, trade.account_number
+        )
 
         table.add_row(
             trade.symbol,
@@ -681,7 +729,9 @@ def display_currency_conversions(conversions: list):
     table.add_column("Amount (incl. fee)", justify="right")
 
     for conv in conversions:
-        account_label = _format_account_label(conv.owner, conv.account_type, conv.account_number)
+        account_label = _format_account_label(
+            conv.owner, conv.account_type, conv.account_number
+        )
 
         if conv.direction == "CAD_TO_USD":
             direction = "CAD -> USD"
@@ -716,7 +766,9 @@ def display_transient_alerts(transient_alerts: list):
         return
 
     for alert in transient_alerts:
-        account_label = _format_account_label(alert.owner, alert.account_type, alert.account_number)
+        account_label = _format_account_label(
+            alert.owner, alert.account_type, alert.account_number
+        )
         console.print(
             f"  [yellow]⏳ {alert.symbol}:[/yellow] "
             f"{int(alert.quantity)} shares in {account_label} — {alert.note}"
@@ -751,7 +803,7 @@ def display_account_summary(accounts: list, usd_to_cad_rate: float):
         # Count non-zero positions
         pos_count = sum(1 for p in acct.positions if p.quantity > 0)
         pos_symbols = ", ".join(
-            sorted(set(p.symbol for p in acct.positions if p.quantity > 0))
+            sorted({p.symbol for p in acct.positions if p.quantity > 0})
         )
 
         # Calculate account values in CAD
@@ -848,7 +900,9 @@ def display_tactical_posture(tactical_posture) -> None:
         lines.append("")
         lines.append("  [dim]Recovery triggers:[/dim]")
         for trigger in tactical_posture.next_recovery_triggers:
-            target_label = regime_labels.get(trigger["target_regime"], trigger["target_regime"])
+            target_label = regime_labels.get(
+                trigger["target_regime"], trigger["target_regime"]
+            )
             if trigger["target_regime"] == "baseline":
                 target_label = "Baseline"
             lines.append(
@@ -860,7 +914,9 @@ def display_tactical_posture(tactical_posture) -> None:
     # Deploy trigger
     if tactical_posture.next_deploy_trigger:
         trigger = tactical_posture.next_deploy_trigger
-        target_label = regime_labels.get(trigger["target_regime"], trigger["target_regime"])
+        target_label = regime_labels.get(
+            trigger["target_regime"], trigger["target_regime"]
+        )
         lines.append("  [dim]Deploy trigger:[/dim]")
         lines.append(
             f"    [red]→[/red] {trigger['drawdown_pct']:+.1f}% "
@@ -889,10 +945,10 @@ def display_full_report(
     currency_conversions: list,
     transient_alerts: list,
     usd_to_cad_rate: float,
-    projected_accuracy: float = None,
-    projected_allocations: dict = None,
+    projected_accuracy: float | None = None,
+    projected_allocations: dict | None = None,
     all_time_high=None,
-    ytd_history: list = None,
+    ytd_history: list | None = None,
     drift_trade_threshold_pct: float = 0.1,
     tactical_posture=None,
 ):
@@ -912,4 +968,6 @@ def display_full_report(
     display_transient_alerts(transient_alerts)
     display_trades(trades)
     display_currency_conversions(currency_conversions)
-    display_projected_allocations(projected_allocations, targets, drift_trade_threshold_pct)
+    display_projected_allocations(
+        projected_allocations, targets, drift_trade_threshold_pct
+    )

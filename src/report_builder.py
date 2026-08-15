@@ -13,8 +13,12 @@ from src.history import (
     get_all_time_high,
     get_year_to_date_history,
 )
-from src.portfolio import AllocationSnapshot, build_allocation_snapshot, simulate_rebalance
 from src.models import TradeRecommendation, TransientAlert
+from src.portfolio import (
+    AllocationSnapshot,
+    build_allocation_snapshot,
+    simulate_rebalance,
+)
 from src.tactical import TacticalPosture
 
 

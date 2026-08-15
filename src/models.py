@@ -58,13 +58,15 @@ def get_transient_status(portfolio, transient_symbols: list) -> dict:
         for acct in portfolio.accounts:
             for pos in acct.positions:
                 if pos.symbol == symbol and pos.quantity > 0:
-                    alerts.append(TransientAlert(
-                        symbol=symbol,
-                        quantity=pos.quantity,
-                        account_number=acct.number,
-                        account_type=acct.account_type,
-                        owner=acct.owner,
-                        note="Excluded from rebalancing",
-                    ))
+                    alerts.append(
+                        TransientAlert(
+                            symbol=symbol,
+                            quantity=pos.quantity,
+                            account_number=acct.number,
+                            account_type=acct.account_type,
+                            owner=acct.owner,
+                            note="Excluded from rebalancing",
+                        )
+                    )
 
     return {"symbols": held, "alerts": alerts}

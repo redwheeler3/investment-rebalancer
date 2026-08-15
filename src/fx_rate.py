@@ -70,7 +70,12 @@ def fetch_dlr_quotes(client) -> DlrQuotes:
 
     # Derive exchange rate from the midpoints of the DLR pair
     exchange_rate = None
-    if cad_bid_price > 0 and cad_ask_price > 0 and usd_bid_price > 0 and usd_ask_price > 0:
+    if (
+        cad_bid_price > 0
+        and cad_ask_price > 0
+        and usd_bid_price > 0
+        and usd_ask_price > 0
+    ):
         cad_mid = (cad_bid_price + cad_ask_price) / 2
         usd_mid = (usd_bid_price + usd_ask_price) / 2
         rate = cad_mid / usd_mid

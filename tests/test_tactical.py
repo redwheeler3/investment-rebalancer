@@ -7,18 +7,17 @@ import pytest
 
 from src.tactical import (
     TacticalConfig,
-    TacticalState,
     TacticalPosture,
-    parse_tactical_config,
-    evaluate_tactical_posture,
-    resolve_tactical_targets,
-    load_tactical_state,
-    save_tactical_state,
+    TacticalState,
     _determine_regime,
     _fixed_pct_for_regime,
     _regime_for_fixed_pct,
+    evaluate_tactical_posture,
+    load_tactical_state,
+    parse_tactical_config,
+    resolve_tactical_targets,
+    save_tactical_state,
 )
-
 
 # ══════════════════════════════════════════════════════════════════
 # Test fixtures
@@ -51,6 +50,7 @@ def sample_config():
 @pytest.fixture(autouse=True)
 def plaintext_encrypted_state_double():
     """Back encrypted state helpers with plaintext files for state-machine tests."""
+
     def read_json(path):
         return json.loads(path.read_text(encoding="utf-8"))
 
@@ -340,12 +340,15 @@ class TestEvaluatePosture:
         # Pre-seed state at level_1
         state_file.parent.mkdir(parents=True, exist_ok=True)
         with open(state_file, "w") as f:
-            json.dump({
-                "regime": "level_1",
-                "reference_high": 1000000.0,
-                "reference_high_date": "2026-01-15",
-                "last_transition_date": "2026-03-01",
-            }, f)
+            json.dump(
+                {
+                    "regime": "level_1",
+                    "reference_high": 1000000.0,
+                    "reference_high_date": "2026-01-15",
+                    "last_transition_date": "2026-03-01",
+                },
+                f,
+            )
 
         with patch("src.tactical.get_tactical_state_file", return_value=state_file):
             posture = evaluate_tactical_posture(
@@ -362,11 +365,14 @@ class TestEvaluatePosture:
         state_file = tmp_path / "data" / "tactical_state.json"
         state_file.parent.mkdir(parents=True, exist_ok=True)
         with open(state_file, "w") as f:
-            json.dump({
-                "regime": "level_1",
-                "reference_high": 1000000.0,
-                "reference_high_date": "2026-01-15",
-            }, f)
+            json.dump(
+                {
+                    "regime": "level_1",
+                    "reference_high": 1000000.0,
+                    "reference_high_date": "2026-01-15",
+                },
+                f,
+            )
 
         with patch("src.tactical.get_tactical_state_file", return_value=state_file):
             posture = evaluate_tactical_posture(

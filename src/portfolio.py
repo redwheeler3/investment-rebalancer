@@ -7,7 +7,7 @@ and projects what the portfolio would look like after a set of trades.
 """
 
 from dataclasses import dataclass, field
-from datetime import date, datetime, timedelta
+from datetime import UTC, datetime, timedelta
 
 import requests
 
@@ -26,9 +26,13 @@ def _normalize_currency(value) -> str | None:
     return normalized if normalized in {"CAD", "USD"} else None
 
 
-def _resolve_position_currency(pos: dict, symbol_id: int, symbol: str, symbol_currency_map: dict[int, str]) -> str:
+def _resolve_position_currency(
+    pos: dict, symbol_id: int, symbol: str, symbol_currency_map: dict[int, str]
+) -> str:
     """Require Questrade-provided currency data for each position."""
-    currency = _normalize_currency(pos.get("currency")) or symbol_currency_map.get(symbol_id)
+    currency = _normalize_currency(pos.get("currency")) or symbol_currency_map.get(
+        symbol_id
+    )
     if currency:
         return currency
 
@@ -150,7 +154,9 @@ def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
         symbol_currency_map = {}
         if symbol_ids:
             for symbol_data in client.get_symbols(sorted(symbol_ids)):
-                symbol_id = int(_coerce_numeric(symbol_data.get("symbolId", 0), default=0.0))
+                symbol_id = int(
+                    _coerce_numeric(symbol_data.get("symbolId", 0), default=0.0)
+                )
                 currency = _normalize_currency(symbol_data.get("currency"))
                 if symbol_id > 0 and currency:
                     symbol_currency_map[symbol_id] = currency
@@ -235,13 +241,15 @@ def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
                 holding.current_price = current_price
                 holding.bid_price = current_price  # Will be updated with quote data
                 holding.ask_price = current_price  # Will be updated with quote data
-                holding.accounts.append(HoldingAccountDetail(
-                    account_number=acct_number,
-                    account_type=acct_type,
-                    owner=display_owner,
-                    quantity=quantity,
-                    market_value=market_value,
-                ))
+                holding.accounts.append(
+                    HoldingAccountDetail(
+                        account_number=acct_number,
+                        account_type=acct_type,
+                        owner=display_owner,
+                        quantity=quantity,
+                        market_value=market_value,
+                    )
+                )
 
             account_info = AccountInfo(
                 number=acct_number,
@@ -274,10 +282,16 @@ def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
 
 def get_position_value_cad(position: Position, usd_to_cad_rate: float) -> float:
     """Return a position's market value converted to CAD."""
-    return position.market_value * usd_to_cad_rate if position.currency == "USD" else position.market_value
+    return (
+        position.market_value * usd_to_cad_rate
+        if position.currency == "USD"
+        else position.market_value
+    )
 
 
-def get_account_positions_value_cad(account: AccountInfo, usd_to_cad_rate: float) -> float:
+def get_account_positions_value_cad(
+    account: AccountInfo, usd_to_cad_rate: float
+) -> float:
     """Return the total CAD value of all non-zero positions in an account."""
     return sum(
         get_position_value_cad(pos, usd_to_cad_rate)
@@ -315,7 +329,7 @@ def calculate_allocations_for_values(
     cash_cad_total: float,
     cash_usd_total: float,
     usd_to_cad_rate: float,
-    excluded_symbols: set = None,
+    excluded_symbols: set | None = None,
 ) -> dict:
     """Build allocation percentages from already-computed holding values."""
     if total_value_cad == 0:
@@ -357,7 +371,7 @@ def _get_prev_close_price(client, symbol_id: int, exclude_date=None) -> float:
     Falls back to today's date when exclude_date is unavailable.
     Returns 0.0 if insufficient data is available.
     """
-    reference_date = exclude_date or date.today()
+    reference_date = exclude_date or datetime.now(UTC).astimezone().date()
     start = reference_date - timedelta(days=10)
 
     start_time = f"{start.isoformat()}T00:00:00-05:00"
@@ -371,10 +385,7 @@ def _get_prev_close_price(client, symbol_id: int, exclude_date=None) -> float:
     # quote is still from the previous trading session, so using date.today()
     # would incorrectly treat that session's close as the prior close.
     reference_date_str = reference_date.isoformat()
-    prior_candles = [
-        c for c in candles
-        if c.get("start", "")[:10] < reference_date_str
-    ]
+    prior_candles = [c for c in candles if c.get("start", "")[:10] < reference_date_str]
 
     if not prior_candles:
         return 0.0
@@ -420,7 +431,9 @@ def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
             holding = portfolio.holdings[symbol]
             holding.bid_price = float(quote.get("bidPrice") or 0)
             holding.ask_price = float(quote.get("askPrice") or 0)
-            holding.current_price = float(quote.get("lastTradePrice") or 0) or holding.current_price
+            holding.current_price = (
+                float(quote.get("lastTradePrice") or 0) or holding.current_price
+            )
             quote_trade_dates[symbol] = _get_quote_trade_date(quote)
 
     # Fetch previous close for each symbol via daily candles.
@@ -441,9 +454,15 @@ def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
             holding.prev_close_price = prev_close
 
 
-def get_current_allocations(portfolio: PortfolioSummary, usd_to_cad_rate: float, excluded_symbols: set = None) -> dict:
+def get_current_allocations(
+    portfolio: PortfolioSummary,
+    usd_to_cad_rate: float,
+    excluded_symbols: set | None = None,
+) -> dict:
     """Calculate current allocation percentages for each holding (includes CAD/USD cash entries)."""
-    holdings_value_cad = {symbol: data.value_cad for symbol, data in portfolio.holdings.items()}
+    holdings_value_cad = {
+        symbol: data.value_cad for symbol, data in portfolio.holdings.items()
+    }
     return calculate_allocations_for_values(
         holdings_value_cad=holdings_value_cad,
         total_value_cad=portfolio.total_value_cad,
@@ -473,8 +492,7 @@ def calculate_accuracy(current_allocations: dict, targets: dict) -> float:
     """
     all_symbols = current_allocations.keys() | targets.keys()
     total_abs_drift = sum(
-        abs(current_allocations.get(s, 0.0) - targets.get(s, 0.0))
-        for s in all_symbols
+        abs(current_allocations.get(s, 0.0) - targets.get(s, 0.0)) for s in all_symbols
     )
 
     return max(0.0, 100.0 - (total_abs_drift / 2.0))
@@ -484,8 +502,7 @@ def get_drifts(current_allocations: dict, targets: dict) -> dict:
     """Calculate drift for each symbol (current % - target %)."""
     all_symbols = current_allocations.keys() | targets.keys()
     return {
-        s: current_allocations.get(s, 0.0) - targets.get(s, 0.0)
-        for s in all_symbols
+        s: current_allocations.get(s, 0.0) - targets.get(s, 0.0) for s in all_symbols
     }
 
 
@@ -496,7 +513,7 @@ def build_allocation_snapshot_from_values(
     total_value_cad: float,
     targets: dict,
     usd_to_cad_rate: float,
-    excluded_symbols: set = None,
+    excluded_symbols: set | None = None,
 ) -> AllocationSnapshot:
     """Build allocations, drifts, and accuracy from raw value inputs."""
     allocations = calculate_allocations_for_values(
@@ -518,10 +535,12 @@ def build_allocation_snapshot(
     portfolio: PortfolioSummary,
     targets: dict,
     usd_to_cad_rate: float,
-    excluded_symbols: set = None,
+    excluded_symbols: set | None = None,
 ) -> AllocationSnapshot:
     """Build allocations, drifts, and accuracy from a portfolio."""
-    holdings_value_cad = {symbol: data.value_cad for symbol, data in portfolio.holdings.items()}
+    holdings_value_cad = {
+        symbol: data.value_cad for symbol, data in portfolio.holdings.items()
+    }
     return build_allocation_snapshot_from_values(
         holdings_value_cad=holdings_value_cad,
         cash_cad_total=portfolio.cash_cad_total,
@@ -538,12 +557,11 @@ def simulate_rebalance(
     trades: list,
     targets: dict,
     usd_to_cad_rate: float,
-    hidden_symbols: set = None,
+    hidden_symbols: set | None = None,
 ) -> AllocationSnapshot:
     """Project what the portfolio allocation would look like after applying trades."""
     projected_holdings_value_cad = {
-        symbol: holding.value_cad
-        for symbol, holding in portfolio.holdings.items()
+        symbol: holding.value_cad for symbol, holding in portfolio.holdings.items()
     }
     projected_cash_cad = portfolio.cash_cad_total
     projected_cash_usd = portfolio.cash_usd_total
@@ -552,7 +570,9 @@ def simulate_rebalance(
         hidden_symbols = set()
 
     for trade in trades:
-        trade_price_cad = trade.price * usd_to_cad_rate if trade.currency == "USD" else trade.price
+        trade_price_cad = (
+            trade.price * usd_to_cad_rate if trade.currency == "USD" else trade.price
+        )
         trade_value_cad = trade_price_cad * trade.quantity
 
         if trade.action == "BUY":
@@ -586,7 +606,9 @@ def simulate_rebalance(
         projected_cash_cad += projected_cash_usd * usd_to_cad_rate
         projected_cash_usd = 0
 
-    projected_total_value_cad = projected_cash_cad + (projected_cash_usd * usd_to_cad_rate)
+    projected_total_value_cad = projected_cash_cad + (
+        projected_cash_usd * usd_to_cad_rate
+    )
     projected_total_value_cad += sum(projected_holdings_value_cad.values())
 
     return build_allocation_snapshot_from_values(

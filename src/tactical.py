@@ -17,11 +17,10 @@ Key concepts:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from datetime import date
+from datetime import UTC, datetime
 
 from src.encrypted_state import read_encrypted_json, write_encrypted_json
 from src.paths import get_tactical_state_file
-
 
 # ══════════════════════════════════════════════════════════════════
 # Data types
@@ -37,8 +36,12 @@ class TacticalConfig:
 
     baseline_fixed_pct: float
     fixed_composition: dict[str, float]  # symbol → ratio (sums to 1.0, parsed from %)
-    deploy_thresholds: list[dict]  # sorted by drawdown_pct descending (least negative first)
-    recovery_thresholds: list[dict]  # sorted by drawdown_pct ascending (most negative first)
+    deploy_thresholds: list[
+        dict
+    ]  # sorted by drawdown_pct descending (least negative first)
+    recovery_thresholds: list[
+        dict
+    ]  # sorted by drawdown_pct ascending (most negative first)
 
 
 @dataclass
@@ -65,7 +68,9 @@ class TacticalPosture:
     previous_regime: str | None = None
     # Trigger info for display
     next_deploy_trigger: dict | None = None  # {drawdown_pct, fixed_pct, dollar_value}
-    next_recovery_triggers: list[dict] = field(default_factory=list)  # [{drawdown_pct, fixed_pct, dollar_value}]
+    next_recovery_triggers: list[dict] = field(
+        default_factory=list
+    )  # [{drawdown_pct, fixed_pct, dollar_value}]
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -129,26 +134,29 @@ def parse_tactical_config(raw: dict) -> TacticalConfig | None:
     total_ratio = sum(fixed_composition.values())
     if total_ratio > 0 and abs(total_ratio - 1.0) > 0.001:
         fixed_composition = {
-            symbol: ratio / total_ratio
-            for symbol, ratio in fixed_composition.items()
+            symbol: ratio / total_ratio for symbol, ratio in fixed_composition.items()
         }
 
     # Parse deploy thresholds (going down) — sort so least negative first
     deploy_thresholds = []
     for entry in raw.get("deploy_thresholds", []):
-        deploy_thresholds.append({
-            "drawdown_pct": float(entry["drawdown_pct"]),
-            "fixed_pct": float(entry["fixed_pct"]),
-        })
+        deploy_thresholds.append(
+            {
+                "drawdown_pct": float(entry["drawdown_pct"]),
+                "fixed_pct": float(entry["fixed_pct"]),
+            }
+        )
     deploy_thresholds.sort(key=lambda t: t["drawdown_pct"], reverse=True)
 
     # Parse recovery thresholds (going up) — sort so most negative first
     recovery_thresholds = []
     for entry in raw.get("recovery_thresholds", []):
-        recovery_thresholds.append({
-            "drawdown_pct": float(entry["drawdown_pct"]),
-            "fixed_pct": float(entry["fixed_pct"]),
-        })
+        recovery_thresholds.append(
+            {
+                "drawdown_pct": float(entry["drawdown_pct"]),
+                "fixed_pct": float(entry["fixed_pct"]),
+            }
+        )
     recovery_thresholds.sort(key=lambda t: t["drawdown_pct"])
 
     return TacticalConfig(
@@ -279,7 +287,7 @@ def evaluate_tactical_posture(
         TacticalPosture with regime, targets, and display info.
     """
     state = load_tactical_state()
-    today = date.today().isoformat()
+    today = datetime.now(UTC).astimezone().date().isoformat()
 
     # Determine reference high
     if state.regime == "baseline":
@@ -399,12 +407,14 @@ def _next_recovery_triggers(
         if threshold["fixed_pct"] > current_fixed:
             target_regime = _regime_for_fixed_pct(threshold["fixed_pct"], config)
             dollar_value = reference_high * (1.0 + threshold["drawdown_pct"] / 100.0)
-            triggers.append({
-                "drawdown_pct": threshold["drawdown_pct"],
-                "fixed_pct": threshold["fixed_pct"],
-                "dollar_value": dollar_value,
-                "target_regime": target_regime or "baseline",
-            })
+            triggers.append(
+                {
+                    "drawdown_pct": threshold["drawdown_pct"],
+                    "fixed_pct": threshold["fixed_pct"],
+                    "dollar_value": dollar_value,
+                    "target_regime": target_regime or "baseline",
+                }
+            )
 
     return triggers
 
@@ -457,8 +467,7 @@ def resolve_tactical_targets(
     if current_equity_sum > 0 and target_equity_sum > 0:
         scale_factor = target_equity_sum / current_equity_sum
         equity_targets = {
-            symbol: pct * scale_factor
-            for symbol, pct in equity_targets.items()
+            symbol: pct * scale_factor for symbol, pct in equity_targets.items()
         }
 
     # Compute fixed-income targets from composition ratios

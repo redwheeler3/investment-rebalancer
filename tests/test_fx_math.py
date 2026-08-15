@@ -1,17 +1,18 @@
 """Tests for the FX math module — currency conversion sizing and buying power."""
 
-import pytest
 from dataclasses import dataclass
 
+import pytest
+
 from src.fx_math import (
-    to_cad,
     CurrencyTotals,
     build_account_trade_impacts,
-    net_account_cash,
-    max_usd_from_cad,
-    max_cad_from_usd,
-    cross_currency_buying_power,
     consume_cross_currency_cash,
+    cross_currency_buying_power,
+    max_cad_from_usd,
+    max_usd_from_cad,
+    net_account_cash,
+    to_cad,
 )
 from src.models import TradeRecommendation
 
@@ -19,9 +20,10 @@ from src.models import TradeRecommendation
 @dataclass
 class FakeDLRQuotes:
     """Minimal DLR quote structure for testing."""
-    cad_buy_price: float = 13.79   # Ask price to buy DLR.TO (CAD leg)
+
+    cad_buy_price: float = 13.79  # Ask price to buy DLR.TO (CAD leg)
     cad_sell_price: float = 13.78  # Bid price to sell DLR.TO
-    usd_buy_price: float = 10.16   # Ask price to buy DLR.U.TO (USD leg)
+    usd_buy_price: float = 10.16  # Ask price to buy DLR.U.TO (USD leg)
     usd_sell_price: float = 10.15  # Bid price to sell DLR.U.TO
 
 
@@ -59,9 +61,14 @@ class TestBuildAccountTradeImpacts:
     def test_buy_spends_cash(self):
         trades = [
             TradeRecommendation(
-                symbol="VCN.TO", action="BUY", quantity=10,
-                account_number="12345", account_type="TFSA",
-                owner="Alice", price=50.0, currency="CAD",
+                symbol="VCN.TO",
+                action="BUY",
+                quantity=10,
+                account_number="12345",
+                account_type="TFSA",
+                owner="Alice",
+                price=50.0,
+                currency="CAD",
                 estimated_value=500.0,
             )
         ]
@@ -71,9 +78,14 @@ class TestBuildAccountTradeImpacts:
     def test_sell_raises_cash(self):
         trades = [
             TradeRecommendation(
-                symbol="VCN.TO", action="SELL", quantity=10,
-                account_number="12345", account_type="TFSA",
-                owner="Alice", price=50.0, currency="CAD",
+                symbol="VCN.TO",
+                action="SELL",
+                quantity=10,
+                account_number="12345",
+                account_type="TFSA",
+                owner="Alice",
+                price=50.0,
+                currency="CAD",
                 estimated_value=500.0,
             )
         ]

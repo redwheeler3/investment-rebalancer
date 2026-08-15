@@ -1,12 +1,12 @@
 """Tests for terminal display helpers."""
 
-from datetime import date
+from datetime import UTC, date, datetime
 from io import StringIO
 
 from rich.console import Console
 
-from src.history import HistoryPoint
 from src import display
+from src.history import HistoryPoint
 
 
 def test_ytd_chart_high_uses_intraday_high(monkeypatch):
@@ -18,7 +18,7 @@ def test_ytd_chart_high_uses_intraday_high(monkeypatch):
         Console(file=output, width=120, height=30, force_terminal=False),
     )
 
-    today = date.today()
+    today = datetime.now(UTC).astimezone().date()
     history_points = [
         HistoryPoint(date=date(today.year, 1, 1), value=100.0, high=100.0),
         HistoryPoint(date=today, value=90.0, high=120.0),

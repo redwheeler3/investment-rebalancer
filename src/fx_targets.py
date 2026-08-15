@@ -101,10 +101,18 @@ def _resolve_fx_split_rule(
             f"fx_target_rules.{rule_name} manages {usd_symbol}/{cad_symbol}, so those symbols must not also appear in targets"
         )
 
-    total_target_pct = _parse_float(rule_name, "total_target_pct", rule.get("total_target_pct"))
-    min_rate = _parse_float(rule_name, "min_usd_to_cad_rate", rule.get("min_usd_to_cad_rate"))
-    max_rate = _parse_float(rule_name, "max_usd_to_cad_rate", rule.get("max_usd_to_cad_rate"))
-    rounding_step = _parse_float(rule_name, "target_rounding_step", rule.get("target_rounding_step", 1))
+    total_target_pct = _parse_float(
+        rule_name, "total_target_pct", rule.get("total_target_pct")
+    )
+    min_rate = _parse_float(
+        rule_name, "min_usd_to_cad_rate", rule.get("min_usd_to_cad_rate")
+    )
+    max_rate = _parse_float(
+        rule_name, "max_usd_to_cad_rate", rule.get("max_usd_to_cad_rate")
+    )
+    rounding_step = _parse_float(
+        rule_name, "target_rounding_step", rule.get("target_rounding_step", 1)
+    )
 
     if total_target_pct < 0:
         raise ValueError(f"fx_target_rules.{rule_name}.total_target_pct must be >= 0")
@@ -122,14 +130,18 @@ def _resolve_fx_split_rule(
     raw_cad_pct = total_target_pct * cad_fraction
 
     cad_target_pct = _sticky_round(raw_cad_pct, rounding_step, prior_cad_target)
-    usd_target_pct = round((total_target_pct - cad_target_pct) / rounding_step) * rounding_step
+    usd_target_pct = (
+        round((total_target_pct - cad_target_pct) / rounding_step) * rounding_step
+    )
 
     targets[usd_symbol] = usd_target_pct
     targets[cad_symbol] = cad_target_pct
     return cad_target_pct
 
 
-def resolve_targets(base_targets: dict, fx_target_rules: dict, usd_to_cad_rate: float) -> dict:
+def resolve_targets(
+    base_targets: dict, fx_target_rules: dict, usd_to_cad_rate: float
+) -> dict:
     """Resolve a final flat target map from static targets and FX-based rules."""
     targets = dict(base_targets)
 
@@ -142,7 +154,11 @@ def resolve_targets(base_targets: dict, fx_target_rules: dict, usd_to_cad_rate: 
     for rule_name, rule in fx_target_rules.items():
         prior_cad_target = state.get(rule_name, {}).get("cad_target_pct")
         cad_target_pct = _resolve_fx_split_rule(
-            rule_name, rule, targets, usd_to_cad_rate, prior_cad_target,
+            rule_name,
+            rule,
+            targets,
+            usd_to_cad_rate,
+            prior_cad_target,
         )
         new_state[rule_name] = {"cad_target_pct": cad_target_pct}
 

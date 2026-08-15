@@ -35,7 +35,9 @@ def build_account_trade_impacts(trades: list) -> dict:
     impacts = {}
     for trade in trades:
         totals = impacts.setdefault(trade.account_number, CurrencyTotals())
-        amount = trade.estimated_value if trade.action == "BUY" else -trade.estimated_value
+        amount = (
+            trade.estimated_value if trade.action == "BUY" else -trade.estimated_value
+        )
         totals.add(trade.currency, amount)
     return impacts
 
@@ -63,7 +65,7 @@ def max_usd_from_cad(
     cad_buy_price = getattr(dlr_quotes, "cad_buy_price", 0.0) if dlr_quotes else 0.0
     usd_sell_price = getattr(dlr_quotes, "usd_sell_price", 0.0) if dlr_quotes else 0.0
     if cad_buy_price > 0 and usd_sell_price > 0:
-        shares = int(math.floor(usable_cad / cad_buy_price))
+        shares = math.floor(usable_cad / cad_buy_price)
         return shares * usd_sell_price
 
     return usable_cad / usd_to_cad_rate if usd_to_cad_rate > 0 else 0.0
@@ -82,7 +84,7 @@ def max_cad_from_usd(
     usd_buy_price = getattr(dlr_quotes, "usd_buy_price", 0.0) if dlr_quotes else 0.0
     cad_sell_price = getattr(dlr_quotes, "cad_sell_price", 0.0) if dlr_quotes else 0.0
     if usd_buy_price > 0 and cad_sell_price > 0:
-        shares = int(math.floor(usd_available / usd_buy_price))
+        shares = math.floor(usd_available / usd_buy_price)
         gross_cad = shares * cad_sell_price
         return max(0.0, gross_cad - fee_cad)
 
@@ -101,8 +103,10 @@ def cad_to_usd_conversion_for_target(
     usd_sell_price = getattr(dlr_quotes, "usd_sell_price", 0.0) if dlr_quotes else 0.0
 
     if cad_buy_price > 0 and usd_sell_price > 0:
-        shares_needed = int(math.ceil(usd_target / usd_sell_price))
-        shares_affordable = int(math.floor(max(0.0, cad_available - fee_cad) / cad_buy_price))
+        shares_needed = math.ceil(usd_target / usd_sell_price)
+        shares_affordable = math.floor(
+            max(0.0, cad_available - fee_cad) / cad_buy_price
+        )
         shares = min(shares_needed, shares_affordable)
         if shares <= 0:
             return 0.0, 0.0
@@ -128,8 +132,8 @@ def usd_to_cad_conversion_for_target(
     cad_sell_price = getattr(dlr_quotes, "cad_sell_price", 0.0) if dlr_quotes else 0.0
 
     if usd_buy_price > 0 and cad_sell_price > 0:
-        shares_needed = int(math.ceil((cad_target + fee_cad) / cad_sell_price))
-        shares_affordable = int(math.floor(usd_available / usd_buy_price))
+        shares_needed = math.ceil((cad_target + fee_cad) / cad_sell_price)
+        shares_affordable = math.floor(usd_available / usd_buy_price)
         shares = min(shares_needed, shares_affordable)
         if shares <= 0:
             return 0.0, 0.0
@@ -177,7 +181,9 @@ def consume_cross_currency_cash(
             dlr_quotes=dlr_quotes,
         )
         cash_by_currency["CAD"] = max(0.0, cash_by_currency.get("CAD", 0.0) - spent_cad)
-        cash_by_currency["USD"] = max(0.0, cash_by_currency.get("USD", 0.0) + received_usd - cost_native)
+        cash_by_currency["USD"] = max(
+            0.0, cash_by_currency.get("USD", 0.0) + received_usd - cost_native
+        )
         return
 
     if source_currency == "USD" and target_currency == "CAD":
@@ -189,9 +195,11 @@ def consume_cross_currency_cash(
             dlr_quotes=dlr_quotes,
         )
         cash_by_currency["USD"] = max(0.0, cash_by_currency.get("USD", 0.0) - spent_usd)
-        cash_by_currency["CAD"] = max(0.0, cash_by_currency.get("CAD", 0.0) + received_cad - cost_native)
+        cash_by_currency["CAD"] = max(
+            0.0, cash_by_currency.get("CAD", 0.0) + received_cad - cost_native
+        )
         return
 
-    raise ValueError(f"Unsupported conversion path: {source_currency} -> {target_currency}")
-
-
+    raise ValueError(
+        f"Unsupported conversion path: {source_currency} -> {target_currency}"
+    )

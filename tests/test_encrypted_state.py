@@ -2,8 +2,8 @@
 
 import json
 import os
-from pathlib import Path
 import subprocess
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -11,10 +11,10 @@ import pytest
 from src.encrypted_state import (
     EncryptedStateError,
     read_encrypted_json,
+    read_encrypted_text,
     validate_encrypted_state_files,
     write_encrypted_json,
     write_encrypted_text,
-    read_encrypted_text,
 )
 
 
@@ -34,9 +34,10 @@ def test_decrypts_json_through_stdin(state_root):
     token_path.parent.mkdir()
     token_path.write_bytes(b"encrypted-document")
 
-    with patch("src.encrypted_state.subprocess.run", return_value=_completed(
-        b'{"refresh_token":"decrypted-token"}\n'
-    )) as run:
+    with patch(
+        "src.encrypted_state.subprocess.run",
+        return_value=_completed(b'{"refresh_token":"decrypted-token"}\n'),
+    ) as run:
         result = read_encrypted_json(token_path)
 
     assert result == {"refresh_token": "decrypted-token"}
@@ -72,12 +73,14 @@ def test_failed_encryption_preserves_existing_ciphertext(state_root):
     token_path.parent.mkdir()
     token_path.write_bytes(b"current-ciphertext")
 
-    with patch(
-        "src.encrypted_state.subprocess.run",
-        return_value=_completed(b"", returncode=1, stderr=b"sensitive diagnostic"),
+    with (
+        patch(
+            "src.encrypted_state.subprocess.run",
+            return_value=_completed(b"", returncode=1, stderr=b"sensitive diagnostic"),
+        ),
+        pytest.raises(EncryptedStateError) as exc_info,
     ):
-        with pytest.raises(EncryptedStateError) as exc_info:
-            write_encrypted_json(token_path, {"refresh_token": "rotated-token"})
+        write_encrypted_json(token_path, {"refresh_token": "rotated-token"})
 
     assert token_path.read_bytes() == b"current-ciphertext"
     assert "rotated-token" not in str(exc_info.value)
@@ -169,7 +172,9 @@ def test_real_sops_round_trip_keeps_plaintext_off_disk(tmp_path, monkeypatch):
         return result
 
     monkeypatch.setattr("src.encrypted_state.get_state_root", lambda: tmp_path)
-    monkeypatch.setattr("src.encrypted_state.subprocess.run", run_sops_with_test_diagnostics)
+    monkeypatch.setattr(
+        "src.encrypted_state.subprocess.run", run_sops_with_test_diagnostics
+    )
     monkeypatch.setenv("SOPS_EXECUTABLE", sops_executable)
 
     token_path = tmp_path / "tokens" / "account.json"

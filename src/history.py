@@ -8,8 +8,8 @@ the highest intraday value.
 """
 
 import json
-from datetime import date
 from dataclasses import dataclass
+from datetime import UTC, date, datetime
 
 from src.encrypted_state import read_encrypted_text, write_encrypted_text
 from src.paths import get_history_file
@@ -46,7 +46,7 @@ def record_value(total_value_cad: float) -> None:
     Args:
         total_value_cad: Current total portfolio value in CAD.
     """
-    today = date.today().isoformat()
+    today = datetime.now(UTC).astimezone().date().isoformat()
     history = _load_history()
 
     rounded_value = round(total_value_cad, 2)
@@ -83,7 +83,7 @@ def get_all_time_high(current_value: float) -> AllTimeHigh:
         AllTimeHigh with the peak value, date, and drawdown from ATH.
     """
     history = _load_history()
-    today = date.today().isoformat()
+    today = datetime.now(UTC).astimezone().date().isoformat()
 
     # Find the historical best (if any)
     if history:
@@ -119,7 +119,7 @@ def get_year_to_date_history(current_value: float) -> list[HistoryPoint]:
 
     Missing dates are not synthesized; only recorded values are returned.
     """
-    today = date.today()
+    today = datetime.now(UTC).astimezone().date()
     start_of_year = date(today.year, 1, 1)
 
     latest_by_day: dict[date, tuple[float, float]] = {}
@@ -169,7 +169,9 @@ def _load_history() -> list:
             if line:
                 entries.append(json.loads(line))
     except json.JSONDecodeError as exc:
-        raise ValueError(f"Decrypted portfolio history at '{history_file}' is invalid.") from exc
+        raise ValueError(
+            f"Decrypted portfolio history at '{history_file}' is invalid."
+        ) from exc
     return entries
 
 
@@ -177,7 +179,6 @@ def _save_history(history: list) -> None:
     """Save history as encrypted JSONL without writing plaintext to disk."""
     history_file = get_history_file()
     content = "".join(
-        json.dumps(entry, separators=(",", ":")) + "\n"
-        for entry in history
+        json.dumps(entry, separators=(",", ":")) + "\n" for entry in history
     )
     write_encrypted_text(history_file, content)

@@ -4,11 +4,11 @@ Questrade API client for authentication and data retrieval.
 Handles OAuth token refresh, account listing, positions, balances, and market quotes.
 """
 
-import requests
 from pathlib import Path
 
-from src.encrypted_state import read_encrypted_json, write_encrypted_json
+import requests
 
+from src.encrypted_state import read_encrypted_json, write_encrypted_json
 
 QUESTRADE_AUTH_URL = "https://login.questrade.com/oauth2/token"
 
@@ -73,7 +73,7 @@ class QuestradeClient:
         """Return authorization headers for API requests."""
         return {"Authorization": f"Bearer {self.access_token}"}
 
-    def _get(self, endpoint: str, params: dict = None) -> dict:
+    def _get(self, endpoint: str, params: dict | None = None) -> dict:
         """
         Make a GET request to the Questrade API.
 
@@ -138,7 +138,7 @@ class QuestradeClient:
         if not symbol_ids:
             return []
         ids_str = ",".join(str(sid) for sid in symbol_ids)
-        data = self._get(f"v1/markets/quotes", params={"ids": ids_str})
+        data = self._get("v1/markets/quotes", params={"ids": ids_str})
         return data.get("quotes", [])
 
     def get_symbols(self, symbol_ids: list) -> list:
@@ -157,7 +157,9 @@ class QuestradeClient:
         data = self._get("v1/symbols", params={"ids": ids_str})
         return data.get("symbols", [])
 
-    def get_candles(self, symbol_id: int, start_time: str, end_time: str, interval: str = "OneDay") -> list:
+    def get_candles(
+        self, symbol_id: int, start_time: str, end_time: str, interval: str = "OneDay"
+    ) -> list:
         """
         Get historical OHLC candlestick data for a symbol.
 

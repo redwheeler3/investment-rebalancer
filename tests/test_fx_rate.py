@@ -53,7 +53,7 @@ def test_fetch_dlr_quotes_accepts_below_parity_rate():
     # below-1.0 rate is legitimate and must NOT be rejected by the sanity band.
     client = FakeQuestradeClient(
         {
-            "DLR.TO": {"bidPrice": 9.99, "askPrice": 10.01},     # mid 10.00
+            "DLR.TO": {"bidPrice": 9.99, "askPrice": 10.01},  # mid 10.00
             "DLR.U.TO": {"bidPrice": 10.99, "askPrice": 11.01},  # mid 11.00
         }
     )
@@ -86,7 +86,7 @@ def test_fetch_dlr_quotes_rejects_rate_below_floor():
     # bad quote data — reject it.
     client = FakeQuestradeClient(
         {
-            "DLR.TO": {"bidPrice": 1.99, "askPrice": 2.01},     # mid 2.00
+            "DLR.TO": {"bidPrice": 1.99, "askPrice": 2.01},  # mid 2.00
             "DLR.U.TO": {"bidPrice": 9.99, "askPrice": 10.01},  # mid 10.00 → rate 0.2
         }
     )

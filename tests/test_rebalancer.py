@@ -1,17 +1,16 @@
 """Tests for the rebalancer module — sizing math, trade netting, and sell allocation."""
 
+from src.models import TradeRecommendation
+from src.portfolio import AccountInfo, Position
 from src.rebalancer import (
-    shares_for_drift_gap,
-    max_sellable_without_crossing_target,
-    net_trades,
+    _has_underweight_alternatives,
+    allocate_sell,
     find_accounts_for_symbol,
     get_position_quantity,
-    allocate_sell,
-    _has_underweight_alternatives,
+    max_sellable_without_crossing_target,
+    net_trades,
+    shares_for_drift_gap,
 )
-from src.portfolio import AccountInfo, Position
-from src.models import TradeRecommendation
-
 
 # ══════════════════════════════════════════════════════════════════
 # Sizing math
@@ -88,22 +87,30 @@ class TestMaxSellableWithoutCrossingTarget:
         """2.3% overweight, each share = 0.0114% drift → floor(2.3/0.0114) shares."""
         # per_share_drift = ($114.14 / $1M) × 100 = 0.011414%
         # max = floor(2.3 / 0.011414) = 201
-        result = max_sellable_without_crossing_target(1000000.0, 2.3, 114.14, "CAD", 1.36)
+        result = max_sellable_without_crossing_target(
+            1000000.0, 2.3, 114.14, "CAD", 1.36
+        )
         assert result == 201
 
     def test_zero_drift_returns_zero(self):
-        result = max_sellable_without_crossing_target(1000000.0, 0.0, 100.0, "CAD", 1.36)
+        result = max_sellable_without_crossing_target(
+            1000000.0, 0.0, 100.0, "CAD", 1.36
+        )
         assert result == 0
 
     def test_negative_drift_returns_zero(self):
         """Can't sell an underweight position."""
-        result = max_sellable_without_crossing_target(1000000.0, -1.0, 100.0, "CAD", 1.36)
+        result = max_sellable_without_crossing_target(
+            1000000.0, -1.0, 100.0, "CAD", 1.36
+        )
         assert result == 0
 
     def test_usd_position(self):
         # per_share_drift = ($512 × 1.36 / $1M) × 100 = 0.069632%
         # max = floor(5.0 / 0.069632) = 71
-        result = max_sellable_without_crossing_target(1000000.0, 5.0, 512.0, "USD", 1.36)
+        result = max_sellable_without_crossing_target(
+            1000000.0, 5.0, 512.0, "USD", 1.36
+        )
         assert result == 71
 
 
@@ -116,10 +123,16 @@ class TestNetTrades:
     def test_single_buy_passes_through(self):
         trades = [
             TradeRecommendation(
-                symbol="VCN.TO", action="BUY", quantity=100,
-                account_number="11111", account_type="TFSA",
-                owner="Alice", price=50.0, currency="CAD",
-                estimated_value=5000.0, note="Underweight buy",
+                symbol="VCN.TO",
+                action="BUY",
+                quantity=100,
+                account_number="11111",
+                account_type="TFSA",
+                owner="Alice",
+                price=50.0,
+                currency="CAD",
+                estimated_value=5000.0,
+                note="Underweight buy",
             )
         ]
         result = net_trades(trades)
@@ -130,10 +143,16 @@ class TestNetTrades:
     def test_single_sell_passes_through(self):
         trades = [
             TradeRecommendation(
-                symbol="VCN.TO", action="SELL", quantity=50,
-                account_number="11111", account_type="TFSA",
-                owner="Alice", price=50.0, currency="CAD",
-                estimated_value=2500.0, note="Overweight sell",
+                symbol="VCN.TO",
+                action="SELL",
+                quantity=50,
+                account_number="11111",
+                account_type="TFSA",
+                owner="Alice",
+                price=50.0,
+                currency="CAD",
+                estimated_value=2500.0,
+                note="Overweight sell",
             )
         ]
         result = net_trades(trades)
@@ -145,15 +164,25 @@ class TestNetTrades:
         """Equal buy and sell of same symbol/account net to nothing."""
         trades = [
             TradeRecommendation(
-                symbol="VCN.TO", action="BUY", quantity=100,
-                account_number="11111", account_type="TFSA",
-                owner="Alice", price=50.0, currency="CAD",
+                symbol="VCN.TO",
+                action="BUY",
+                quantity=100,
+                account_number="11111",
+                account_type="TFSA",
+                owner="Alice",
+                price=50.0,
+                currency="CAD",
                 estimated_value=5000.0,
             ),
             TradeRecommendation(
-                symbol="VCN.TO", action="SELL", quantity=100,
-                account_number="11111", account_type="TFSA",
-                owner="Alice", price=50.0, currency="CAD",
+                symbol="VCN.TO",
+                action="SELL",
+                quantity=100,
+                account_number="11111",
+                account_type="TFSA",
+                owner="Alice",
+                price=50.0,
+                currency="CAD",
                 estimated_value=5000.0,
             ),
         ]
@@ -164,16 +193,28 @@ class TestNetTrades:
         """Sell 50 + Buy 150 = Net Buy 100."""
         trades = [
             TradeRecommendation(
-                symbol="VCN.TO", action="SELL", quantity=50,
-                account_number="11111", account_type="TFSA",
-                owner="Alice", price=50.0, currency="CAD",
-                estimated_value=2500.0, note="Funding sell",
+                symbol="VCN.TO",
+                action="SELL",
+                quantity=50,
+                account_number="11111",
+                account_type="TFSA",
+                owner="Alice",
+                price=50.0,
+                currency="CAD",
+                estimated_value=2500.0,
+                note="Funding sell",
             ),
             TradeRecommendation(
-                symbol="VCN.TO", action="BUY", quantity=150,
-                account_number="11111", account_type="TFSA",
-                owner="Alice", price=51.0, currency="CAD",
-                estimated_value=7650.0, note="Underweight buy",
+                symbol="VCN.TO",
+                action="BUY",
+                quantity=150,
+                account_number="11111",
+                account_type="TFSA",
+                owner="Alice",
+                price=51.0,
+                currency="CAD",
+                estimated_value=7650.0,
+                note="Underweight buy",
             ),
         ]
         result = net_trades(trades)
@@ -186,16 +227,28 @@ class TestNetTrades:
         """Sell 200 + Buy 50 = Net Sell 150."""
         trades = [
             TradeRecommendation(
-                symbol="VCN.TO", action="SELL", quantity=200,
-                account_number="11111", account_type="TFSA",
-                owner="Alice", price=50.0, currency="CAD",
-                estimated_value=10000.0, note="Overweight sell",
+                symbol="VCN.TO",
+                action="SELL",
+                quantity=200,
+                account_number="11111",
+                account_type="TFSA",
+                owner="Alice",
+                price=50.0,
+                currency="CAD",
+                estimated_value=10000.0,
+                note="Overweight sell",
             ),
             TradeRecommendation(
-                symbol="VCN.TO", action="BUY", quantity=50,
-                account_number="11111", account_type="TFSA",
-                owner="Alice", price=51.0, currency="CAD",
-                estimated_value=2550.0, note="Deploy cash (underweight)",
+                symbol="VCN.TO",
+                action="BUY",
+                quantity=50,
+                account_number="11111",
+                account_type="TFSA",
+                owner="Alice",
+                price=51.0,
+                currency="CAD",
+                estimated_value=2550.0,
+                note="Deploy cash (underweight)",
             ),
         ]
         result = net_trades(trades)
@@ -208,15 +261,25 @@ class TestNetTrades:
         """Same symbol but different accounts remain separate."""
         trades = [
             TradeRecommendation(
-                symbol="VCN.TO", action="BUY", quantity=100,
-                account_number="11111", account_type="TFSA",
-                owner="Alice", price=50.0, currency="CAD",
+                symbol="VCN.TO",
+                action="BUY",
+                quantity=100,
+                account_number="11111",
+                account_type="TFSA",
+                owner="Alice",
+                price=50.0,
+                currency="CAD",
                 estimated_value=5000.0,
             ),
             TradeRecommendation(
-                symbol="VCN.TO", action="SELL", quantity=50,
-                account_number="22222", account_type="RRSP",
-                owner="Alice", price=50.0, currency="CAD",
+                symbol="VCN.TO",
+                action="SELL",
+                quantity=50,
+                account_number="22222",
+                account_type="RRSP",
+                owner="Alice",
+                price=50.0,
+                currency="CAD",
                 estimated_value=2500.0,
             ),
         ]
@@ -227,16 +290,28 @@ class TestNetTrades:
         """Multiple buys of same symbol/account combine."""
         trades = [
             TradeRecommendation(
-                symbol="VCN.TO", action="BUY", quantity=100,
-                account_number="11111", account_type="TFSA",
-                owner="Alice", price=50.0, currency="CAD",
-                estimated_value=5000.0, note="Underweight buy",
+                symbol="VCN.TO",
+                action="BUY",
+                quantity=100,
+                account_number="11111",
+                account_type="TFSA",
+                owner="Alice",
+                price=50.0,
+                currency="CAD",
+                estimated_value=5000.0,
+                note="Underweight buy",
             ),
             TradeRecommendation(
-                symbol="VCN.TO", action="BUY", quantity=25,
-                account_number="11111", account_type="TFSA",
-                owner="Alice", price=50.0, currency="CAD",
-                estimated_value=1250.0, note="Deploy cash (underweight)",
+                symbol="VCN.TO",
+                action="BUY",
+                quantity=25,
+                account_number="11111",
+                account_type="TFSA",
+                owner="Alice",
+                price=50.0,
+                currency="CAD",
+                estimated_value=1250.0,
+                note="Deploy cash (underweight)",
             ),
         ]
         result = net_trades(trades)
@@ -253,34 +328,62 @@ class TestNetTrades:
 def _make_accounts():
     """Create test accounts with different holdings."""
     acct_a = AccountInfo(
-        number="11111", account_type="TFSA",
-        client_account_type="Individual", owner="Alice",
+        number="11111",
+        account_type="TFSA",
+        client_account_type="Individual",
+        owner="Alice",
         positions=[
             Position(
-                symbol="VCN.TO", symbol_id=1, quantity=1000,
-                market_value=50000.0, current_price=50.0, currency="CAD",
-                account_number="11111", account_type="TFSA", owner="Alice",
+                symbol="VCN.TO",
+                symbol_id=1,
+                quantity=1000,
+                market_value=50000.0,
+                current_price=50.0,
+                currency="CAD",
+                account_number="11111",
+                account_type="TFSA",
+                owner="Alice",
             ),
             Position(
-                symbol="VUN.TO", symbol_id=2, quantity=500,
-                market_value=30000.0, current_price=60.0, currency="CAD",
-                account_number="11111", account_type="TFSA", owner="Alice",
+                symbol="VUN.TO",
+                symbol_id=2,
+                quantity=500,
+                market_value=30000.0,
+                current_price=60.0,
+                currency="CAD",
+                account_number="11111",
+                account_type="TFSA",
+                owner="Alice",
             ),
         ],
     )
     acct_b = AccountInfo(
-        number="22222", account_type="RRSP",
-        client_account_type="Individual", owner="Bob",
+        number="22222",
+        account_type="RRSP",
+        client_account_type="Individual",
+        owner="Bob",
         positions=[
             Position(
-                symbol="VCN.TO", symbol_id=1, quantity=2000,
-                market_value=100000.0, current_price=50.0, currency="CAD",
-                account_number="22222", account_type="RRSP", owner="Bob",
+                symbol="VCN.TO",
+                symbol_id=1,
+                quantity=2000,
+                market_value=100000.0,
+                current_price=50.0,
+                currency="CAD",
+                account_number="22222",
+                account_type="RRSP",
+                owner="Bob",
             ),
             Position(
-                symbol="XBB.TO", symbol_id=3, quantity=800,
-                market_value=24000.0, current_price=30.0, currency="CAD",
-                account_number="22222", account_type="RRSP", owner="Bob",
+                symbol="XBB.TO",
+                symbol_id=3,
+                quantity=800,
+                market_value=24000.0,
+                current_price=30.0,
+                currency="CAD",
+                account_number="22222",
+                account_type="RRSP",
+                owner="Bob",
             ),
         ],
     )
@@ -326,21 +429,30 @@ class TestHasUnderweightAlternatives:
         # VUN.TO is only -0.2% underweight — well inside a 0.5% threshold.
         drifts = {"VCN.TO": 0.6, "VUN.TO": -0.2}
         assert _has_underweight_alternatives(
-            accounts[0], "VCN.TO", drifts, set(),
+            accounts[0],
+            "VCN.TO",
+            drifts,
+            set(),
         )
 
     def test_no_underweight_positions_returns_false(self):
         accounts = _make_accounts()
         drifts = {"VCN.TO": 0.6, "VUN.TO": 0.1}
         assert not _has_underweight_alternatives(
-            accounts[0], "VCN.TO", drifts, set(),
+            accounts[0],
+            "VCN.TO",
+            drifts,
+            set(),
         )
 
     def test_transient_alternative_ignored(self):
         accounts = _make_accounts()
         drifts = {"VCN.TO": 0.6, "VUN.TO": -0.2}
         assert not _has_underweight_alternatives(
-            accounts[0], "VCN.TO", drifts, {"VUN.TO"},
+            accounts[0],
+            "VCN.TO",
+            drifts,
+            {"VUN.TO"},
         )
 
 
@@ -473,8 +585,8 @@ class TestAllocateSell:
 # Full planner integration tests
 # ══════════════════════════════════════════════════════════════════
 
-from src.rebalancer import calculate_trades, CashLedger
-from src.portfolio import PortfolioSummary, HoldingSummary
+from src.portfolio import HoldingSummary, PortfolioSummary
+from src.rebalancer import CashLedger, calculate_trades
 
 
 def _build_test_portfolio(
@@ -506,19 +618,32 @@ def _build_test_portfolio(
             price = pos_spec["price"]
             currency = pos_spec["currency"]
             market_value = qty * price
-            value_cad = market_value * usd_to_cad_rate if currency == "USD" else market_value
+            value_cad = (
+                market_value * usd_to_cad_rate if currency == "USD" else market_value
+            )
 
-            positions.append(Position(
-                symbol=symbol, symbol_id=i + 1, quantity=qty,
-                market_value=market_value, current_price=price,
-                currency=currency, account_number=acct_spec["number"],
-                account_type=acct_spec["type"], owner=acct_spec["owner"],
-            ))
+            positions.append(
+                Position(
+                    symbol=symbol,
+                    symbol_id=i + 1,
+                    quantity=qty,
+                    market_value=market_value,
+                    current_price=price,
+                    currency=currency,
+                    account_number=acct_spec["number"],
+                    account_type=acct_spec["type"],
+                    owner=acct_spec["owner"],
+                )
+            )
 
             if symbol not in holdings:
                 holdings[symbol] = HoldingSummary(
-                    value_cad=0.0, total_quantity=0, current_price=price,
-                    currency=currency, bid_price=price, ask_price=price,
+                    value_cad=0.0,
+                    total_quantity=0,
+                    current_price=price,
+                    currency=currency,
+                    bid_price=price,
+                    ask_price=price,
                 )
             holdings[symbol].value_cad += value_cad
             holdings[symbol].total_quantity += qty
@@ -530,15 +655,17 @@ def _build_test_portfolio(
         total_cash_usd += cash_usd
         total_value_cad += cash_cad + cash_usd * usd_to_cad_rate
 
-        accounts.append(AccountInfo(
-            number=acct_spec["number"],
-            account_type=acct_spec["type"],
-            client_account_type="Individual",
-            owner=acct_spec["owner"],
-            positions=positions,
-            cash_cad=cash_cad,
-            cash_usd=cash_usd,
-        ))
+        accounts.append(
+            AccountInfo(
+                number=acct_spec["number"],
+                account_type=acct_spec["type"],
+                client_account_type="Individual",
+                owner=acct_spec["owner"],
+                positions=positions,
+                cash_cad=cash_cad,
+                cash_usd=cash_usd,
+            )
+        )
 
     return PortfolioSummary(
         accounts=accounts,
@@ -554,14 +681,31 @@ class TestPlannerOverweightSells:
 
     def test_sells_overweight_symbol(self):
         """A symbol significantly over target should generate a sell."""
-        portfolio = _build_test_portfolio([{
-            "number": "11111", "type": "TFSA", "owner": "Alice",
-            "cash_cad": 200.0, "cash_usd": 0.0,
-            "positions": [
-                {"symbol": "VCN.TO", "qty": 600, "price": 50.0, "currency": "CAD"},
-                {"symbol": "VUN.TO", "qty": 200, "price": 60.0, "currency": "CAD"},
-            ],
-        }])
+        portfolio = _build_test_portfolio(
+            [
+                {
+                    "number": "11111",
+                    "type": "TFSA",
+                    "owner": "Alice",
+                    "cash_cad": 200.0,
+                    "cash_usd": 0.0,
+                    "positions": [
+                        {
+                            "symbol": "VCN.TO",
+                            "qty": 600,
+                            "price": 50.0,
+                            "currency": "CAD",
+                        },
+                        {
+                            "symbol": "VUN.TO",
+                            "qty": 200,
+                            "price": 60.0,
+                            "currency": "CAD",
+                        },
+                    ],
+                }
+            ]
+        )
         # VCN.TO = 30000, VUN.TO = 12000, total ≈ 42200
         # Target: VCN.TO 50%, VUN.TO 50%
         # Actual: VCN.TO ≈ 71%, VUN.TO ≈ 28.4% → VCN.TO is way overweight
@@ -578,14 +722,31 @@ class TestPlannerOverweightSells:
 
     def test_no_trades_when_balanced(self):
         """A perfectly balanced portfolio should produce no trades."""
-        portfolio = _build_test_portfolio([{
-            "number": "11111", "type": "TFSA", "owner": "Alice",
-            "cash_cad": 0.0, "cash_usd": 0.0,
-            "positions": [
-                {"symbol": "VCN.TO", "qty": 1000, "price": 50.0, "currency": "CAD"},
-                {"symbol": "VUN.TO", "qty": 1000, "price": 50.0, "currency": "CAD"},
-            ],
-        }])
+        portfolio = _build_test_portfolio(
+            [
+                {
+                    "number": "11111",
+                    "type": "TFSA",
+                    "owner": "Alice",
+                    "cash_cad": 0.0,
+                    "cash_usd": 0.0,
+                    "positions": [
+                        {
+                            "symbol": "VCN.TO",
+                            "qty": 1000,
+                            "price": 50.0,
+                            "currency": "CAD",
+                        },
+                        {
+                            "symbol": "VUN.TO",
+                            "qty": 1000,
+                            "price": 50.0,
+                            "currency": "CAD",
+                        },
+                    ],
+                }
+            ]
+        )
         targets = {"VCN.TO": 50.0, "VUN.TO": 50.0, "CAD": 0.0, "USD": 0.0}
 
         trades = calculate_trades(portfolio, targets, 1.36, 10.49, 0.5, set(), None)
@@ -593,14 +754,31 @@ class TestPlannerOverweightSells:
 
     def test_drift_threshold_suppresses_small_trades(self):
         """Symbols within the drift threshold should not trigger trades."""
-        portfolio = _build_test_portfolio([{
-            "number": "11111", "type": "TFSA", "owner": "Alice",
-            "cash_cad": 0.0, "cash_usd": 0.0,
-            "positions": [
-                {"symbol": "VCN.TO", "qty": 505, "price": 100.0, "currency": "CAD"},
-                {"symbol": "VUN.TO", "qty": 495, "price": 100.0, "currency": "CAD"},
-            ],
-        }])
+        portfolio = _build_test_portfolio(
+            [
+                {
+                    "number": "11111",
+                    "type": "TFSA",
+                    "owner": "Alice",
+                    "cash_cad": 0.0,
+                    "cash_usd": 0.0,
+                    "positions": [
+                        {
+                            "symbol": "VCN.TO",
+                            "qty": 505,
+                            "price": 100.0,
+                            "currency": "CAD",
+                        },
+                        {
+                            "symbol": "VUN.TO",
+                            "qty": 495,
+                            "price": 100.0,
+                            "currency": "CAD",
+                        },
+                    ],
+                }
+            ]
+        )
         # VCN.TO ≈ 50.5%, VUN.TO ≈ 49.5% → drift is ±0.5%
         targets = {"VCN.TO": 50.0, "VUN.TO": 50.0, "CAD": 0.0, "USD": 0.0}
 
@@ -614,14 +792,31 @@ class TestPlannerCashDeployment:
 
     def test_deploys_cash_into_underweight(self):
         """Pre-existing cash in an account should be deployed."""
-        portfolio = _build_test_portfolio([{
-            "number": "11111", "type": "TFSA", "owner": "Alice",
-            "cash_cad": 5000.0, "cash_usd": 0.0,
-            "positions": [
-                {"symbol": "VCN.TO", "qty": 1000, "price": 50.0, "currency": "CAD"},
-                {"symbol": "VUN.TO", "qty": 800, "price": 50.0, "currency": "CAD"},
-            ],
-        }])
+        portfolio = _build_test_portfolio(
+            [
+                {
+                    "number": "11111",
+                    "type": "TFSA",
+                    "owner": "Alice",
+                    "cash_cad": 5000.0,
+                    "cash_usd": 0.0,
+                    "positions": [
+                        {
+                            "symbol": "VCN.TO",
+                            "qty": 1000,
+                            "price": 50.0,
+                            "currency": "CAD",
+                        },
+                        {
+                            "symbol": "VUN.TO",
+                            "qty": 800,
+                            "price": 50.0,
+                            "currency": "CAD",
+                        },
+                    ],
+                }
+            ]
+        )
         # VCN.TO = 50000, VUN.TO = 40000, cash = 5000, total = 95000
         # VCN.TO ≈ 52.6%, VUN.TO ≈ 42.1%
         # With targets 50/50: VCN.TO is over, VUN.TO is under
@@ -635,14 +830,31 @@ class TestPlannerCashDeployment:
 
     def test_deploys_idle_cash_even_when_no_starter_trade_needed(self):
         """Cash deployment should run even when asset drift is within threshold."""
-        portfolio = _build_test_portfolio([{
-            "number": "11111", "type": "Margin", "owner": "Alice",
-            "cash_cad": 6000.0, "cash_usd": 0.0,
-            "positions": [
-                {"symbol": "VSP.TO", "qty": 10000, "price": 100.0, "currency": "CAD"},
-                {"symbol": "ZMMK.TO", "qty": 10000, "price": 100.0, "currency": "CAD"},
-            ],
-        }])
+        portfolio = _build_test_portfolio(
+            [
+                {
+                    "number": "11111",
+                    "type": "Margin",
+                    "owner": "Alice",
+                    "cash_cad": 6000.0,
+                    "cash_usd": 0.0,
+                    "positions": [
+                        {
+                            "symbol": "VSP.TO",
+                            "qty": 10000,
+                            "price": 100.0,
+                            "currency": "CAD",
+                        },
+                        {
+                            "symbol": "ZMMK.TO",
+                            "qty": 10000,
+                            "price": 100.0,
+                            "currency": "CAD",
+                        },
+                    ],
+                }
+            ]
+        )
         # Total = 2,006,000. Each holding starts at about 49.85%.
         # VSP.TO is slightly underweight, but not enough to trigger a starter buy.
         targets = {"VSP.TO": 49.9, "ZMMK.TO": 49.8, "CAD": 0.0, "USD": 0.0}
@@ -666,13 +878,26 @@ class TestPlannerCashDeployment:
         for the post-rebalance sweep instead.
         """
         usd_to_cad_rate = 1.36
-        portfolio = _build_test_portfolio([{
-            "number": "11111", "type": "RRSP", "owner": "Alice",
-            "cash_cad": 0.0, "cash_usd": 1000.0,
-            "positions": [
-                {"symbol": "VSP.TO", "qty": 1000, "price": 100.0, "currency": "CAD"},
+        portfolio = _build_test_portfolio(
+            [
+                {
+                    "number": "11111",
+                    "type": "RRSP",
+                    "owner": "Alice",
+                    "cash_cad": 0.0,
+                    "cash_usd": 1000.0,
+                    "positions": [
+                        {
+                            "symbol": "VSP.TO",
+                            "qty": 1000,
+                            "price": 100.0,
+                            "currency": "CAD",
+                        },
+                    ],
+                }
             ],
-        }], usd_to_cad_rate)
+            usd_to_cad_rate,
+        )
         vsp_target = 100000.0 / portfolio.total_value_cad * 100
         targets = {
             "VSP.TO": vsp_target,
@@ -680,7 +905,9 @@ class TestPlannerCashDeployment:
             "CAD": 0.0,
         }
 
-        trades = calculate_trades(portfolio, targets, usd_to_cad_rate, 10.49, 0.5, set(), None)
+        trades = calculate_trades(
+            portfolio, targets, usd_to_cad_rate, 10.49, 0.5, set(), None
+        )
 
         assert trades == []
 
@@ -695,24 +922,52 @@ class TestPlannerCashDeployment:
         The best-available deployment therefore converts the USD and buys VCN,
         routing the cash to where it is most useful.
         """
-        portfolio = _build_test_portfolio([
-            {
-                "number": "1", "type": "RRSP", "owner": "Alice",
-                "cash_cad": 0.0, "cash_usd": 5000.0,
-                "positions": [
-                    {"symbol": "IVV", "qty": 400, "price": 100.0, "currency": "USD"},
-                    {"symbol": "VCN.TO", "qty": 500, "price": 50.0, "currency": "CAD"},
-                ],
-            },
-            {
-                "number": "2", "type": "TFSA", "owner": "Alice",
-                "cash_cad": 0.0, "cash_usd": 0.0,
-                "positions": [
-                    {"symbol": "VCN.TO", "qty": 2000, "price": 50.0, "currency": "CAD"},
-                    {"symbol": "VUN.TO", "qty": 100, "price": 60.0, "currency": "CAD"},
-                ],
-            },
-        ])
+        portfolio = _build_test_portfolio(
+            [
+                {
+                    "number": "1",
+                    "type": "RRSP",
+                    "owner": "Alice",
+                    "cash_cad": 0.0,
+                    "cash_usd": 5000.0,
+                    "positions": [
+                        {
+                            "symbol": "IVV",
+                            "qty": 400,
+                            "price": 100.0,
+                            "currency": "USD",
+                        },
+                        {
+                            "symbol": "VCN.TO",
+                            "qty": 500,
+                            "price": 50.0,
+                            "currency": "CAD",
+                        },
+                    ],
+                },
+                {
+                    "number": "2",
+                    "type": "TFSA",
+                    "owner": "Alice",
+                    "cash_cad": 0.0,
+                    "cash_usd": 0.0,
+                    "positions": [
+                        {
+                            "symbol": "VCN.TO",
+                            "qty": 2000,
+                            "price": 50.0,
+                            "currency": "CAD",
+                        },
+                        {
+                            "symbol": "VUN.TO",
+                            "qty": 100,
+                            "price": 60.0,
+                            "currency": "CAD",
+                        },
+                    ],
+                },
+            ]
+        )
         targets = {"IVV": 40.0, "VCN.TO": 35.0, "VUN.TO": 25.0, "CAD": 0.0, "USD": 0.0}
 
         trades = calculate_trades(portfolio, targets, 1.36, 10.49, 0.5, set(), None)
@@ -720,7 +975,8 @@ class TestPlannerCashDeployment:
         # A cross-currency best-available buy fires, routing account 1's USD
         # into VCN.TO (its high-cascade CAD holding).
         fx_buys = [
-            t for t in trades
+            t
+            for t in trades
             if t.action == "BUY" and t.requires_fx and t.account_number == "1"
         ]
         assert fx_buys, "expected a cross-currency best-available buy in account 1"
@@ -728,8 +984,11 @@ class TestPlannerCashDeployment:
     def test_zero_value_portfolio_returns_no_trades(self):
         """Empty portfolio should produce no trades."""
         portfolio = PortfolioSummary(
-            accounts=[], holdings={}, total_value_cad=0.0,
-            cash_cad_total=0.0, cash_usd_total=0.0,
+            accounts=[],
+            holdings={},
+            total_value_cad=0.0,
+            cash_cad_total=0.0,
+            cash_usd_total=0.0,
         )
         targets = {"VCN.TO": 100.0}
         trades = calculate_trades(portfolio, targets, 1.36, 10.49, 0.5, set(), None)
@@ -741,23 +1000,46 @@ class TestPlannerMultiAccount:
 
     def test_sells_from_account_with_alternatives(self):
         """Account with underweight alternatives should be preferred for sells."""
-        portfolio = _build_test_portfolio([
-            {
-                "number": "11111", "type": "TFSA", "owner": "Alice",
-                "cash_cad": 0.0, "cash_usd": 0.0,
-                "positions": [
-                    {"symbol": "VCN.TO", "qty": 2000, "price": 50.0, "currency": "CAD"},
-                    {"symbol": "VUN.TO", "qty": 100, "price": 60.0, "currency": "CAD"},
-                ],
-            },
-            {
-                "number": "22222", "type": "RRSP", "owner": "Alice",
-                "cash_cad": 0.0, "cash_usd": 0.0,
-                "positions": [
-                    {"symbol": "VCN.TO", "qty": 1000, "price": 50.0, "currency": "CAD"},
-                ],
-            },
-        ])
+        portfolio = _build_test_portfolio(
+            [
+                {
+                    "number": "11111",
+                    "type": "TFSA",
+                    "owner": "Alice",
+                    "cash_cad": 0.0,
+                    "cash_usd": 0.0,
+                    "positions": [
+                        {
+                            "symbol": "VCN.TO",
+                            "qty": 2000,
+                            "price": 50.0,
+                            "currency": "CAD",
+                        },
+                        {
+                            "symbol": "VUN.TO",
+                            "qty": 100,
+                            "price": 60.0,
+                            "currency": "CAD",
+                        },
+                    ],
+                },
+                {
+                    "number": "22222",
+                    "type": "RRSP",
+                    "owner": "Alice",
+                    "cash_cad": 0.0,
+                    "cash_usd": 0.0,
+                    "positions": [
+                        {
+                            "symbol": "VCN.TO",
+                            "qty": 1000,
+                            "price": 50.0,
+                            "currency": "CAD",
+                        },
+                    ],
+                },
+            ]
+        )
         # VCN.TO total = 150000, VUN.TO = 6000, total = 156000
         # Target: VCN.TO 50%, VUN.TO 50%
         # VCN.TO is massively overweight, VUN.TO massively underweight
@@ -773,22 +1055,40 @@ class TestPlannerMultiAccount:
 
     def test_only_buys_in_accounts_that_hold_symbol(self):
         """Rule 5: can only buy symbols already held in the account."""
-        portfolio = _build_test_portfolio([
-            {
-                "number": "11111", "type": "TFSA", "owner": "Alice",
-                "cash_cad": 50000.0, "cash_usd": 0.0,
-                "positions": [
-                    {"symbol": "VCN.TO", "qty": 1000, "price": 50.0, "currency": "CAD"},
-                ],
-            },
-            {
-                "number": "22222", "type": "RRSP", "owner": "Alice",
-                "cash_cad": 0.0, "cash_usd": 0.0,
-                "positions": [
-                    {"symbol": "VUN.TO", "qty": 500, "price": 60.0, "currency": "CAD"},
-                ],
-            },
-        ])
+        portfolio = _build_test_portfolio(
+            [
+                {
+                    "number": "11111",
+                    "type": "TFSA",
+                    "owner": "Alice",
+                    "cash_cad": 50000.0,
+                    "cash_usd": 0.0,
+                    "positions": [
+                        {
+                            "symbol": "VCN.TO",
+                            "qty": 1000,
+                            "price": 50.0,
+                            "currency": "CAD",
+                        },
+                    ],
+                },
+                {
+                    "number": "22222",
+                    "type": "RRSP",
+                    "owner": "Alice",
+                    "cash_cad": 0.0,
+                    "cash_usd": 0.0,
+                    "positions": [
+                        {
+                            "symbol": "VUN.TO",
+                            "qty": 500,
+                            "price": 60.0,
+                            "currency": "CAD",
+                        },
+                    ],
+                },
+            ]
+        )
         targets = {"VCN.TO": 50.0, "VUN.TO": 50.0, "CAD": 0.0, "USD": 0.0}
 
         trades = calculate_trades(portfolio, targets, 1.36, 10.49, 0.5, set(), None)
@@ -804,14 +1104,26 @@ class TestPlannerCurrencyPreference:
 
     def test_same_currency_buy_before_cross_currency(self):
         """Given CAD cash and both CAD/USD underweight symbols, buys CAD first."""
-        portfolio = _build_test_portfolio([{
-            "number": "11111", "type": "TFSA", "owner": "Alice",
-            "cash_cad": 20000.0, "cash_usd": 0.0,
-            "positions": [
-                {"symbol": "VCN.TO", "qty": 500, "price": 50.0, "currency": "CAD"},
-                {"symbol": "IVV", "qty": 10, "price": 500.0, "currency": "USD"},
-            ],
-        }])
+        portfolio = _build_test_portfolio(
+            [
+                {
+                    "number": "11111",
+                    "type": "TFSA",
+                    "owner": "Alice",
+                    "cash_cad": 20000.0,
+                    "cash_usd": 0.0,
+                    "positions": [
+                        {
+                            "symbol": "VCN.TO",
+                            "qty": 500,
+                            "price": 50.0,
+                            "currency": "CAD",
+                        },
+                        {"symbol": "IVV", "qty": 10, "price": 500.0, "currency": "USD"},
+                    ],
+                }
+            ]
+        )
         # Total ≈ 25000 + 6800 + 20000 = 51800
         # VCN.TO ≈ 48.3%, IVV ≈ 13.1%, cash ≈ 38.6%
         # Both underweight vs 50/50 target
@@ -826,14 +1138,26 @@ class TestPlannerCurrencyPreference:
 
     def test_cross_currency_used_when_needed(self):
         """When only USD symbols are underweight but cash is CAD, FX is used."""
-        portfolio = _build_test_portfolio([{
-            "number": "11111", "type": "TFSA", "owner": "Alice",
-            "cash_cad": 20000.0, "cash_usd": 0.0,
-            "positions": [
-                {"symbol": "VCN.TO", "qty": 1000, "price": 50.0, "currency": "CAD"},
-                {"symbol": "IVV", "qty": 5, "price": 500.0, "currency": "USD"},
-            ],
-        }])
+        portfolio = _build_test_portfolio(
+            [
+                {
+                    "number": "11111",
+                    "type": "TFSA",
+                    "owner": "Alice",
+                    "cash_cad": 20000.0,
+                    "cash_usd": 0.0,
+                    "positions": [
+                        {
+                            "symbol": "VCN.TO",
+                            "qty": 1000,
+                            "price": 50.0,
+                            "currency": "CAD",
+                        },
+                        {"symbol": "IVV", "qty": 5, "price": 500.0, "currency": "USD"},
+                    ],
+                }
+            ]
+        )
         # VCN.TO = 50000, IVV ≈ 3400, cash = 20000, total ≈ 73400
         # VCN.TO massively overweight, IVV underweight
         targets = {"VCN.TO": 40.0, "IVV": 60.0, "CAD": 0.0, "USD": 0.0}
@@ -851,18 +1175,39 @@ class TestPlannerTransientSymbols:
 
     def test_transient_symbol_excluded(self):
         """Transient symbols should not be bought or sold."""
-        portfolio = _build_test_portfolio([{
-            "number": "11111", "type": "TFSA", "owner": "Alice",
-            "cash_cad": 100.0, "cash_usd": 0.0,
-            "positions": [
-                {"symbol": "VCN.TO", "qty": 1000, "price": 50.0, "currency": "CAD"},
-                {"symbol": "DLR.TO", "qty": 500, "price": 13.79, "currency": "CAD"},
-            ],
-        }])
+        portfolio = _build_test_portfolio(
+            [
+                {
+                    "number": "11111",
+                    "type": "TFSA",
+                    "owner": "Alice",
+                    "cash_cad": 100.0,
+                    "cash_usd": 0.0,
+                    "positions": [
+                        {
+                            "symbol": "VCN.TO",
+                            "qty": 1000,
+                            "price": 50.0,
+                            "currency": "CAD",
+                        },
+                        {
+                            "symbol": "DLR.TO",
+                            "qty": 500,
+                            "price": 13.79,
+                            "currency": "CAD",
+                        },
+                    ],
+                }
+            ]
+        )
         targets = {"VCN.TO": 100.0, "CAD": 0.0, "USD": 0.0}
 
         trades = calculate_trades(
-            portfolio, targets, 1.36, 10.49, 0.5,
+            portfolio,
+            targets,
+            1.36,
+            10.49,
+            0.5,
             transient_symbols={"DLR.TO"},
             dlr_quotes=None,
         )
@@ -877,20 +1222,39 @@ class TestPlannerUnknownSymbols:
 
     def test_unknown_symbol_sold(self):
         """A holding with no target (implicit 0%) should be recommended for sale."""
-        portfolio = _build_test_portfolio([{
-            "number": "11111", "type": "TFSA", "owner": "Alice",
-            "cash_cad": 0.0, "cash_usd": 0.0,
-            "positions": [
-                {"symbol": "VCN.TO", "qty": 800, "price": 50.0, "currency": "CAD"},
-                {"symbol": "RANDOM.TO", "qty": 200, "price": 50.0, "currency": "CAD"},
-            ],
-        }])
+        portfolio = _build_test_portfolio(
+            [
+                {
+                    "number": "11111",
+                    "type": "TFSA",
+                    "owner": "Alice",
+                    "cash_cad": 0.0,
+                    "cash_usd": 0.0,
+                    "positions": [
+                        {
+                            "symbol": "VCN.TO",
+                            "qty": 800,
+                            "price": 50.0,
+                            "currency": "CAD",
+                        },
+                        {
+                            "symbol": "RANDOM.TO",
+                            "qty": 200,
+                            "price": 50.0,
+                            "currency": "CAD",
+                        },
+                    ],
+                }
+            ]
+        )
         # RANDOM.TO has no target → implicit 0% → should be sold
         targets = {"VCN.TO": 100.0, "CAD": 0.0, "USD": 0.0}
 
         trades = calculate_trades(portfolio, targets, 1.36, 10.49, 0.5, set(), None)
 
-        sell_trades = [t for t in trades if t.symbol == "RANDOM.TO" and t.action == "SELL"]
+        sell_trades = [
+            t for t in trades if t.symbol == "RANDOM.TO" and t.action == "SELL"
+        ]
         assert len(sell_trades) > 0
 
 
@@ -899,14 +1263,31 @@ class TestPlannerWholeSharePricing:
 
     def test_trades_are_whole_shares(self):
         """All trade quantities must be integers."""
-        portfolio = _build_test_portfolio([{
-            "number": "11111", "type": "TFSA", "owner": "Alice",
-            "cash_cad": 200.0, "cash_usd": 0.0,
-            "positions": [
-                {"symbol": "VCN.TO", "qty": 700, "price": 50.0, "currency": "CAD"},
-                {"symbol": "VUN.TO", "qty": 300, "price": 60.0, "currency": "CAD"},
-            ],
-        }])
+        portfolio = _build_test_portfolio(
+            [
+                {
+                    "number": "11111",
+                    "type": "TFSA",
+                    "owner": "Alice",
+                    "cash_cad": 200.0,
+                    "cash_usd": 0.0,
+                    "positions": [
+                        {
+                            "symbol": "VCN.TO",
+                            "qty": 700,
+                            "price": 50.0,
+                            "currency": "CAD",
+                        },
+                        {
+                            "symbol": "VUN.TO",
+                            "qty": 300,
+                            "price": 60.0,
+                            "currency": "CAD",
+                        },
+                    ],
+                }
+            ]
+        )
         targets = {"VCN.TO": 50.0, "VUN.TO": 50.0, "CAD": 0.0, "USD": 0.0}
 
         trades = calculate_trades(portfolio, targets, 1.36, 10.49, 0.5, set(), None)
@@ -920,50 +1301,93 @@ class TestCashLedger:
     """Test the CashLedger helper used during planning."""
 
     def test_from_portfolio(self):
-        portfolio = _build_test_portfolio([{
-            "number": "11111", "type": "TFSA", "owner": "Alice",
-            "cash_cad": 5000.0, "cash_usd": 1000.0,
-            "positions": [
-                {"symbol": "VCN.TO", "qty": 100, "price": 50.0, "currency": "CAD"},
-            ],
-        }])
+        portfolio = _build_test_portfolio(
+            [
+                {
+                    "number": "11111",
+                    "type": "TFSA",
+                    "owner": "Alice",
+                    "cash_cad": 5000.0,
+                    "cash_usd": 1000.0,
+                    "positions": [
+                        {
+                            "symbol": "VCN.TO",
+                            "qty": 100,
+                            "price": 50.0,
+                            "currency": "CAD",
+                        },
+                    ],
+                }
+            ]
+        )
         ledger = CashLedger.from_portfolio(portfolio, 1.36, 10.49)
         assert ledger.cash("11111", "CAD") == 5000.0
         assert ledger.cash("11111", "USD") == 1000.0
 
     def test_credit_sale_adds_cash(self):
-        portfolio = _build_test_portfolio([{
-            "number": "11111", "type": "TFSA", "owner": "Alice",
-            "cash_cad": 100.0, "cash_usd": 0.0,
-            "positions": [
-                {"symbol": "VCN.TO", "qty": 100, "price": 50.0, "currency": "CAD"},
-            ],
-        }])
+        portfolio = _build_test_portfolio(
+            [
+                {
+                    "number": "11111",
+                    "type": "TFSA",
+                    "owner": "Alice",
+                    "cash_cad": 100.0,
+                    "cash_usd": 0.0,
+                    "positions": [
+                        {
+                            "symbol": "VCN.TO",
+                            "qty": 100,
+                            "price": 50.0,
+                            "currency": "CAD",
+                        },
+                    ],
+                }
+            ]
+        )
         ledger = CashLedger.from_portfolio(portfolio, 1.36, 10.49)
         ledger.credit_sale("11111", "CAD", 5000.0)
         assert ledger.cash("11111", "CAD") == 5100.0
 
     def test_fund_buy_same_currency(self):
-        portfolio = _build_test_portfolio([{
-            "number": "11111", "type": "TFSA", "owner": "Alice",
-            "cash_cad": 10000.0, "cash_usd": 0.0,
-            "positions": [
-                {"symbol": "VCN.TO", "qty": 100, "price": 50.0, "currency": "CAD"},
-            ],
-        }])
+        portfolio = _build_test_portfolio(
+            [
+                {
+                    "number": "11111",
+                    "type": "TFSA",
+                    "owner": "Alice",
+                    "cash_cad": 10000.0,
+                    "cash_usd": 0.0,
+                    "positions": [
+                        {
+                            "symbol": "VCN.TO",
+                            "qty": 100,
+                            "price": 50.0,
+                            "currency": "CAD",
+                        },
+                    ],
+                }
+            ]
+        )
         ledger = CashLedger.from_portfolio(portfolio, 1.36, 10.49)
         converted = ledger.fund_buy("11111", "CAD", 3000.0)
         assert converted is False  # Same currency, no FX needed
         assert ledger.cash("11111", "CAD") == 7000.0
 
     def test_fund_buy_cross_currency(self):
-        portfolio = _build_test_portfolio([{
-            "number": "11111", "type": "TFSA", "owner": "Alice",
-            "cash_cad": 10000.0, "cash_usd": 0.0,
-            "positions": [
-                {"symbol": "IVV", "qty": 10, "price": 500.0, "currency": "USD"},
-            ],
-        }])
+        portfolio = _build_test_portfolio(
+            [
+                {
+                    "number": "11111",
+                    "type": "TFSA",
+                    "owner": "Alice",
+                    "cash_cad": 10000.0,
+                    "cash_usd": 0.0,
+                    "positions": [
+                        {"symbol": "IVV", "qty": 10, "price": 500.0, "currency": "USD"},
+                    ],
+                }
+            ]
+        )
         ledger = CashLedger.from_portfolio(portfolio, 1.36, 10.49)
         # Buy USD symbol with no USD cash → needs FX from CAD
         converted = ledger.fund_buy("11111", "USD", 1000.0)
@@ -971,13 +1395,20 @@ class TestCashLedger:
         assert ledger.cash("11111", "CAD") < 10000.0
 
     def test_total_buying_power_includes_cross_currency(self):
-        portfolio = _build_test_portfolio([{
-            "number": "11111", "type": "TFSA", "owner": "Alice",
-            "cash_cad": 50000.0, "cash_usd": 0.0,
-            "positions": [
-                {"symbol": "IVV", "qty": 10, "price": 500.0, "currency": "USD"},
-            ],
-        }])
+        portfolio = _build_test_portfolio(
+            [
+                {
+                    "number": "11111",
+                    "type": "TFSA",
+                    "owner": "Alice",
+                    "cash_cad": 50000.0,
+                    "cash_usd": 0.0,
+                    "positions": [
+                        {"symbol": "IVV", "qty": 10, "price": 500.0, "currency": "USD"},
+                    ],
+                }
+            ]
+        )
         ledger = CashLedger.from_portfolio(portfolio, 1.36, 10.49)
         # USD buying power should include convertible CAD
         usd_power = ledger.total_buying_power("11111", "USD")

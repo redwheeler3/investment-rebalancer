@@ -15,7 +15,6 @@ from src.fx_math import (
 )
 from src.models import TradeRecommendation
 
-
 # ══════════════════════════════════════════════════════════════════
 # Cash deployment helpers
 # ══════════════════════════════════════════════════════════════════
@@ -112,7 +111,7 @@ def build_deploy_cash_underweight(
         return None
 
     for symbol, drift_pct, ask_price_native in candidates:
-        affordable_shares = int(math.floor(buying_power / ask_price_native))
+        affordable_shares = math.floor(buying_power / ask_price_native)
         if affordable_shares <= 0:
             continue
 
@@ -175,4 +174,4 @@ def _shares_to_close_underweight(
 
     gap_cad = abs(drift_pct / 100.0) * total_value_cad
     gap_native = gap_cad / usd_to_cad_rate if currency == "USD" else gap_cad
-    return int(math.ceil(gap_native / price_native))
+    return math.ceil(gap_native / price_native)

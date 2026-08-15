@@ -1,27 +1,26 @@
 """Tests for the portfolio module — allocation math, drift, accuracy, and projection."""
 
-from unittest.mock import patch, MagicMock
-from datetime import date
+from datetime import UTC, date, datetime
+from unittest.mock import MagicMock
 
 import requests
 
-from src.portfolio import (
-    calculate_allocations_for_values,
-    calculate_accuracy,
-    get_drifts,
-    simulate_rebalance,
-    build_allocation_snapshot_from_values,
-    _get_prev_close_price,
-    _get_quote_trade_date,
-    fetch_quotes_for_holdings,
-    PortfolioSummary,
-    AccountInfo,
-    Position,
-    HoldingSummary,
-)
 from src.display import _compute_portfolio_day_pnl
 from src.models import TradeRecommendation
-
+from src.portfolio import (
+    AccountInfo,
+    HoldingSummary,
+    PortfolioSummary,
+    Position,
+    _get_prev_close_price,
+    _get_quote_trade_date,
+    build_allocation_snapshot_from_values,
+    calculate_accuracy,
+    calculate_allocations_for_values,
+    fetch_quotes_for_holdings,
+    get_drifts,
+    simulate_rebalance,
+)
 
 # ══════════════════════════════════════════════════════════════════
 # Allocation calculation
@@ -100,7 +99,7 @@ class TestGetDrifts:
         alloc = {"VCN.TO": 30.0, "VUN.TO": 50.0, "XBB.TO": 20.0}
         targets = {"VCN.TO": 30.0, "VUN.TO": 50.0, "XBB.TO": 20.0}
         drifts = get_drifts(alloc, targets)
-        for symbol, drift in drifts.items():
+        for drift in drifts.values():
             assert abs(drift) < 0.001
 
     def test_overweight_positive_drift(self):
@@ -183,26 +182,52 @@ def _make_portfolio():
     """Build a simple test portfolio with two CAD positions."""
     positions_a = [
         Position(
-            symbol="VCN.TO", symbol_id=1, quantity=1000,
-            market_value=50000.0, current_price=50.0, currency="CAD",
-            account_number="11111", account_type="TFSA", owner="Alice",
+            symbol="VCN.TO",
+            symbol_id=1,
+            quantity=1000,
+            market_value=50000.0,
+            current_price=50.0,
+            currency="CAD",
+            account_number="11111",
+            account_type="TFSA",
+            owner="Alice",
         ),
         Position(
-            symbol="VUN.TO", symbol_id=2, quantity=500,
-            market_value=30000.0, current_price=60.0, currency="CAD",
-            account_number="11111", account_type="TFSA", owner="Alice",
+            symbol="VUN.TO",
+            symbol_id=2,
+            quantity=500,
+            market_value=30000.0,
+            current_price=60.0,
+            currency="CAD",
+            account_number="11111",
+            account_type="TFSA",
+            owner="Alice",
         ),
     ]
     account = AccountInfo(
-        number="11111", account_type="TFSA",
-        client_account_type="Individual", owner="Alice",
-        positions=positions_a, cash_cad=1000.0, cash_usd=0.0,
+        number="11111",
+        account_type="TFSA",
+        client_account_type="Individual",
+        owner="Alice",
+        positions=positions_a,
+        cash_cad=1000.0,
+        cash_usd=0.0,
     )
     portfolio = PortfolioSummary(
         accounts=[account],
         holdings={
-            "VCN.TO": HoldingSummary(value_cad=50000.0, total_quantity=1000, current_price=50.0, currency="CAD"),
-            "VUN.TO": HoldingSummary(value_cad=30000.0, total_quantity=500, current_price=60.0, currency="CAD"),
+            "VCN.TO": HoldingSummary(
+                value_cad=50000.0,
+                total_quantity=1000,
+                current_price=50.0,
+                currency="CAD",
+            ),
+            "VUN.TO": HoldingSummary(
+                value_cad=30000.0,
+                total_quantity=500,
+                current_price=60.0,
+                currency="CAD",
+            ),
         },
         total_value_cad=81000.0,
         cash_cad_total=1000.0,
@@ -217,9 +242,14 @@ class TestSimulateRebalance:
         targets = {"VCN.TO": 50.0, "VUN.TO": 50.0, "CAD": 0.0, "USD": 0.0}
         trades = [
             TradeRecommendation(
-                symbol="VUN.TO", action="BUY", quantity=10,
-                account_number="11111", account_type="TFSA",
-                owner="Alice", price=60.0, currency="CAD",
+                symbol="VUN.TO",
+                action="BUY",
+                quantity=10,
+                account_number="11111",
+                account_type="TFSA",
+                owner="Alice",
+                price=60.0,
+                currency="CAD",
                 estimated_value=600.0,
             )
         ]
@@ -232,9 +262,14 @@ class TestSimulateRebalance:
         targets = {"VCN.TO": 50.0, "VUN.TO": 50.0, "CAD": 0.0, "USD": 0.0}
         trades = [
             TradeRecommendation(
-                symbol="VCN.TO", action="SELL", quantity=50,
-                account_number="11111", account_type="TFSA",
-                owner="Alice", price=50.0, currency="CAD",
+                symbol="VCN.TO",
+                action="SELL",
+                quantity=50,
+                account_number="11111",
+                account_type="TFSA",
+                owner="Alice",
+                price=50.0,
+                currency="CAD",
                 estimated_value=2500.0,
             )
         ]
@@ -257,9 +292,14 @@ class TestSimulateRebalance:
         targets = {"VCN.TO": 40.0, "VUN.TO": 30.0, "IVV": 30.0, "CAD": 0.0, "USD": 0.0}
         trades = [
             TradeRecommendation(
-                symbol="IVV", action="BUY", quantity=5,
-                account_number="11111", account_type="TFSA",
-                owner="Alice", price=500.0, currency="USD",
+                symbol="IVV",
+                action="BUY",
+                quantity=5,
+                account_number="11111",
+                account_type="TFSA",
+                owner="Alice",
+                price=500.0,
+                currency="USD",
                 estimated_value=2500.0,
                 requires_fx=True,
             )
@@ -278,7 +318,7 @@ class TestSimulateRebalance:
 class TestGetPrevClosePrice:
     def test_returns_last_prior_candle_close(self):
         """Should return the close of the most recent candle before today."""
-        today = date.today().isoformat()
+        today = datetime.now(UTC).astimezone().date().isoformat()
         candles = [
             {"start": "2020-01-01T00:00:00-05:00", "close": 100.0},
             {"start": "2020-01-02T00:00:00-05:00", "close": 102.0},
@@ -301,7 +341,7 @@ class TestGetPrevClosePrice:
 
     def test_only_today_candle_returns_zero(self):
         """Should return 0.0 when only today's candle exists."""
-        today = date.today().isoformat()
+        today = datetime.now(UTC).astimezone().date().isoformat()
         candles = [
             {"start": f"{today}T00:00:00-05:00", "close": 107.0},
         ]
@@ -410,19 +450,35 @@ class TestFetchQuotesForHoldings:
             client_account_type="Individual",
             owner="Alice",
             positions=[
-                Position("RBS2061Q", 77104999, 14, 70000.0, 5000.0, "CAD", "11111", "TFSA", "Alice"),
+                Position(
+                    "RBS2061Q",
+                    77104999,
+                    14,
+                    70000.0,
+                    5000.0,
+                    "CAD",
+                    "11111",
+                    "TFSA",
+                    "Alice",
+                ),
             ],
         )
         portfolio = PortfolioSummary(
             accounts=[account],
             holdings={
-                "RBS2061Q": HoldingSummary(value_cad=70000.0, total_quantity=14, current_price=5000.0),
+                "RBS2061Q": HoldingSummary(
+                    value_cad=70000.0, total_quantity=14, current_price=5000.0
+                ),
             },
             total_value_cad=70000.0,
         )
         client = MagicMock()
-        client.get_quote.return_value = [{"symbol": "RBS2061Q", "lastTradePrice": 5000.0}]
-        client.get_candles.side_effect = requests.HTTPError(response=MagicMock(status_code=404))
+        client.get_quote.return_value = [
+            {"symbol": "RBS2061Q", "lastTradePrice": 5000.0}
+        ]
+        client.get_candles.side_effect = requests.HTTPError(
+            response=MagicMock(status_code=404)
+        )
 
         fetch_quotes_for_holdings(portfolio, [client])
         pnl, pct = _compute_portfolio_day_pnl(portfolio, usd_to_cad_rate=1.36)
@@ -443,8 +499,10 @@ class TestComputePortfolioDayPnl:
             accounts=[],
             holdings={
                 "VCN.TO": HoldingSummary(
-                    value_cad=51000.0, total_quantity=1000,
-                    current_price=51.0, currency="CAD",
+                    value_cad=51000.0,
+                    total_quantity=1000,
+                    current_price=51.0,
+                    currency="CAD",
                     prev_close_price=50.0,
                 ),
             },
@@ -460,8 +518,10 @@ class TestComputePortfolioDayPnl:
             accounts=[],
             holdings={
                 "IVV": HoldingSummary(
-                    value_cad=136000.0, total_quantity=100,
-                    current_price=110.0, currency="USD",
+                    value_cad=136000.0,
+                    total_quantity=100,
+                    current_price=110.0,
+                    currency="USD",
                     prev_close_price=100.0,
                 ),
             },
@@ -478,8 +538,10 @@ class TestComputePortfolioDayPnl:
             accounts=[],
             holdings={
                 "NEW.TO": HoldingSummary(
-                    value_cad=10000.0, total_quantity=100,
-                    current_price=100.0, currency="CAD",
+                    value_cad=10000.0,
+                    total_quantity=100,
+                    current_price=100.0,
+                    currency="CAD",
                     prev_close_price=0.0,
                 ),
             },
@@ -495,8 +557,10 @@ class TestComputePortfolioDayPnl:
             accounts=[],
             holdings={
                 "VCN.TO": HoldingSummary(
-                    value_cad=48000.0, total_quantity=1000,
-                    current_price=48.0, currency="CAD",
+                    value_cad=48000.0,
+                    total_quantity=1000,
+                    current_price=48.0,
+                    currency="CAD",
                     prev_close_price=50.0,
                 ),
             },
