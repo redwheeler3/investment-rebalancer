@@ -7,15 +7,34 @@ on:
 
 permissions:
   actions: write
-  contents: read
 
 jobs:
   cleanup:
     runs-on: ubuntu-latest
     steps:
-      - uses: Mattraks/delete-workflow-runs@v2
+      - name: Delete workflow runs older than 30 days
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
-          token: ${{ github.token }}
-          repository: ${{ github.repository }}
-          retain_days: 30
-          keep_minimum_runs: 2
+          script: |
+            const runs = await github.paginate(
+              github.rest.actions.listWorkflowRunsForRepo,
+              {
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                per_page: 100,
+              },
+            );
+            const cutoff = Date.now() - 30 * 24 * 60 * 60 * 1000;
+            const newestRunIds = new Set(runs.slice(0, 2).map((run) => run.id));
+
+            for (const run of runs) {
+              if (newestRunIds.has(run.id) || Date.parse(run.created_at) >= cutoff) {
+                continue;
+              }
+              await github.rest.actions.deleteWorkflowRun({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                run_id: run.id,
+              });
+              console.log(`Deleted workflow run ${run.id} from ${run.created_at}`);
+            }

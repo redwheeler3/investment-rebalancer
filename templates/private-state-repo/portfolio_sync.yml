@@ -11,25 +11,29 @@ permissions:
   contents: write
   issues: write
 
+concurrency:
+  group: portfolio-sync
+  cancel-in-progress: false
+
 jobs:
   sync:
     runs-on: ubuntu-latest
 
     steps:
       - name: Checkout private state repo
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           path: state
 
       - name: Checkout public code repo
-        uses: actions/checkout@v5
+        uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
         with:
           repository: <PUBLIC_REPO_OWNER>/<PUBLIC_REPO_NAME>
           ref: main
           path: code
 
       - name: Set up Python
-        uses: actions/setup-python@v6
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6
         with:
           python-version: '3.11'
 
@@ -37,21 +41,50 @@ jobs:
         working-directory: code
         run: pip install -r requirements.txt
 
+      - name: Install SOPS
+        env:
+          SOPS_VERSION: 3.13.3
+          SOPS_SHA256: e5bec3346a873ae91d871550f3e698c1aad962aff462a080e40f25fde17fef6b
+        run: |
+          curl --fail --silent --show-error --location \
+            "https://github.com/getsops/sops/releases/download/v${SOPS_VERSION}/sops-v${SOPS_VERSION}.linux.amd64" \
+            --output /tmp/sops
+          echo "${SOPS_SHA256}  /tmp/sops" | sha256sum --check --strict
+          sudo install --mode 0755 /tmp/sops /usr/local/bin/sops
+
+      - name: Validate encrypted state before token rotation
+        working-directory: code
+        env:
+          REBALANCER_STATE_DIR: ${{ github.workspace }}/state
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+        run: python -m src.encrypted_state
+
       - name: Sync portfolio data (refresh tokens + snapshot value)
         id: sync
         working-directory: code
         env:
           REBALANCER_STATE_DIR: ${{ github.workspace }}/state
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
         run: python main.py --sync
+
+      - name: Validate encrypted state after sync
+        id: validate_after
+        if: always()
+        working-directory: code
+        env:
+          REBALANCER_STATE_DIR: ${{ github.workspace }}/state
+          SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+        run: python -m src.encrypted_state
 
       - name: Check for changes
         id: check_changes
+        if: always() && steps.validate_after.outcome == 'success'
         working-directory: state
         run: |
           TRACKED_CHANGED=false
           UNTRACKED_NEW=false
           git diff --quiet tokens/ data/ || TRACKED_CHANGED=true
-          [ -n "$(git ls-files --others --exclude-standard data/)" ] && UNTRACKED_NEW=true
+          [ -n "$(git ls-files --others --exclude-standard tokens/ data/)" ] && UNTRACKED_NEW=true
           if [ "$TRACKED_CHANGED" = "true" ] || [ "$UNTRACKED_NEW" = "true" ]; then
             echo "changed=true" >> $GITHUB_OUTPUT
           else
@@ -59,18 +92,18 @@ jobs:
           fi
 
       - name: Commit and push
-        if: steps.check_changes.outputs.changed == 'true'
+        if: always() && steps.check_changes.outputs.changed == 'true'
         working-directory: state
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add tokens/ data/
-          git commit -m "🔄 Auto-sync tokens and portfolio history [skip ci]"
+          git commit -m "🔄 Auto-sync encrypted application state [skip ci]"
           git push
 
       - name: Alert on prolonged failure (>48h)
         if: failure()
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             const runs = await github.rest.actions.listWorkflowRuns({
@@ -117,7 +150,7 @@ jobs:
 
       - name: Auto-close token alert on recovery
         if: success()
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             const issues = await github.rest.issues.listForRepo({
@@ -146,7 +179,7 @@ jobs:
 
       - name: Alert on high drift (accuracy ≤ 95%)
         if: success() && steps.sync.outputs.accuracy != '' && steps.sync.outputs.accuracy <= 95
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             const accuracy = '${{ steps.sync.outputs.accuracy }}';
@@ -174,7 +207,7 @@ jobs:
 
       - name: Auto-close drift alert on recovery (accuracy > 95%)
         if: success() && steps.sync.outputs.accuracy != '' && steps.sync.outputs.accuracy > 95
-        uses: actions/github-script@v8
+        uses: actions/github-script@ed597411d8f924073f98dfc5c65a23a2325f34cd # v8
         with:
           script: |
             const issues = await github.rest.issues.listForRepo({

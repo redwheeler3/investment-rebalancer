@@ -9,8 +9,7 @@ the current value. This prevents oscillation when the rate hovers near a
 rounding boundary.
 """
 
-import json
-
+from src.encrypted_state import read_encrypted_json, write_encrypted_json
 from src.paths import get_fx_targets_state_file
 
 
@@ -61,20 +60,13 @@ def _load_fx_state() -> dict:
     state_file = get_fx_targets_state_file()
     if not state_file.exists():
         return {}
-    try:
-        with open(state_file, "r") as f:
-            return json.load(f)
-    except (json.JSONDecodeError, IOError):
-        return {}
+    return read_encrypted_json(state_file)
 
 
 def _save_fx_state(state: dict) -> None:
     """Persist FX target state to disk."""
     state_file = get_fx_targets_state_file()
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(state_file, "w") as f:
-        json.dump(state, f, indent=2)
-        f.write("\n")
+    write_encrypted_json(state_file, state)
 
 
 # ══════════════════════════════════════════════════════════════════

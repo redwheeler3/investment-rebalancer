@@ -1,0 +1,9 @@
+creation_rules:
+  - path_regex: 'tokens.*\.json$'
+    age: REPLACE_WITH_YOUR_AGE_RECIPIENT
+  - path_regex: 'data.*\.(json|jsonl)$'
+    age: REPLACE_WITH_YOUR_AGE_RECIPIENT
+
+stores:
+  json:
+    indent: 2

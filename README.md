@@ -16,16 +16,18 @@ This project uses a simple pattern that works well for Questrade and can be
 adapted to other token-based API workflows:
 
 - keep the **code public**
-- keep the **live state private**
+- keep the **live state private and encrypted**
 - let **GitHub Actions refresh and persist the state for free**
 
 In practice, that means the public repo contains the app, docs, and templates,
-while a separate private repo holds the mutable state: tokens, real target
-config, and portfolio history. The app reads that private state through one
-explicit environment variable, `REBALANCER_STATE_DIR`, so local runs and GitHub
-Actions both operate against the same source of truth.
+while a separate private repo holds the mutable state: encrypted tokens,
+plaintext editable target config, and encrypted app-managed data. The app reads
+that private state through one explicit environment variable,
+`REBALANCER_STATE_DIR`, so local runs and GitHub Actions both operate against the
+same source of truth.
 
-> TL;DR: Keep code public and reusable, while keeping broker credentials and rotating state private and fully automated.
+> TL;DR: Keep code public and reusable while SOPS/age protects broker
+> credentials and app-managed financial state in the automated private state repo.
 
 ---
 
@@ -345,12 +347,14 @@ Public repo: investment-rebalancer/
 ├── templates/
 │   └── private-state-repo/
 │       ├── cleanup-runs.yml
-│       └── portfolio_sync.yml
+│       ├── portfolio_sync.yml
+│       └── sops.example.yaml
 ├── src/
 ├── main.py
 └── requirements.txt
 
 Private repo: investment-rebalancer-state/
+├── .sops.yaml
 ├── .github/
 │   └── workflows/
 │       ├── cleanup-runs.yml
@@ -358,12 +362,12 @@ Private repo: investment-rebalancer-state/
 ├── config/
 │   └── settings.yaml
 ├── data/
-│   ├── portfolio_history.jsonl
-│   ├── tactical_state.json       (created automatically on first regime change)
-│   └── fx_targets_state.json     (created automatically on first FX target resolution)
+│   ├── portfolio_history.jsonl  (SOPS-encrypted)
+│   ├── tactical_state.json       (SOPS-encrypted; created on first regime change)
+│   └── fx_targets_state.json     (SOPS-encrypted; created on first FX target resolution)
 └── tokens/
-    ├── primary_token.json
-    └── secondary_token.json
+    ├── primary_token.json       (SOPS-encrypted)
+    └── secondary_token.json     (SOPS-encrypted)
 ```
 
 The public repo contains code, docs, examples, and workflow templates.
@@ -386,6 +390,7 @@ The private repo contains the live state the app reads through
 | `src/report_builder.py` | Assembles all report data (trades, projections, history) for display |
 | `src/display.py` | Terminal rendering with Rich (tables, charts, formatting) |
 | `src/history.py` | Portfolio value history — ATH tracking and YTD chart data (day P&L is computed in `display.py` from previous-close prices) |
+| `src/encrypted_state.py` | In-memory SOPS/age decryption and atomic ciphertext persistence |
 | `src/tactical.py` | Tactical defensive deployment — drawdown-based dynamic target adjustment |
 | `src/questrade_client.py` | Questrade API client (OAuth token rotation, positions, quotes) |
 | `src/paths.py` | Resolves private state repo paths from `REBALANCER_STATE_DIR` |
@@ -401,11 +406,17 @@ git clone https://github.com/<you>/investment-rebalancer.git
 cd investment-rebalancer
 ```
 
-### 2. Install dependencies
+### 2. Install dependencies and encryption tools
 
 ```bash
 pip install -r requirements.txt
 ```
+
+Install [SOPS](https://github.com/getsops/sops/releases) and
+[age](https://github.com/FiloSottile/age/releases), and make sure `sops` and
+`age-keygen` are available on `PATH`. SOPS encrypts the tokens and every
+app-managed file under `data/`; age provides the local identity used to decrypt
+them.
 
 ### 3. Create a private state repo
 
@@ -425,6 +436,7 @@ Create this structure inside it:
 
 ```text
 investment-rebalancer-state/
+├── .sops.yaml
 ├── config/
 ├── data/
 └── tokens/
@@ -438,7 +450,29 @@ add this later in the private repo:
 └── workflows/
 ```
 
-### 4. Add your private settings
+### 4. Configure SOPS/age
+
+Generate one age identity outside both repositories. SOPS uses its standard age
+key location by default:
+
+- Windows: `%AppData%\sops\age\keys.txt`
+- macOS/Linux: the `sops/age/keys.txt` file under your user configuration directory
+
+For example:
+
+```bash
+age-keygen -o /path/outside/both/repos/keys.txt
+age-keygen -y /path/outside/both/repos/keys.txt
+```
+
+The second command prints the public recipient, which begins with `age1`. Copy
+`templates/private-state-repo/sops.example.yaml` to `.sops.yaml` in the private
+state repo and replace `REPLACE_WITH_YOUR_AGE_RECIPIENT` with that recipient.
+Back up the private identity in a password manager; losing it makes the encrypted
+state unrecoverable. If the key is not in SOPS's standard location, set
+`SOPS_AGE_KEY_FILE` to its path.
+
+### 5. Add your private settings
 
 Copy the public example file:
 
@@ -471,7 +505,7 @@ accounts:
 If Questrade reports `clientAccountType: Corporation` for one of those logins,
 you can map it to any display label you want, such as `HoldingCo`.
 
-### 5. Add your Questrade token files
+### 6. Add your encrypted Questrade token files
 
 Create token files in the private repo:
 
@@ -480,7 +514,7 @@ tokens/primary_token.json
 tokens/secondary_token.json
 ```
 
-Each file should look like:
+The decrypted content of each file has this shape:
 
 ```json
 {
@@ -488,9 +522,17 @@ Each file should look like:
 }
 ```
 
-You can use `tokens/token.example.json` in this repo as a template.
+You can use `tokens/token.example.json` in this repo as a template, but encrypt
+each populated file before committing it:
 
-### 6. Optional: add portfolio history
+```bash
+sops --config .sops.yaml encrypt --in-place tokens/primary_token.json
+```
+
+After encryption, the refresh-token value must appear as an `ENC[...]` value and
+the file must contain a `sops` metadata object. Never commit the plaintext form.
+
+### 7. Optional: import existing app-managed state
 
 If you want all-time high / daily change / YTD reporting immediately, create:
 
@@ -498,11 +540,25 @@ If you want all-time high / daily change / YTD reporting immediately, create:
 data/portfolio_history.jsonl
 ```
 
-You can start with an empty file, or copy the structure from `data/portfolio_history.example.jsonl`.
+If the file doesn't exist yet, the app creates it as SOPS ciphertext when it
+first records a value. To import existing plaintext JSONL, encrypt it as an
+opaque binary document before committing it:
 
-If the file doesn't exist yet, the app will create it when it first records a value.
+```bash
+sops --config .sops.yaml encrypt --input-type binary --output-type binary \
+  --in-place data/portfolio_history.jsonl
+```
 
-### 7. Set `REBALANCER_STATE_DIR`
+The app also creates `data/tactical_state.json` and
+`data/fx_targets_state.json` as SOPS ciphertext when those features first need
+them. If either file already exists as plaintext, encrypt it before cutover:
+
+```bash
+sops --config .sops.yaml encrypt --in-place data/tactical_state.json
+sops --config .sops.yaml encrypt --in-place data/fx_targets_state.json
+```
+
+### 8. Set `REBALANCER_STATE_DIR`
 
 Point the environment variable at the root of your private state repo.
 
@@ -542,7 +598,7 @@ Then reload your shell:
 source ~/.zshrc
 ```
 
-### 8. Run the rebalancer
+### 9. Run the rebalancer
 
 Once the environment variable is set, your normal command stays simple:
 
@@ -564,6 +620,7 @@ state repo:
 ```text
 templates/private-state-repo/portfolio_sync.yml
 templates/private-state-repo/cleanup-runs.yml
+templates/private-state-repo/sops.example.yaml
 ```
 
 Copy them into your private repo at:
@@ -575,6 +632,10 @@ investment-rebalancer-state/
         ├── portfolio_sync.yml
         └── cleanup-runs.yml
 ```
+
+Copy `sops.example.yaml` to `.sops.yaml`, replace its placeholder with your age
+recipient, and add the complete age private identity as a private-repository
+Actions secret named `SOPS_AGE_KEY`. The secret is exposed only to the sync step.
 
 Before using `portfolio_sync.yml`, open the copied file and replace:
 
@@ -602,11 +663,20 @@ What each workflow is for:
 
 1. Checks out the private state repo
 2. Checks out this public code repo into a sibling folder
-3. Sets `REBALANCER_STATE_DIR` to the private repo path
-4. Runs `python main.py --sync`
-5. Commits rotated tokens and updated history back to the private repo
+3. Installs a checksum-verified, pinned SOPS binary
+4. Sets `REBALANCER_STATE_DIR` and injects the age identity only for the sync step
+5. Validates all existing encrypted state before any token is rotated
+6. Runs `python main.py --sync`, decrypting sensitive state only through process streams
+7. Validates every file under `tokens/` and `data/` again after the sync
+8. Commits verified ciphertext updates even if later sync processing failed, so
+   a successfully rotated token is never stranded in the temporary runner
 
-This gives you automated token refresh without ever storing live credentials in the public repo.
+The job still reports failure after preserving any valid rotated token, allowing
+the existing alerting to run. The workflow also serializes overlapping scheduled or manually dispatched runs so
+two jobs cannot race to consume the same single-use Questrade refresh token.
+
+This gives you automated token refresh without storing live credentials in the
+public repo or plaintext credentials and financial state in the private repo.
 
 ---
 
@@ -749,8 +819,12 @@ target and will be recommended for sale.
 ## Security notes
 
 - Never commit live Questrade tokens to the public repo
-- Keep your real `settings.yaml` in the private state repo
-- Keep `portfolio_history.jsonl` in the private state repo
+- Commit token files and every app-managed file under `data/` only as SOPS ciphertext
+- Keep the age private identity outside both repositories and back it up securely
+- Store the CI identity only in the private repo's `SOPS_AGE_KEY` Actions secret
+- Keep your editable `settings.yaml` plaintext in the private state repo
+- Validate all `tokens/` and `data/` files before any automated commit
+- Workflow Actions are pinned to immutable commit SHAs
 
 ---
 

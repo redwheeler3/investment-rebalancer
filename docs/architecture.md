@@ -50,9 +50,11 @@ fee, FX rules, drift threshold, tactical config); the snippet above keeps the
 interesting names and elides the rest.
 
 This is the **interactive** path. Before any of it, `_pull_latest()` does a
-`git pull --ff-only` on the private state repo to get fresh tokens and history.
-After everything, `_push_synced_files()` commits and pushes the rotated tokens +
-updated history back. (The `--sync` path is different — see [The `--sync` Mode](#the---sync-mode)
+`git pull --ff-only` on the private state repo to get fresh encrypted tokens and
+app-managed data. SOPS decrypts them through process streams when the app reads them and
+atomically replaces them with ciphertext after updates. After everything,
+`_push_synced_files()` commits and pushes the rotated tokens + updated state
+back. (The `--sync` path is different — see [The `--sync` Mode](#the---sync-mode)
 below — it does **not** push; the GitHub Actions workflow handles its own commit.)
 
 ---
@@ -71,7 +73,9 @@ def get_state_root() -> Path:
     return Path(raw).expanduser().resolve()
 ```
 
-All mutable files (tokens, config, history) live in that separate repo — the code repo stays clean and public.
+All mutable files live in that separate repo, so the code repo stays clean and
+public. Human-authored `config/settings.yaml` remains plaintext; Questrade tokens
+and every app-managed file under `data/` are SOPS/age ciphertext at rest.
 
 ### Loading config
 
@@ -187,7 +191,8 @@ Key observations:
 
 #### State Persistence
 
-The regime state is persisted in `data/tactical_state.json`:
+The regime state is persisted as SOPS ciphertext in
+`data/tactical_state.json`. Its decrypted shape is:
 
 ```json
 {
@@ -273,7 +278,7 @@ cad_target_pct = _sticky_round(raw_cad_pct, rounding_step, prior_cad_target)
 usd_target_pct = round((total_target_pct - cad_target_pct) / rounding_step) * rounding_step
 ```
 
-The `_sticky_round` function keeps the current target unless the raw value has moved a full step away, preventing oscillation when the rate hovers near a rounding boundary. To make stickiness work across runs, the resolver persists the last resolved CAD target per rule to `data/fx_targets_state.json` (`_load_fx_state` / `_save_fx_state`) and reads it back as the `prior_cad_target` on the next run.
+The `_sticky_round` function keeps the current target unless the raw value has moved a full step away, preventing oscillation when the rate hovers near a rounding boundary. To make stickiness work across runs, the resolver persists the last resolved CAD target per rule as SOPS ciphertext in `data/fx_targets_state.json` (`_load_fx_state` / `_save_fx_state`) and reads it back as the `prior_cad_target` on the next run.
 
 When USD is expensive (rate near max), more allocation goes to the CAD fund. When USD is cheap, more goes to the USD fund. The targets dynamically adapt to make currency conversion worthwhile.
 
@@ -348,9 +353,10 @@ Questrade uses **single-use refresh tokens** — each time you authenticate, the
 
 ```python
 def _authenticate(self):
-    resp = requests.get(QUESTRADE_AUTH_URL, params={
+    token = read_encrypted_json(self.token_path)["refresh_token"]
+    resp = requests.post(QUESTRADE_AUTH_URL, data={
         "grant_type": "refresh_token",
-        "refresh_token": self.refresh_token,
+        "refresh_token": token,
     })
     resp.raise_for_status()
     token_data = resp.json()
@@ -358,8 +364,13 @@ def _authenticate(self):
     self.access_token = token_data["access_token"]
     self.api_server = token_data["api_server"]      # Dynamic! Changes each auth
     self.refresh_token = token_data["refresh_token"]  # New single-use token
-    self._save_refresh_token()  # Write immediately
+    self._save_refresh_token()  # Atomically write SOPS ciphertext immediately
 ```
+
+The refresh credential is sent in the POST body rather than the URL query string,
+so HTTP exceptions and proxy request URLs cannot disclose it. SOPS receives
+plaintext only through stdin/stdout pipes; the app writes only ciphertext to a
+same-directory temporary file and atomically replaces the prior file.
 
 Cool detail: Questrade assigns a **different API server URL** each time you authenticate. You can't hardcode the base URL.
 
@@ -633,6 +644,14 @@ or push: the private-repo GitHub Actions workflow handles its own commit/push, s
 `--sync` deliberately skips `_push_synced_files()`. A token-refresh failure exits
 non-zero so the workflow can alert on stale credentials.
 
+The private workflow injects `SOPS_AGE_KEY` only into the sync and validation
+steps. The commit step sees only ciphertext. State is decrypt-validated before
+token rotation and again before commit without writing plaintext to disk. The
+post-sync commit steps run even when sync processing fails, preserving any valid
+replacement token already issued while leaving the job failed for alerting. A
+workflow concurrency group also serializes runs so two jobs cannot race a
+single-use refresh token.
+
 ---
 
 ## File Responsibilities
@@ -656,6 +675,7 @@ non-zero so the workflow can alert on stale credentials.
 | `models.py` | Shared types — TradeRecommendation, TransientAlert |
 | `tactical.py` | Tactical deployment — drawdown-based dynamic target adjustment |
 | `paths.py` | File locations — private state repo discovery |
+| `encrypted_state.py` | SOPS/age stream encryption and atomic ciphertext writes |
 
 ---
 

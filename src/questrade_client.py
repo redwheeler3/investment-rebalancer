@@ -4,9 +4,10 @@ Questrade API client for authentication and data retrieval.
 Handles OAuth token refresh, account listing, positions, balances, and market quotes.
 """
 
-import json
 import requests
 from pathlib import Path
+
+from src.encrypted_state import read_encrypted_json, write_encrypted_json
 
 
 QUESTRADE_AUTH_URL = "https://login.questrade.com/oauth2/token"
@@ -40,17 +41,15 @@ class QuestradeClient:
 
     def _load_and_authenticate(self):
         """Load refresh token from file and authenticate with Questrade."""
-        with open(self.token_path, "r") as f:
-            data = json.load(f)
-
+        data = read_encrypted_json(self.token_path)
         self.refresh_token = data["refresh_token"]
         self._authenticate()
 
     def _authenticate(self):
         """Exchange refresh token for access token and new refresh token."""
-        resp = requests.get(
+        resp = requests.post(
             QUESTRADE_AUTH_URL,
-            params={
+            data={
                 "grant_type": "refresh_token",
                 "refresh_token": self.refresh_token,
             },
@@ -67,9 +66,8 @@ class QuestradeClient:
         self._save_refresh_token()
 
     def _save_refresh_token(self):
-        """Persist the new refresh token to the token file."""
-        with open(self.token_path, "w") as f:
-            json.dump({"refresh_token": self.refresh_token}, f, indent=2)
+        """Persist the new refresh token atomically as SOPS ciphertext."""
+        write_encrypted_json(self.token_path, {"refresh_token": self.refresh_token})
 
     def _headers(self) -> dict:
         """Return authorization headers for API requests."""

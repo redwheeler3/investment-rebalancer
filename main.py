@@ -25,6 +25,7 @@ from src.questrade_client import QuestradeClient
 from src.portfolio import build_allocation_snapshot, build_portfolio, fetch_quotes_for_holdings
 from src.report_builder import build_report_data
 from src.display import display_full_report, console
+from src.encrypted_state import EncryptedStateError, validate_encrypted_state_files
 from src.fx_rate import get_usd_to_cad_rate, fetch_dlr_quotes
 from src.fx_conversions import calculate_currency_needs
 from src.history import record_value, get_all_time_high
@@ -135,6 +136,7 @@ def run_scheduled_sync():
         _drift_trade_threshold_pct,
         tactical_config,
     ) = load_config()
+    validate_encrypted_state_files()
 
     all_ok = True
     clients = []
@@ -200,6 +202,8 @@ def run_scheduled_sync():
             )
             accuracy = snapshot.accuracy
             print(f"  ✓ Accuracy: {accuracy:.1f}%")
+        except EncryptedStateError:
+            raise
         except Exception as e:
             print(f"  ⚠ Could not snapshot portfolio value: {e}")
 
@@ -411,20 +415,21 @@ def _pull_latest():
 
 
 def _push_synced_files():
-    """Commit and push tokens + portfolio history so local runs and automation stay in sync.
+    """Commit and push encrypted app state so local runs and automation stay in sync.
     Questrade uses single-use refresh tokens (token rotation), so every run
-    invalidates the old token. Portfolio history is also pushed so ATH
-    tracking is shared between local runs and GitHub Actions."""
+    invalidates the old token. App-managed data is also pushed so state remains
+    shared between local runs and GitHub Actions."""
     state_root = get_state_root()
+    validate_encrypted_state_files()
     try:
         # Check if there are changes to push (tokens or data)
         result = subprocess.run(
             ["git", "diff", "--quiet", "tokens/", "data/"],
             cwd=str(state_root), capture_output=True,
         )
-        # Also check for untracked files in data/ (first run)
+        # Also check for newly created token or data files.
         untracked = subprocess.run(
-            ["git", "ls-files", "--others", "--exclude-standard", "data/"],
+            ["git", "ls-files", "--others", "--exclude-standard", "tokens/", "data/"],
             cwd=str(state_root), capture_output=True, text=True,
         )
         if result.returncode == 0 and not untracked.stdout.strip():
@@ -436,7 +441,7 @@ def _push_synced_files():
             cwd=str(state_root), check=True, capture_output=True,
         )
         subprocess.run(
-            ["git", "commit", "-m", "🔄 Auto-sync tokens and portfolio history"],
+            ["git", "commit", "-m", "🔄 Auto-sync encrypted application state"],
             cwd=str(state_root), check=True, capture_output=True,
         )
         subprocess.run(
@@ -460,6 +465,7 @@ def main():
         run_scheduled_sync()
     else:
         _pull_latest()
+        validate_encrypted_state_files()
         run_rebalancer()
         _push_synced_files()
 

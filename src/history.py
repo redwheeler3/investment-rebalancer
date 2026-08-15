@@ -11,6 +11,7 @@ import json
 from datetime import date
 from dataclasses import dataclass
 
+from src.encrypted_state import read_encrypted_text, write_encrypted_text
 from src.paths import get_history_file
 
 
@@ -156,27 +157,27 @@ def _load_history() -> list:
     if not history_file.exists():
         return []
 
-    try:
-        with open(history_file, "r") as f:
-            content = f.read().strip()
-        if not content:
-            return []
+    content = read_encrypted_text(history_file).strip()
+    if not content:
+        return []
 
-        # JSONL format: one JSON object per line
-        entries = []
+    # JSONL format: one JSON object per line
+    entries = []
+    try:
         for line in content.splitlines():
             line = line.strip()
             if line:
                 entries.append(json.loads(line))
-        return entries
-    except (json.JSONDecodeError, IOError):
-        return []
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"Decrypted portfolio history at '{history_file}' is invalid.") from exc
+    return entries
 
 
 def _save_history(history: list) -> None:
-    """Save history as JSONL (one JSON object per line). Creates data/ if needed."""
+    """Save history as encrypted JSONL without writing plaintext to disk."""
     history_file = get_history_file()
-    history_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(history_file, "w") as f:
-        for entry in history:
-            f.write(json.dumps(entry, separators=(",", ":")) + "\n")
+    content = "".join(
+        json.dumps(entry, separators=(",", ":")) + "\n"
+        for entry in history
+    )
+    write_encrypted_text(history_file, content)

@@ -16,10 +16,10 @@ Key concepts:
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from datetime import date
 
+from src.encrypted_state import read_encrypted_json, write_encrypted_json
 from src.paths import get_tactical_state_file
 
 
@@ -79,24 +79,18 @@ def load_tactical_state() -> TacticalState:
     if not state_file.exists():
         return TacticalState()
 
-    try:
-        with open(state_file, "r") as f:
-            data = json.load(f)
-        return TacticalState(
-            regime=data.get("regime", "baseline"),
-            reference_high=data.get("reference_high"),
-            reference_high_date=data.get("reference_high_date"),
-            last_transition_date=data.get("last_transition_date"),
-        )
-    except (json.JSONDecodeError, IOError):
-        return TacticalState()
+    data = read_encrypted_json(state_file)
+    return TacticalState(
+        regime=data.get("regime", "baseline"),
+        reference_high=data.get("reference_high"),
+        reference_high_date=data.get("reference_high_date"),
+        last_transition_date=data.get("last_transition_date"),
+    )
 
 
 def save_tactical_state(state: TacticalState) -> None:
     """Persist tactical state to disk. Creates data/ directory if needed."""
     state_file = get_tactical_state_file()
-    state_file.parent.mkdir(parents=True, exist_ok=True)
-
     data = {"regime": state.regime}
     if state.reference_high is not None:
         data["reference_high"] = round(state.reference_high, 2)
@@ -105,9 +99,7 @@ def save_tactical_state(state: TacticalState) -> None:
     if state.last_transition_date is not None:
         data["last_transition_date"] = state.last_transition_date
 
-    with open(state_file, "w") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
+    write_encrypted_json(state_file, data)
 
 
 # ══════════════════════════════════════════════════════════════════

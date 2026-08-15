@@ -4,7 +4,42 @@ from unittest.mock import patch
 
 import pytest
 
-from src.fx_targets import resolve_targets, _clamp, _sticky_round
+from src.fx_targets import (
+    _clamp,
+    _load_fx_state,
+    _save_fx_state,
+    _sticky_round,
+    resolve_targets,
+)
+
+
+class TestStatePersistence:
+    def test_load_missing_file_returns_empty_state(self, tmp_path):
+        state_file = tmp_path / "data" / "fx_targets_state.json"
+        with patch("src.fx_targets.get_fx_targets_state_file", return_value=state_file):
+            assert _load_fx_state() == {}
+
+    def test_load_uses_encrypted_json(self, tmp_path):
+        state_file = tmp_path / "data" / "fx_targets_state.json"
+        state_file.parent.mkdir()
+        state_file.write_bytes(b"ciphertext")
+        expected = {"split": {"cad_target_pct": 56.0}}
+        with (
+            patch("src.fx_targets.get_fx_targets_state_file", return_value=state_file),
+            patch("src.fx_targets.read_encrypted_json", return_value=expected) as read,
+        ):
+            assert _load_fx_state() == expected
+        read.assert_called_once_with(state_file)
+
+    def test_save_uses_encrypted_json(self, tmp_path):
+        state_file = tmp_path / "data" / "fx_targets_state.json"
+        state = {"split": {"cad_target_pct": 56.0}}
+        with (
+            patch("src.fx_targets.get_fx_targets_state_file", return_value=state_file),
+            patch("src.fx_targets.write_encrypted_json") as write,
+        ):
+            _save_fx_state(state)
+        write.assert_called_once_with(state_file, state)
 
 
 class TestClamp:

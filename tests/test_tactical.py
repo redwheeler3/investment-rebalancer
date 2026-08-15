@@ -1,8 +1,6 @@
 """Tests for the tactical defensive deployment module."""
 
 import json
-import tempfile
-import os
 from unittest.mock import patch
 
 import pytest
@@ -50,14 +48,21 @@ def sample_config():
     )
 
 
-@pytest.fixture
-def temp_state_dir(tmp_path):
-    """Provide a temporary directory for tactical state files."""
-    data_dir = tmp_path / "data"
-    data_dir.mkdir()
-    state_file = data_dir / "tactical_state.json"
-    with patch("src.tactical.get_tactical_state_file", return_value=state_file):
-        yield state_file
+@pytest.fixture(autouse=True)
+def plaintext_encrypted_state_double():
+    """Back encrypted state helpers with plaintext files for state-machine tests."""
+    def read_json(path):
+        return json.loads(path.read_text(encoding="utf-8"))
+
+    def write_json(path, value):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
+
+    with (
+        patch("src.tactical.read_encrypted_json", side_effect=read_json),
+        patch("src.tactical.write_encrypted_json", side_effect=write_json),
+    ):
+        yield
 
 
 # ══════════════════════════════════════════════════════════════════

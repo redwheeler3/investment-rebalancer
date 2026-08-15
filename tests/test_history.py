@@ -17,9 +17,20 @@ from src.history import (
 
 @pytest.fixture
 def history_file(tmp_path):
-    """Provide a temporary history file path."""
+    """Provide a plaintext test double for the encrypted history store."""
     hf = tmp_path / "data" / "portfolio_history.jsonl"
-    with patch("src.history.get_history_file", return_value=hf):
+    def read_text(path):
+        return path.read_text(encoding="utf-8")
+
+    def write_text(path, value):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(value, encoding="utf-8")
+
+    with (
+        patch("src.history.get_history_file", return_value=hf),
+        patch("src.history.read_encrypted_text", side_effect=read_text),
+        patch("src.history.write_encrypted_text", side_effect=write_text),
+    ):
         yield hf
 
 
