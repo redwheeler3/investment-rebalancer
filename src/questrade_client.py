@@ -4,6 +4,7 @@ Questrade API client for authentication and data retrieval.
 Handles OAuth token refresh, account listing, positions, balances, and market quotes.
 """
 
+import time
 from pathlib import Path
 
 import requests
@@ -11,6 +12,8 @@ import requests
 from src.encrypted_state import read_encrypted_json, write_encrypted_json
 
 QUESTRADE_AUTH_URL = "https://login.questrade.com/oauth2/token"
+GET_RETRY_DELAYS_SECONDS = (0.5, 1.0)
+RETRYABLE_HTTP_STATUSES = {429, 500, 502, 503, 504}
 
 
 class QuestradeClient:
@@ -84,10 +87,60 @@ class QuestradeClient:
         Returns:
             JSON response as a dictionary.
         """
-        url = f"{self.api_server}{endpoint}"
-        resp = requests.get(url, headers=self._headers(), params=params, timeout=30)
-        resp.raise_for_status()
-        return resp.json()
+        refreshed_auth = False
+        transient_retries = 0
+
+        while True:
+            url = f"{self.api_server}{endpoint}"
+            try:
+                resp = requests.get(
+                    url,
+                    headers=self._headers(),
+                    params=params,
+                    timeout=30,
+                )
+            except (requests.ConnectionError, requests.Timeout) as error:
+                if transient_retries >= len(GET_RETRY_DELAYS_SECONDS):
+                    raise
+                delay = GET_RETRY_DELAYS_SECONDS[transient_retries]
+                transient_retries += 1
+                self._show_retry(
+                    f"{type(error).__name__}: {error}",
+                    f"retrying request in {delay:g}s "
+                    f"({transient_retries}/{len(GET_RETRY_DELAYS_SECONDS)})",
+                )
+                time.sleep(delay)
+                continue
+
+            if resp.status_code == 401 and not refreshed_auth:
+                refreshed_auth = True
+                self._show_retry(
+                    "HTTP 401 Unauthorized",
+                    "refreshing authentication and retrying request (1/1)",
+                )
+                self._authenticate()
+                continue
+
+            if (
+                resp.status_code in RETRYABLE_HTTP_STATUSES
+                and transient_retries < len(GET_RETRY_DELAYS_SECONDS)
+            ):
+                delay = GET_RETRY_DELAYS_SECONDS[transient_retries]
+                transient_retries += 1
+                self._show_retry(
+                    f"HTTP {resp.status_code} {resp.reason}",
+                    f"retrying request in {delay:g}s "
+                    f"({transient_retries}/{len(GET_RETRY_DELAYS_SECONDS)})",
+                )
+                time.sleep(delay)
+                continue
+
+            resp.raise_for_status()
+            return resp.json()
+
+    def _show_retry(self, error: str, action: str) -> None:
+        """Display automatic recovery so transient API failures are visible."""
+        print(f"  ⚠ Questrade ({self.owner_name}): {error}; {action}")
 
     def get_accounts(self) -> list:
         """
