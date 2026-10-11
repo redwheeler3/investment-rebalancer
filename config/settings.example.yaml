@@ -21,6 +21,12 @@ accounts:
     account_type_display_overrides:
       Corporation: HoldingCo
 
+# Saven account numbers included in the portfolio's export tracking.
+# Keep real numbers in the private settings.yaml and quote them to preserve zeros.
+# An empty list disables Saven tracking.
+saven:
+  account_numbers: []
+
 targets:
   CAD: 0.0
   USD: 0.0

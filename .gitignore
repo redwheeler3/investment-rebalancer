@@ -23,3 +23,6 @@ Thumbs.db
 
 # Local temporary working files
 temp/
+
+# Local planning documents
+/docs/external-assets.md
