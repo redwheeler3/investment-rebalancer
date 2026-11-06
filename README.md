@@ -852,7 +852,7 @@ configured until its balance is zero and its transfers are settled.
 
 See the [external account guide](docs/external-accounts.md) for setup, imports,
 transit rules, state, console behavior, and real-transfer checks. The
-[Saven adapter notes](docs/saven.md) describe its specific export format. Keep real
+[Saven adapter section](docs/external-accounts.md#saven-statement-adapter) describes its specific export format. Keep real
 identifiers and financial state in the private repo.
 
 ## Configuration

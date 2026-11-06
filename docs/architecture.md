@@ -132,7 +132,7 @@ projection/FX funding pipeline while remaining distinct from new instructions.
 Only displayed local recommendations arm new intent. See the
 [external account guide](external-accounts.md) for the contract and workflow,
 [planner reconciliation](rebalancer.md#automatic-transit-reconciliation) for math,
-and [Saven adapter notes](saven.md) for the current format.
+and the [Saven adapter section](external-accounts.md#saven-statement-adapter) for the current format.
 
 Optional fields gracefully default:
 ```python
