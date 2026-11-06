@@ -802,6 +802,55 @@ persisted to `data/fx_targets_state.json` so stickiness carries across runs.
 
 ---
 
+## Saven HISA balances and transfers
+
+Include a quoted `SAVEN:<account-number>` identifier in `targets`, or in
+`tactical_deployment.fixed_composition` when using tactical deployment. Target
+membership selects the accounts to track, including zero-weight entries. Keep an
+account configured until its balance is zero if you want it included in valuation.
+Configure its broker transfer endpoint separately:
+
+```yaml
+external_transfer_accounts:
+  "SAVEN:0001112223":
+    owner_name: Secondary
+    account_type: Margin
+```
+
+The endpoint must match exactly one personal Questrade Margin account. Local runs
+look in `~/Downloads` for the newest matching Saven CSV, selected by contents and
+account number rather than its filename. The newest transaction's ledger balance
+is used after validating transaction order and adjacent balances. It is saved as
+SOPS-encrypted `data/saven_balance.json` in the private state repo. Scheduled runs
+use that snapshot without accessing Downloads. Without a new export, the cached
+balance retains its original transaction and source-file dates. Each account's
+snapshot contains only `balance_cad`, `last_transaction_date`, `source_modified_at`,
+and `source_sha256`. The account number is the mapping key; provider and currency
+are defined by the Saven CAD loader. Missing
+initial balances and malformed tracked exports stop evaluation instead of using zero.
+
+The balance counts in household value, history, tactical posture, and allocation
+accuracy. Transfers and the share trades they fund are included in one projected
+plan, like currency conversions. A HISA deposit can use cash and funding sales in
+the configured Margin account; an unfillable amount remains an allocation gap.
+There is no temporary change to target weights or saved pending-transfer state.
+
+Transfers use **Questrade ↔ Vancity ↔ Saven**. Execute funding sales/conversions,
+move the money, then execute dependent buys. Once a transfer has posted at both
+ends, download a new Saven CSV and run again. Verify the reported balance against
+Saven: a filtered export may omit newer activity. While money is in transit,
+reported balances can temporarily undercount or double-count household value.
+
+To inspect or save a balance separately, use:
+
+```powershell
+python scripts/import_saven_balance.py --directory "$HOME/Downloads"
+python scripts/import_saven_balance.py --directory "$HOME/Downloads" --save
+```
+
+Seed the encrypted snapshot locally before publishing Saven targets to scheduled
+runs. Keep real identifiers and export data in your private state and Downloads.
+
 ## Configuration
 
 Your real configuration lives in `config/settings.yaml` in the private state

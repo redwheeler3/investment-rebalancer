@@ -97,6 +97,15 @@ class HoldingSummary:
 
 
 @dataclass
+class ExternalBalance:
+    """A dated external account balance, unavailable for brokerage trades."""
+
+    balance_cad: float
+    last_transaction_date: str
+    source_modified_at: str
+
+
+@dataclass
 class PortfolioSummary:
     """Aggregated portfolio across all accounts."""
 
@@ -105,6 +114,7 @@ class PortfolioSummary:
     total_value_cad: float = 0.0
     cash_cad_total: float = 0.0
     cash_usd_total: float = 0.0
+    external_balances: dict[str, ExternalBalance] = field(default_factory=dict)
 
 
 @dataclass
@@ -570,6 +580,16 @@ def simulate_rebalance(
         hidden_symbols = set()
 
     for trade in trades:
+        if trade.action in {"DEPOSIT", "WITHDRAW"}:
+            movement = (
+                trade.amount_cad if trade.action == "DEPOSIT" else -trade.amount_cad
+            )
+            projected_holdings_value_cad[trade.symbol] += movement
+            if trade.requires_fx:
+                projected_cash_usd -= movement / usd_to_cad_rate
+            else:
+                projected_cash_cad -= movement
+            continue
         trade_price_cad = (
             trade.price * usd_to_cad_rate if trade.currency == "USD" else trade.price
         )

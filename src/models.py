@@ -21,6 +21,27 @@ class TradeRecommendation:
 
 
 @dataclass
+class TransferRecommendation:
+    """A CAD transfer between an external holding and a broker account."""
+
+    symbol: str
+    action: str  # DEPOSIT into external savings, or WITHDRAW to the broker
+    amount_cad: float
+    account_number: str
+    account_type: str
+    owner: str
+    requires_fx: bool = False
+
+    @property
+    def estimated_value(self) -> float:
+        return self.amount_cad
+
+    @property
+    def currency(self) -> str:
+        return "CAD"
+
+
+@dataclass
 class TransientAlert:
     """Alert about a transient holding in a specific account."""
 

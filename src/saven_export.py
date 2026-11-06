@@ -1,13 +1,12 @@
 """Read ledger balances from Saven's newest-first CAD transaction export."""
 
 import csv
+import hashlib
+import re
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from decimal import Decimal
-import hashlib
 from pathlib import Path
-import re
-
 
 EXPORT_TITLE = "Your Transactions List"
 EXPORT_HEADER = ["Date", "Description", "Amount (CAD)", "Balance (CAD)"]
@@ -23,24 +22,16 @@ class SavenExportBalance:
     account_number: str
     balance_cad: Decimal
     last_transaction_date: date
-    transaction_count: int
-    source_filename: str
     source_sha256: str
     source_modified_at: datetime
 
     def as_snapshot(self) -> dict:
-        """Describe source age separately from the time the importer runs."""
+        """Preserve ledger/source dates and identify unchanged exports."""
         return {
-            "provider": "Saven Financial",
-            "account_number": self.account_number,
-            "currency": "CAD",
             "balance_cad": str(self.balance_cad),
             "last_transaction_date": self.last_transaction_date.isoformat(),
-            "transaction_count": self.transaction_count,
-            "source_filename": self.source_filename,
             "source_sha256": self.source_sha256,
             "source_modified_at": self.source_modified_at.isoformat(),
-            "imported_at": datetime.now(UTC).isoformat(),
         }
 
 
@@ -60,7 +51,14 @@ def _read_prefix(reader, account_number: str | None = None) -> str | None:
         return None
     header_separator = next(reader, [])
     header = next(reader, [])
-    if separator or header_separator or [cell.strip() for cell in header] != EXPORT_HEADER:
+    normalized_header = [cell.strip() for cell in header]
+    # Saven also exports the ledger column with only its currency label.
+    valid_header = (
+        normalized_header[:3] == EXPORT_HEADER[:3]
+        and len(normalized_header) == 4
+        and normalized_header[3] in {"Balance (CAD)", "(CAD)"}
+    )
+    if separator or header_separator or not valid_header:
         raise ValueError("Expected an account number and the Saven CAD export header.")
     return exported_account
 
@@ -73,7 +71,9 @@ def _read_cad(value: str, dollar_prefix: bool) -> Decimal:
     return Decimal(value.replace("$", "").replace(",", ""))
 
 
-def read_saven_export(path: Path, account_number: str | None = None) -> SavenExportBalance | None:
+def read_saven_export(
+    path: Path, account_number: str | None = None
+) -> SavenExportBalance | None:
     raw = path.read_bytes()
     reader = csv.reader(raw.decode("utf-8-sig").splitlines())
     exported_account = _read_prefix(reader, account_number)
@@ -93,10 +93,13 @@ def read_saven_export(path: Path, account_number: str | None = None) -> SavenExp
             amount = _read_cad(row[2], dollar_prefix=False)
             # The final currency field contains unquoted thousands separators.
             balance = _read_cad(
-                ",".join(row[3:]), dollar_prefix=True,
+                ",".join(row[3:]),
+                dollar_prefix=True,
             )
         except ValueError as error:
-            raise ValueError(f"Invalid transaction at row {row_number}: {error}") from None
+            raise ValueError(
+                f"Invalid transaction at row {row_number}: {error}"
+            ) from None
         transactions.append((transaction_date, amount, balance))
 
     if not transactions:
@@ -112,14 +115,14 @@ def read_saven_export(path: Path, account_number: str | None = None) -> SavenExp
         account_number=exported_account,
         balance_cad=transactions[0][2],
         last_transaction_date=transactions[0][0],
-        transaction_count=len(transactions),
-        source_filename=path.name,
         source_sha256=hashlib.sha256(raw).hexdigest(),
         source_modified_at=datetime.fromtimestamp(path.stat().st_mtime, UTC),
     )
 
 
-def find_latest_saven_export(directory: Path, account_number: str | None = None) -> Path:
+def find_latest_saven_export(
+    directory: Path, account_number: str | None = None
+) -> Path:
     """Select by export format/account and file time, independently of filename."""
     candidates = []
     for path in directory.glob("*.csv"):
@@ -133,7 +136,9 @@ def find_latest_saven_export(directory: Path, account_number: str | None = None)
     if not candidates:
         raise SavenExportNotFound("No matching Saven-format CSV exports were found.")
     if len({account for _, account, _ in candidates}) != 1:
-        raise ValueError("Exports cover multiple accounts. Specify --account-number or --file.")
+        raise ValueError(
+            "Exports cover multiple accounts. Specify --account-number or --file."
+        )
     latest_time = max(modified for _, _, modified in candidates)
     newest = [path for path, _, modified in candidates if modified == latest_time]
     if len(newest) != 1:

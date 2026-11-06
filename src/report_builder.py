@@ -13,7 +13,7 @@ from src.history import (
     get_all_time_high,
     get_year_to_date_history,
 )
-from src.models import TradeRecommendation, TransientAlert
+from src.models import TradeRecommendation, TransferRecommendation, TransientAlert
 from src.portfolio import (
     AllocationSnapshot,
     build_allocation_snapshot,
@@ -28,7 +28,7 @@ class RebalanceReportData:
 
     current: AllocationSnapshot
     transient_alerts: list[TransientAlert]
-    trades: list[TradeRecommendation]
+    trades: list[TradeRecommendation | TransferRecommendation]
     currency_conversions: list[CurrencyConversion]
     projected: AllocationSnapshot | None = None
     all_time_high: AllTimeHigh = None
@@ -40,7 +40,7 @@ def build_report_data(
     portfolio,
     targets: dict,
     usd_to_cad_rate: float,
-    trades: list[TradeRecommendation],
+    trades: list[TradeRecommendation | TransferRecommendation],
     currency_conversions: list[CurrencyConversion],
     transient_alerts: list[TransientAlert],
     hidden_symbols: set[str],

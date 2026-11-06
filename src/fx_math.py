@@ -36,7 +36,9 @@ def build_account_trade_impacts(trades: list) -> dict:
     for trade in trades:
         totals = impacts.setdefault(trade.account_number, CurrencyTotals())
         amount = (
-            trade.estimated_value if trade.action == "BUY" else -trade.estimated_value
+            trade.estimated_value
+            if trade.action in {"BUY", "DEPOSIT"}
+            else -trade.estimated_value
         )
         totals.add(trade.currency, amount)
     return impacts

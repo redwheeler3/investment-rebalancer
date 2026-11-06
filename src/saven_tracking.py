@@ -1,8 +1,14 @@
 """Config-owned Saven account selection and cached export balances."""
 
-from pathlib import Path
+import math
 import re
+from datetime import date, datetime
+from decimal import Decimal, InvalidOperation
+from pathlib import Path
 
+from src.encrypted_state import read_encrypted_json, write_encrypted_json
+from src.paths import get_data_dir
+from src.portfolio import ExternalBalance, HoldingSummary
 from src.saven_export import (
     SavenExportNotFound,
     find_latest_saven_export,
@@ -11,18 +17,123 @@ from src.saven_export import (
 
 
 def parse_saven_account_numbers(settings: dict) -> list[str]:
-    section = settings.get("saven", {})
-    if not isinstance(section, dict):
-        raise ValueError("saven must be a configuration mapping.")
-    numbers = section.get("account_numbers", [])
-    if not isinstance(numbers, list) or any(
-        not isinstance(number, str) or not re.fullmatch(r"\d+", number)
-        for number in numbers
-    ):
-        raise ValueError("saven.account_numbers must be a list of quoted digit strings.")
-    if len(set(numbers)) != len(numbers):
-        raise ValueError("saven.account_numbers contains duplicate accounts.")
+    """Select external accounts from allocation membership, including zero targets."""
+    static = settings.get("targets", {})
+    tactical = settings.get("tactical_deployment", {})
+    if not isinstance(static, dict) or not isinstance(tactical, dict):
+        raise ValueError("targets and tactical_deployment must be mappings.")
+    fixed = tactical.get("fixed_composition", {})
+    if not isinstance(fixed, dict):
+        raise ValueError("fixed_composition must be a mapping.")
+    numbers = []
+    for mapping in (static, fixed):
+        for symbol, weight in mapping.items():
+            if not isinstance(symbol, str) or not symbol.upper().startswith("SAVEN"):
+                continue
+            match = re.fullmatch(r"SAVEN:(\d+)", symbol)
+            if not match:
+                raise ValueError(
+                    "Saven targets must use quoted SAVEN:<account-number> identifiers."
+                )
+            try:
+                valid_weight = math.isfinite(float(weight)) and float(weight) >= 0
+            except (TypeError, ValueError):
+                valid_weight = False
+            if not valid_weight:
+                raise ValueError(
+                    "Saven target weights must be finite nonnegative numbers."
+                )
+            number = match.group(1)
+            if number in numbers:
+                raise ValueError(
+                    "A Saven account must appear in only one target mapping."
+                )
+            if fixed and symbol in static:
+                raise ValueError(
+                    "With tactical deployment, Saven belongs in fixed_composition."
+                )
+            if symbol in settings.get("transient_symbols", []):
+                raise ValueError("Saven balances cannot be transient symbols.")
+            numbers.append(number)
+    for rule in settings.get("fx_target_rules", {}).values():
+        if any(
+            str(rule.get(key, "")).upper().startswith("SAVEN")
+            for key in ("usd_symbol", "cad_symbol")
+        ):
+            raise ValueError("Saven balances cannot be FX target instruments.")
     return numbers
+
+
+def parse_external_transfer_accounts(
+    settings: dict, account_numbers: list[str]
+) -> dict:
+    """Configure the personal Margin account used by each external holding."""
+    routes = settings.get("external_transfer_accounts", {})
+    if not isinstance(routes, dict):
+        raise ValueError("external_transfer_accounts must be a mapping.")
+    for symbol, route in routes.items():
+        if not re.fullmatch(r"SAVEN:\d+", str(symbol)) or not isinstance(route, dict):
+            raise ValueError(
+                "Each external transfer account requires a SAVEN identifier and account mapping."
+            )
+        if (
+            not isinstance(route.get("owner_name"), str)
+            or not route["owner_name"].strip()
+        ):
+            raise ValueError("An external transfer account requires owner_name.")
+        if route.get("account_type") != "Margin":
+            raise ValueError("External transfers require a personal Margin account.")
+    if any(f"SAVEN:{number}" not in routes for number in account_numbers):
+        raise ValueError(
+            "Every Saven target requires an external_transfer_accounts entry."
+        )
+    return routes
+
+
+def resolve_external_transfer_accounts(portfolio, routes: dict) -> dict:
+    """Require one explicit owner/type match; never choose a registered account."""
+    accounts = {}
+    for symbol in portfolio.external_balances:
+        route = routes[symbol]
+        matches = [
+            account
+            for account in portfolio.accounts
+            if account.owner == route["owner_name"]
+            and account.account_type == route["account_type"]
+            and account.client_account_type == "Individual"
+        ]
+        if len(matches) != 1:
+            raise ValueError(
+                f"External transfers require exactly one {route['owner_name']} {route['account_type']} account."
+            )
+        accounts[symbol] = matches[0]
+    return accounts
+
+
+def validate_saven_balance(number: str, balance: dict) -> None:
+    """Reject corrupted cached financial data before it reaches portfolio math."""
+    if not isinstance(balance, dict) or set(balance) != {
+        "balance_cad",
+        "last_transaction_date",
+        "source_modified_at",
+        "source_sha256",
+    }:
+        raise ValueError(
+            f"Invalid cached Saven balance fields for account ending {number[-4:]}."
+        )
+    try:
+        value = Decimal(balance["balance_cad"])
+        if not value.is_finite() or value < 0 or not math.isfinite(float(value)):
+            raise ValueError("Invalid balance.")
+        date.fromisoformat(balance["last_transaction_date"])
+        if datetime.fromisoformat(balance["source_modified_at"]).utcoffset() is None:
+            raise ValueError("Source times must include a timezone.")
+        if not re.fullmatch(r"[a-f0-9]{64}", balance["source_sha256"]):
+            raise ValueError("Invalid source identity.")
+    except (KeyError, TypeError, ValueError, InvalidOperation, OverflowError):
+        raise ValueError(
+            f"Invalid cached Saven balance/source data for account ending {number[-4:]}."
+        ) from None
 
 
 def refresh_saven_balances(
@@ -43,17 +154,8 @@ def refresh_saven_balances(
     refreshed = set()
     for number in account_numbers:
         cached = cached_accounts.get(number)
-        if cached is not None and (
-            not isinstance(cached, dict) or cached.get("account_number") != number
-        ):
-            raise ValueError("A cached Saven balance has a mismatched account identity.")
-        if cached is not None and any(
-            key not in cached for key in (
-                "balance_cad", "last_transaction_date", "source_modified_at",
-                "source_filename", "source_sha256", "imported_at",
-            )
-        ):
-            raise ValueError("A cached Saven balance is missing required source data.")
+        if cached is not None:
+            validate_saven_balance(number, cached)
         exported = None
         if source_file is not None:
             exported = read_saven_export(source_file, number)
@@ -68,15 +170,52 @@ def refresh_saven_balances(
             cached is not None and exported.source_sha256 == cached.get("source_sha256")
         ):
             if cached is None:
-                raise ValueError(f"No export or cached balance for configured account ending {number[-4:]}.")
+                raise ValueError(
+                    f"No export or cached balance for configured account ending {number[-4:]}."
+                )
             snapshots[number] = cached
             continue
         if cached is not None and (
-            cached.get("last_transaction_date", "") > exported.last_transaction_date.isoformat()
-            or cached.get("source_modified_at", "") > exported.source_modified_at.isoformat()
+            cached.get("last_transaction_date", "")
+            > exported.last_transaction_date.isoformat()
+            or datetime.fromisoformat(cached["source_modified_at"])
+            > exported.source_modified_at
         ):
             snapshots[number] = cached
             continue
         snapshots[number] = exported.as_snapshot()
+        validate_saven_balance(number, snapshots[number])
         refreshed.add(number)
     return {"accounts": snapshots}, refreshed
+
+
+def load_saven_balances(
+    account_numbers: list[str], directory: Path | None = None
+) -> dict:
+    """Local runs refresh exports; scheduled runs consume encrypted snapshots only."""
+    if not account_numbers:
+        return {}
+    destination = get_data_dir() / "saven_balance.json"
+    existing = read_encrypted_json(destination) if destination.exists() else {}
+    snapshot, _ = refresh_saven_balances(account_numbers, existing, directory=directory)
+    if snapshot != existing:
+        write_encrypted_json(destination, snapshot)
+    return snapshot["accounts"]
+
+
+def attach_saven_balances(portfolio, balances: dict) -> None:
+    """Include dated savings in household valuation without creating broker cash."""
+    for number, balance in balances.items():
+        validate_saven_balance(number, balance)
+        if f"SAVEN:{number}" in portfolio.holdings:
+            raise ValueError("Saven balance is already included in the portfolio.")
+    for number, balance in balances.items():
+        symbol = f"SAVEN:{number}"
+        value = float(balance["balance_cad"])
+        portfolio.holdings[symbol] = HoldingSummary(value_cad=value)
+        portfolio.external_balances[symbol] = ExternalBalance(
+            balance_cad=value,
+            last_transaction_date=balance["last_transaction_date"],
+            source_modified_at=balance["source_modified_at"],
+        )
+        portfolio.total_value_cad += value

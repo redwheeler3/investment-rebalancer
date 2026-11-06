@@ -23,11 +23,11 @@ The planner runs in iterative rounds with two layers per round:
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from src.cash_deploy import build_deploy_cash_underweight
 from src.fx_math import consume_cross_currency_cash, cross_currency_buying_power, to_cad
-from src.models import TradeRecommendation
+from src.models import TradeRecommendation, TransferRecommendation
 from src.portfolio import (
     get_current_allocations,
     get_drifts,
@@ -45,11 +45,15 @@ MAX_ROUNDS = 10
 
 
 def net_trades(all_trades: list) -> list:
-    """Net buys and sells for the same (symbol, account) into a single trade."""
+    """Net share orders and external transfers separately per symbol/account."""
     position_map = {}  # (symbol, account_number) -> list of trades
+    transfer_map = {}
     for trade in all_trades:
         key = (trade.symbol, trade.account_number)
-        position_map.setdefault(key, []).append(trade)
+        mapping = (
+            transfer_map if isinstance(trade, TransferRecommendation) else position_map
+        )
+        mapping.setdefault(key, []).append(trade)
 
     final_trades = []
     for (symbol, account_number), trades_list in position_map.items():
@@ -111,6 +115,23 @@ def net_trades(all_trades: list) -> list:
                 )
             )
 
+    for transfers in transfer_map.values():
+        amount = round(
+            sum(
+                t.amount_cad if t.action == "DEPOSIT" else -t.amount_cad
+                for t in transfers
+            ),
+            2,
+        )
+        if amount:
+            final_trades.append(
+                replace(
+                    transfers[0],
+                    action="DEPOSIT" if amount > 0 else "WITHDRAW",
+                    amount_cad=abs(amount),
+                    requires_fx=any(t.requires_fx for t in transfers),
+                )
+            )
     return final_trades
 
 
@@ -127,8 +148,9 @@ def calculate_trades(
     drift_trade_threshold_pct: float,
     transient_symbols: set,
     dlr_quotes,
+    external_transfer_accounts: dict | None = None,
 ) -> list:
-    """Calculate rebalancing trades for the portfolio."""
+    """Calculate share trades and external transfers for the portfolio."""
     if portfolio.total_value_cad == 0:
         return []
 
@@ -140,6 +162,7 @@ def calculate_trades(
         drift_trade_threshold_pct=drift_trade_threshold_pct,
         hidden_symbols=transient_symbols,
         dlr_quotes=dlr_quotes,
+        external_transfer_accounts=external_transfer_accounts or {},
     )
     return planner.build()
 
@@ -157,17 +180,19 @@ class TradePlan:
     targets: dict[str, float]
     usd_to_cad_rate: float
     hidden_symbols: set[str]
-    trades: list[TradeRecommendation] = field(default_factory=list)
-    _netted_cache: list[TradeRecommendation] | None = field(
+    trades: list[TradeRecommendation | TransferRecommendation] = field(
+        default_factory=list
+    )
+    _netted_cache: list[TradeRecommendation | TransferRecommendation] | None = field(
         default=None, init=False, repr=False
     )
     _snapshot_cache: object | None = field(default=None, init=False, repr=False)
 
-    def add_trade(self, trade: TradeRecommendation) -> None:
+    def add_trade(self, trade: TradeRecommendation | TransferRecommendation) -> None:
         self.trades.append(trade)
         self._invalidate()
 
-    def netted_trades(self) -> list[TradeRecommendation]:
+    def netted_trades(self) -> list[TradeRecommendation | TransferRecommendation]:
         if self._netted_cache is None:
             self._netted_cache = net_trades(self.trades)
         return list(self._netted_cache)
@@ -189,6 +214,8 @@ class TradePlan:
     def position_deltas(self) -> dict[tuple[str, str], int]:
         deltas: dict[tuple[str, str], int] = {}
         for trade in self.trades:
+            if isinstance(trade, TransferRecommendation):
+                continue
             key = (trade.account_number, trade.symbol)
             delta = trade.quantity if trade.action == "BUY" else -trade.quantity
             deltas[key] = deltas.get(key, 0) + delta
@@ -285,12 +312,20 @@ class RebalancePlanner:
     drift_trade_threshold_pct: float
     hidden_symbols: set[str] = field(default_factory=set)
     dlr_quotes: object | None = None
+    external_transfer_accounts: dict = field(default_factory=dict)
     holdings_view: dict = field(init=False)
     initial_drifts: dict[str, float] = field(init=False)
     plan: TradePlan = field(init=False)
     ledger: CashLedger = field(init=False)
 
     def __post_init__(self) -> None:
+        if (
+            set(self.portfolio.external_balances)
+            - self.external_transfer_accounts.keys()
+        ):
+            raise ValueError(
+                "Every external balance requires a configured broker transfer account."
+            )
         current_alloc = get_current_allocations(
             self.portfolio,
             self.usd_to_cad_rate,
@@ -313,8 +348,9 @@ class RebalancePlanner:
     def build(self) -> list:
         """Run the planner phases and return the final recommended trades."""
         for _ in range(MAX_ROUNDS):
-            starter_changes = 0
+            starter_changes = self._plan_external_transfers()
             starter_changes += self._sell_overweight_starters()
+            starter_changes += self._plan_external_transfers()
             starter_changes += self._buy_underweight_starters()
 
             cash_changes = self._deploy_residual_cash()
@@ -323,6 +359,55 @@ class RebalancePlanner:
                 break
 
         return self.plan.netted_trades()
+
+    def _plan_external_transfers(self) -> int:
+        """Plan external CAD movements using the same cash ledger as share buys."""
+        count = 0
+        for symbol in self.portfolio.external_balances:
+            drift = self.plan.drifts().get(symbol, 0.0)
+            if abs(drift) <= self.drift_trade_threshold_pct:
+                continue
+            amount = round(abs(drift) / 100 * self.portfolio.total_value_cad, 2)
+            if amount < 0.01:
+                continue
+            account = self.external_transfer_accounts[symbol]
+            requires_fx = False
+            if drift > 0:
+                action = "WITHDRAW"
+                self.ledger.credit_sale(account.number, "CAD", amount)
+            else:
+                action = "DEPOSIT"
+                if (
+                    self.ledger.total_buying_power(
+                        account.number, "CAD", self.dlr_quotes
+                    )
+                    < amount
+                ):
+                    self._raise_cash_in_account(
+                        account, symbol, "CAD", amount, min_useful_native=0.01
+                    )
+                available = self.ledger.total_buying_power(
+                    account.number, "CAD", self.dlr_quotes
+                )
+                amount = min(amount, math.floor(available * 100 + 1e-8) / 100)
+                if amount < 0.01:
+                    continue
+                requires_fx = self.ledger.fund_buy(
+                    account.number, "CAD", amount, self.dlr_quotes
+                )
+            self.plan.add_trade(
+                TransferRecommendation(
+                    symbol=symbol,
+                    action=action,
+                    amount_cad=amount,
+                    account_number=account.number,
+                    account_type=account.account_type,
+                    owner=account.owner,
+                    requires_fx=requires_fx,
+                )
+            )
+            count += 1
+        return count
 
     def _sell_overweight_starters(self) -> int:
         count = 0
@@ -634,7 +719,19 @@ class RebalancePlanner:
                 drift = drifts.get(pos.symbol, 0.0)
                 if drift < 0:
                     score += abs(drift)
+            score += self._external_underweight_in_account(acct, drifts)
         return score
+
+    def _external_underweight_in_account(
+        self, account, drifts: dict, threshold: float = 0.0
+    ) -> float:
+        """Return external deficits reachable through this account's transfer routes."""
+        return sum(
+            -drifts[symbol]
+            for symbol, endpoint in self.external_transfer_accounts.items()
+            if endpoint.number == account.number
+            and drifts.get(symbol, 0.0) < -threshold
+        )
 
     def _productive_accounts_for_sell(
         self, sell_symbol: str, drifts: dict[str, float]
@@ -653,6 +750,12 @@ class RebalancePlanner:
             if not any(
                 p.symbol == sell_symbol and p.quantity > 0 for p in acct.positions
             ):
+                continue
+
+            if self._external_underweight_in_account(
+                acct, drifts, self.drift_trade_threshold_pct
+            ):
+                productive.add(acct.number)
                 continue
 
             if _has_underweight_alternatives(

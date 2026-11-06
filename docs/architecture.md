@@ -24,12 +24,16 @@ The `run_rebalancer()` function is the spine of the app. Every other module is c
 ```python
 def run_rebalancer():
     (accounts, targets, transient_symbols, norberts_gambit_fee_cad,
-     fx_target_rules, drift_trade_threshold_pct, tactical_config) = load_config()
+     fx_target_rules, drift_trade_threshold_pct, tactical_config,
+     saven_accounts, external_transfer_accounts) = load_config()
 
+    saven_balances = load_saven_balances(saven_accounts, Path.home() / "Downloads")
     clients = _connect_clients(accounts)
     usd_to_cad_rate = _fetch_exchange_rate(clients[0])
     resolved_targets = resolve_targets(targets, fx_target_rules, usd_to_cad_rate)
     portfolio = _build_priced_portfolio(clients, usd_to_cad_rate)
+    attach_saven_balances(portfolio, saven_balances)
+    transfer_accounts = resolve_external_transfer_accounts(portfolio, external_transfer_accounts)
     dlr_quotes = _fetch_dlr_quotes(clients[0])
 
     # Tactical posture (if configured) shifts the resolved targets before sizing.
@@ -38,15 +42,16 @@ def run_rebalancer():
         resolved_targets = resolve_tactical_targets(resolved_targets, tactical_posture, ...)
     _validate_resolved_targets(resolved_targets)  # fail fast if not ~100%
 
-    trades = calculate_trades(portfolio, resolved_targets, ...)
+    trades = calculate_trades(portfolio, resolved_targets, ..., external_transfer_accounts=transfer_accounts)
     currency_conversions = calculate_currency_needs(trades, portfolio.accounts, ...)
     report = build_report_data(portfolio, resolved_targets, ..., trades, ...)
     record_value(portfolio.total_value_cad)
     _render_report(portfolio, resolved_targets, ..., report)
 ```
 
-`load_config()` returns a 7-tuple (accounts, targets, transient symbols, gambit
-fee, FX rules, drift threshold, tactical config); the snippet above keeps the
+`load_config()` returns a 9-tuple (accounts, targets, transient symbols, gambit
+fee, FX rules, drift threshold, tactical config, Saven account identifiers, and
+external transfer endpoints); the snippet above keeps the
 interesting names and elides the rest.
 
 This is the **interactive** path. Before any of it, `_pull_latest()` does a
@@ -87,6 +92,14 @@ and every app-managed file under `data/` are SOPS/age ciphertext at rest.
 - **drift_trade_threshold_pct** — minimum drift before a trade is recommended
 - **norberts_gambit_fee_cad** — per-conversion fee
 - **tactical_config** — drawdown-based regime state machine that dynamically shifts the fixed/equity split (parsed via `parse_tactical_config()`)
+- **saven_accounts** — external account identifiers derived from target membership
+- **external_transfer_accounts** — owner/type selection for personal Margin transfer endpoints
+
+Local runs refresh Saven CSVs from Downloads into encrypted private snapshots;
+scheduled runs consume only snapshots. Balances are attached before history,
+tactical evaluation, and allocation math. Missing or malformed external data fail
+closed. The portfolio holds external savings separately from available broker
+cash; planned transfers connect the two through the shared planning ledger.
 
 Optional fields gracefully default:
 ```python

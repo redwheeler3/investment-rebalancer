@@ -12,6 +12,7 @@ Usage:
 import os
 import subprocess
 import sys
+from pathlib import Path
 
 import yaml
 
@@ -38,6 +39,13 @@ from src.portfolio import (
 from src.questrade_client import QuestradeClient
 from src.rebalancer import calculate_trades
 from src.report_builder import build_report_data
+from src.saven_tracking import (
+    attach_saven_balances,
+    load_saven_balances,
+    parse_external_transfer_accounts,
+    parse_saven_account_numbers,
+    resolve_external_transfer_accounts,
+)
 from src.tactical import (
     evaluate_tactical_posture,
     parse_tactical_config,
@@ -56,6 +64,9 @@ def load_config() -> tuple:
             norberts_gambit_fee_cad float,
             fx_target_rules dict,
             drift_trade_threshold_pct float,
+            tactical_config,
+            saven_account_numbers list,
+            external_transfer_accounts dict,
         ).
     """
     targets_path = get_config_dir() / "settings.yaml"
@@ -102,6 +113,10 @@ def load_config() -> tuple:
     fx_target_rules = data.get("fx_target_rules", {})
     drift_trade_threshold_pct = float(data.get("drift_trade_threshold_pct", 0.1))
     tactical_config = parse_tactical_config(data.get("tactical_deployment", {}))
+    saven_account_numbers = parse_saven_account_numbers(data)
+    external_transfer_accounts = parse_external_transfer_accounts(
+        data, saven_account_numbers
+    )
 
     return (
         accounts,
@@ -111,6 +126,8 @@ def load_config() -> tuple:
         fx_target_rules,
         drift_trade_threshold_pct,
         tactical_config,
+        saven_account_numbers,
+        external_transfer_accounts,
     )
 
 
@@ -141,8 +158,12 @@ def run_scheduled_sync():
         fx_target_rules,
         _drift_trade_threshold_pct,
         tactical_config,
+        saven_account_numbers,
+        _external_transfer_accounts,
     ) = load_config()
     validate_encrypted_state_files()
+    # Missing/corrupt external balances must fail before history or tactical state.
+    saven_balances = load_saven_balances(saven_account_numbers)
 
     all_ok = True
     clients = []
@@ -175,6 +196,7 @@ def run_scheduled_sync():
         try:
             usd_to_cad_rate = get_usd_to_cad_rate(client=clients[0])
             portfolio = build_portfolio(clients, usd_to_cad_rate)
+            attach_saven_balances(portfolio, saven_balances)
             record_value(portfolio.total_value_cad)
             print(f"  ✓ Portfolio value recorded: ${portfolio.total_value_cad:,.2f}")
 
@@ -348,12 +370,21 @@ def run_rebalancer():
         fx_target_rules,
         drift_trade_threshold_pct,
         tactical_config,
+        saven_account_numbers,
+        external_transfer_accounts,
     ) = load_config()
 
+    saven_balances = load_saven_balances(
+        saven_account_numbers, Path.home() / "Downloads"
+    )
     clients = _connect_clients(accounts)
     usd_to_cad_rate = _fetch_exchange_rate(clients[0])
     resolved_targets = resolve_targets(targets, fx_target_rules, usd_to_cad_rate)
     portfolio = _build_priced_portfolio(clients, usd_to_cad_rate)
+    attach_saven_balances(portfolio, saven_balances)
+    transfer_accounts = resolve_external_transfer_accounts(
+        portfolio, external_transfer_accounts
+    )
     dlr_quotes = _fetch_dlr_quotes(clients[0])
 
     # Evaluate tactical posture and adjust targets if configured
@@ -385,6 +416,7 @@ def run_rebalancer():
         drift_trade_threshold_pct,
         transient_symbols=hidden_symbols,
         dlr_quotes=dlr_quotes,
+        external_transfer_accounts=transfer_accounts,
     )
     currency_conversions = calculate_currency_needs(
         trades,

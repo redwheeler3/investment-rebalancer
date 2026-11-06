@@ -97,6 +97,29 @@ class TestStickyRound:
 @patch("src.fx_targets._save_fx_state")
 @patch("src.fx_targets._load_fx_state", return_value={})
 class TestResolveTargets:
+    @pytest.mark.parametrize("rate", [0.9, 1.0, 1.25, 1.36, 1.5, 1.6])
+    @pytest.mark.parametrize("prior", [None, 63.0, 78.0])
+    def test_three_point_split_preserves_78_percent_budget(
+        self, mock_load, mock_save, rate, prior
+    ):
+        mock_load.return_value = (
+            {} if prior is None else {"split": {"cad_target_pct": prior}}
+        )
+        rules = {
+            "split": {
+                "usd_symbol": "IVV",
+                "cad_symbol": "VSP.TO",
+                "total_target_pct": 78.0,
+                "min_usd_to_cad_rate": 1.0,
+                "max_usd_to_cad_rate": 1.5,
+                "target_rounding_step": 3,
+            }
+        }
+        result = resolve_targets({"RSI.TO": 2.0}, rules, rate)
+        assert result["IVV"] + result["VSP.TO"] == 78
+        assert result["IVV"] >= 0 and result["VSP.TO"] >= 0
+        assert sum(result.values()) == 80
+
     def test_no_fx_rules_returns_base_targets(self, mock_load, mock_save):
         base = {"VCN.TO": 30.0, "VUN.TO": 40.0, "XBB.TO": 30.0}
         result = resolve_targets(base, {}, 1.36)

@@ -41,6 +41,7 @@ trades = calculate_trades(
     drift_trade_threshold_pct,
     transient_symbols=hidden_symbols,
     dlr_quotes=dlr_quotes,
+    external_transfer_accounts=transfer_accounts,
 )
 ```
 
@@ -81,8 +82,9 @@ At this point we know: VSP.TO is +2.3% over target, IVV is -1.9% under, etc.
 ```python
 def build(self) -> list:
     for _ in range(MAX_ROUNDS):     # Up to 10 iterations
-        starter_changes = 0
+        starter_changes = self._plan_external_transfers()
         starter_changes += self._sell_overweight_starters()
+        starter_changes += self._plan_external_transfers()
         starter_changes += self._buy_underweight_starters()
 
         cash_changes = self._deploy_residual_cash()
@@ -96,6 +98,33 @@ def build(self) -> list:
 **Why iterate?** Selling VSP.TO (overweight) gives you cash to buy IVV (underweight). But whole-share rounding means the drift won't close perfectly. Round 2 catches the leftovers. In practice: 1-2 rounds.
 
 ---
+
+## External transfers (`_plan_external_transfers`)
+
+External savings are dated holdings in the household allocation, with no share
+quantity or broker cash balance. Target membership determines which Saven accounts
+are loaded. Each has one configured personal Margin endpoint; owner and account
+type must resolve uniquely against the loaded Questrade accounts.
+
+The planner keeps ideal targets unchanged. A materially overweight HISA produces
+a `WITHDRAW` action and credits projected CAD in its broker endpoint. A materially
+underweight HISA produces a `DEPOSIT`, funded by that account's cash and ordinary
+overweight funding sales. Both use the shared `CashLedger`, including conservative
+FX funding when needed. Transfers are checked before and after starter sells so
+new sale proceeds can fund the deposit before residual cash deployment.
+
+`TradePlan` carries share trades and amount-based transfers together. Netting
+consolidates each type separately; position deltas include only share trades.
+`simulate_rebalance` moves value between savings and broker cash without changing
+the household total. FX cash impacts include transfer amounts, while currency
+home detection considers only share positions. The report shows current reported
+balances and the projected result of the complete plan, including transfers.
+Unfundable deposits remain visible as allocation gaps. Account-local external
+deficits also count as productive destinations in household cascade routing.
+
+The plan assumes its transfers and conversions complete before dependent buys.
+It stores no settlement state and changes no temporary target weights. A new
+Saven CSV plus refreshed broker data establish actual balances on the next run.
 
 ## Layer 1: Sell Overweight (`_sell_overweight_starters`)
 

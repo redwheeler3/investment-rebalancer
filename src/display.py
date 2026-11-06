@@ -155,6 +155,9 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
 
         price_str = _format_money(price, currency)
         qty_str = _format_shares(qty)
+        if symbol in portfolio.external_balances:
+            price_str = ""
+            qty_str = ""
 
         # Calculate day P&L (from previous close)
         if prev_close > 0:
@@ -177,6 +180,8 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
         total_day_pnl_cad += day_pnl_cad
         total_value_for_pct += prev_value_cad
         pnl_str = _format_signed_change(day_pnl_cad, change_pct)
+        if symbol in portfolio.external_balances:
+            pnl_str = "—"
 
         rows.append((symbol, qty_str, price_str, value_cad, pnl_str))
 
@@ -648,8 +653,9 @@ def display_allocations(
 
 def display_trades(trades: list):
     """Display recommended trades table, grouped by account with sells before buys."""
+    trades = [trade for trade in trades if trade.action in {"BUY", "SELL"}]
     if not trades:
-        console.print("  [green]No trades needed -- portfolio is balanced![/green]")
+        console.print("  [green]No share trades recommended.[/green]")
         console.print()
         return
 
@@ -779,7 +785,7 @@ def display_transient_alerts(transient_alerts: list):
 def display_account_summary(accounts: list, usd_to_cad_rate: float):
     """Display a summary of all accounts."""
     table = Table(
-        title="Account Summary",
+        title="Questrade Account Summary",
         box=box.ROUNDED,
         show_header=True,
         header_style="bold magenta",
@@ -840,6 +846,57 @@ def display_account_summary(accounts: list, usd_to_cad_rate: float):
 
     console.print(table)
     console.print()
+
+
+def display_external_balances(portfolio, targets: dict, actions: list) -> None:
+    """Show dated external balances and transfers included in the projected plan."""
+    if not portfolio.external_balances:
+        return
+    table = Table(
+        title="External Savings", box=box.ROUNDED, header_style="bold magenta"
+    )
+    table.add_column("Account", style="bold")
+    table.add_column("Reported CAD", justify="right")
+    table.add_column("Target CAD", justify="right")
+    table.add_column("Manual transfer")
+    for symbol, balance in portfolio.external_balances.items():
+        target_value = portfolio.total_value_cad * targets.get(symbol, 0.0) / 100
+        transfers = [
+            action
+            for action in actions
+            if action.symbol == symbol and action.action in {"DEPOSIT", "WITHDRAW"}
+        ]
+        instruction = (
+            "; ".join(
+                f"{transfer.action} {_format_money(transfer.amount_cad)} — "
+                f"{_format_account_label(transfer.owner, transfer.account_type, transfer.account_number)}"
+                for transfer in transfers
+            )
+            or "No transfer planned"
+        )
+        table.add_row(
+            f"Saven HISA (…{symbol.split(':', 1)[1][-4:]})",
+            _format_money(balance.balance_cad),
+            _format_money(target_value),
+            instruction,
+        )
+    console.print(table)
+    for symbol, balance in portfolio.external_balances.items():
+        console.print(
+            f"  [dim]Saven …{symbol[-4:]}: latest transaction {balance.last_transaction_date}; "
+            f"export modified {balance.source_modified_at}[/dim]"
+        )
+    console.print(
+        "  [yellow]Verify the reported balance against Saven. Export date ranges may omit recent activity.[/yellow]"
+    )
+    console.print("  Transfers: configured Margin account ↔ Vancity ↔ Saven.")
+    console.print(
+        "  Projected allocations include the planned transfers and the trades they fund, "
+        "just as they include planned currency conversions. Execute dependent buys after funds arrive."
+    )
+    console.print(
+        "  Refresh both sides after funds arrive; download an updated Saven CSV.\n"
+    )
 
 
 def display_projected_allocations(
@@ -964,6 +1021,7 @@ def display_full_report(
     display_year_to_date_chart(ytd_history or [])
     display_holdings_summary(portfolio, usd_to_cad_rate)
     display_account_summary(portfolio.accounts, usd_to_cad_rate)
+    display_external_balances(portfolio, targets, trades)
     display_allocations(current_allocations, targets, drift_trade_threshold_pct)
     display_transient_alerts(transient_alerts)
     display_trades(trades)

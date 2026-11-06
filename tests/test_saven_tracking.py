@@ -7,7 +7,6 @@ import pytest
 from src.saven_export import read_saven_export
 from src.saven_tracking import parse_saven_account_numbers, refresh_saven_balances
 
-
 ACCOUNT_A = "0001112223"
 ACCOUNT_B = "0001114445"
 
@@ -28,21 +27,45 @@ def cached(path):
 
 
 def test_config_preserves_leading_zeros_and_missing_section_disables_tracking():
-    assert parse_saven_account_numbers({"saven": {"account_numbers": [ACCOUNT_A]}}) == [ACCOUNT_A]
+    assert parse_saven_account_numbers({"targets": {f"SAVEN:{ACCOUNT_A}": 5.0}}) == [
+        ACCOUNT_A
+    ]
     assert parse_saven_account_numbers({"targets": {"CAD": 0.0}}) == []
 
 
-@pytest.mark.parametrize("section", [
-    None,
-    {"account_numbers": ACCOUNT_A},
-    {"account_numbers": [1112223]},
-    {"account_numbers": [""]},
-    {"account_numbers": [" 0001112223"]},
-    {"account_numbers": [ACCOUNT_A, ACCOUNT_A]},
-])
-def test_config_rejects_invalid_or_duplicate_account_identifiers(section):
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"targets": None},
+        {"targets": {"SAVEN:": 5}},
+        {"targets": {"SAVEN:123abc": 5}},
+        {"targets": {"saven:123": 5}},
+        {"targets": {f"SAVEN:{ACCOUNT_A}": -1}},
+        {"targets": {f"SAVEN:{ACCOUNT_A}": float("nan")}},
+        {
+            "targets": {f"SAVEN:{ACCOUNT_A}": 5},
+            "tactical_deployment": {"fixed_composition": {f"SAVEN:{ACCOUNT_A}": 25}},
+        },
+        {
+            "targets": {f"SAVEN:{ACCOUNT_A}": 5},
+            "transient_symbols": [f"SAVEN:{ACCOUNT_A}"],
+        },
+        {"fx_target_rules": {"bad": {"cad_symbol": f"SAVEN:{ACCOUNT_A}"}}},
+    ],
+)
+def test_config_rejects_invalid_or_duplicate_account_identifiers(settings):
     with pytest.raises(ValueError):
-        parse_saven_account_numbers({"saven": section})
+        parse_saven_account_numbers(settings)
+
+
+def test_fixed_membership_tracks_zero_weight_accounts_until_emptied():
+    assert parse_saven_account_numbers(
+        {
+            "tactical_deployment": {
+                "fixed_composition": {f"SAVEN:{ACCOUNT_A}": 0, "ZMMK.TO": 100},
+            }
+        }
+    ) == [ACCOUNT_A]
 
 
 def test_newer_untracked_account_does_not_replace_tracked_account(tmp_path):
@@ -71,7 +94,9 @@ def test_newer_untracked_file_keeps_existing_tracked_balance_and_dates(tmp_path)
     existing = cached(initial)
     initial.unlink()
     export(tmp_path / "another-account.csv", ACCOUNT_B, "20.00")
-    snapshots, refreshed = refresh_saven_balances([ACCOUNT_A], existing, directory=tmp_path)
+    snapshots, refreshed = refresh_saven_balances(
+        [ACCOUNT_A], existing, directory=tmp_path
+    )
     assert snapshots == existing
     assert not refreshed
 
@@ -79,7 +104,9 @@ def test_newer_untracked_file_keeps_existing_tracked_balance_and_dates(tmp_path)
 def test_explicit_untracked_file_does_not_change_cached_account(tmp_path):
     existing = cached(export(tmp_path / "initial.csv"))
     other = export(tmp_path / "other.csv", ACCOUNT_B, "20.00")
-    snapshots, refreshed = refresh_saven_balances([ACCOUNT_A], existing, source_file=other)
+    snapshots, refreshed = refresh_saven_balances(
+        [ACCOUNT_A], existing, source_file=other
+    )
     assert snapshots == existing
     assert not refreshed
 
@@ -87,16 +114,20 @@ def test_explicit_untracked_file_does_not_change_cached_account(tmp_path):
 def test_multiple_configured_accounts_have_independent_balances(tmp_path):
     export(tmp_path / "one.csv", ACCOUNT_A, "10.00")
     export(tmp_path / "two.csv", ACCOUNT_B, "20.00")
-    snapshots, refreshed = refresh_saven_balances([ACCOUNT_A, ACCOUNT_B], {}, directory=tmp_path)
+    snapshots, refreshed = refresh_saven_balances(
+        [ACCOUNT_A, ACCOUNT_B], {}, directory=tmp_path
+    )
     assert snapshots["accounts"][ACCOUNT_A]["balance_cad"] == "10.00"
     assert snapshots["accounts"][ACCOUNT_B]["balance_cad"] == "20.00"
     assert refreshed == {ACCOUNT_A, ACCOUNT_B}
 
 
-def test_unchanged_export_does_not_advance_import_or_source_dates(tmp_path):
+def test_unchanged_export_does_not_advance_source_dates(tmp_path):
     path = export(tmp_path / "one.csv")
     existing = cached(path)
-    snapshots, refreshed = refresh_saven_balances([ACCOUNT_A], existing, directory=tmp_path)
+    snapshots, refreshed = refresh_saven_balances(
+        [ACCOUNT_A], existing, directory=tmp_path
+    )
     assert snapshots == existing
     assert not refreshed
 
@@ -123,6 +154,8 @@ def test_invalid_tracked_export_is_reported_even_if_cached_balance_exists(tmp_pa
 def test_older_export_retains_cached_balance(tmp_path):
     existing = cached(export(tmp_path / "one.csv"))
     older = export(tmp_path / "older.csv", amount="5.00", transaction_date="01/09/2026")
-    snapshots, refreshed = refresh_saven_balances([ACCOUNT_A], existing, source_file=older)
+    snapshots, refreshed = refresh_saven_balances(
+        [ACCOUNT_A], existing, source_file=older
+    )
     assert snapshots == existing
     assert not refreshed
