@@ -828,6 +828,8 @@ snapshot contains only `balance_cad`, `last_transaction_date`, `source_modified_
 and `source_sha256`. The account number is the mapping key; provider and currency
 are defined by the Saven CAD loader. Missing
 initial balances and malformed tracked exports stop evaluation instead of using zero.
+Local loading status reports a found, unchanged, absent, or ignored older CSV
+alongside the last activity date of the balance being used.
 
 The balance counts in household value, history, tactical posture, and allocation
 accuracy. Transfers and the share trades they fund are included in one projected

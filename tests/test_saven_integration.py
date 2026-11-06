@@ -173,11 +173,17 @@ def test_scheduled_read_uses_encrypted_cache_without_scanning_downloads(tmp_path
 
 def test_local_refresh_saves_encrypted_snapshot_and_keeps_original_dates(tmp_path):
     path = export(tmp_path / "download.csv")
+    events = []
     with (
         patch.object(saven_tracking, "get_data_dir", return_value=tmp_path),
         patch.object(saven_tracking, "write_encrypted_json") as write,
     ):
-        balances = load_saven_balances([ACCOUNT_A], directory=tmp_path)
+        balances = load_saven_balances(
+            [ACCOUNT_A],
+            directory=tmp_path,
+            on_status=lambda *event: events.append(event),
+        )
+    assert events == [(ACCOUNT_A, "found", "2026-10-07")]
     assert balances[ACCOUNT_A]["last_transaction_date"] == "2026-10-07"
     assert (
         balances[ACCOUNT_A]["source_modified_at"]
@@ -264,24 +270,26 @@ def test_scheduled_history_and_accuracy_include_savings(tmp_path, capsys):
     assert "Accuracy: 100.0%" in capsys.readouterr().out
 
 
-def test_report_labels_dated_balance_and_manual_transfer_without_share_order(
+def test_loading_status_dates_balance_and_report_shows_manual_transfer(
     tmp_path, monkeypatch
 ):
     portfolio, _ = household(tmp_path, savings="1000.00")
     output = StringIO()
-    monkeypatch.setattr(
-        display, "console", Console(file=output, width=160, force_terminal=False)
-    )
+    console = Console(file=output, width=160, force_terminal=False)
+    monkeypatch.setattr(display, "console", console)
+    monkeypatch.setattr(main, "console", console)
     actions = calculate_trades(
         portfolio, IDEAL, 1.3, 0, 0.1, set(), None, {SAVEN: portfolio.accounts[0]}
     )
-    display.display_external_balances(portfolio, IDEAL, actions)
+    main._display_saven_status(ACCOUNT_A, "found", "2026-10-07")
+    display.display_holdings_summary(portfolio, 1.3)
+    display.display_external_transfers(actions)
     text = output.getvalue()
-    assert "DEPOSIT $4,000.00" in text
-    assert "latest transaction 2026-10-07" in text
-    assert "export modified" in text
-    assert "Vancity" in text
-    assert "Projected allocations include the planned transfers" in text
+    assert "Primary Margin (broker) -> Saven HISA (…2223)" in text
+    assert "$4,000.00" in text
+    assert "last activity 2026-10-07" in text
+    assert text.count("last activity") == 1
+    assert text.index("CSV found") < text.index("Portfolio Holdings")
 
 
 def test_target_config_loads_external_fixed_membership_without_separate_account_list(
@@ -420,7 +428,8 @@ def test_transfer_only_plan_renders_without_fake_share_quantity(tmp_path, monkey
     monkeypatch.setattr(
         display, "console", Console(file=output, width=160, force_terminal=False)
     )
-    display.display_external_balances(portfolio, IDEAL, [transfer])
+    display.display_external_transfers([transfer])
     display.display_trades([transfer])
-    assert "WITHDRAW $5,000.00" in output.getvalue()
+    assert "Saven HISA (…2223) -> Primary Margin (broker)" in output.getvalue()
+    assert "$5,000.00" in output.getvalue()
     assert "No share trades recommended" in output.getvalue()

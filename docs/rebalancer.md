@@ -119,6 +119,15 @@ consolidates each type separately; position deltas include only share trades.
 the household total. FX cash impacts include transfer amounts, while currency
 home detection considers only share positions. The report shows current reported
 balances and the projected result of the complete plan, including transfers.
+Portfolio Holdings groups external savings below brokerage cash. Loading status
+shows the CSV lookup outcome and last activity date of the balance in use. An
+older export is identified relative to the cached source data; no age cutoff is
+assumed. Account Summary groups external accounts below brokerage
+accounts; both tables include external savings in their household totals while
+cash columns retain only brokerage cash. The Saven Transfers table follows
+currency conversions and contains only direction and amount. The direction names
+both the Saven HISA and the configured broker endpoint, joined by an arrow.
+Transfer instructions and refresh guidance live in the README.
 Unfundable deposits remain visible as allocation gaps. Account-local external
 deficits also count as productive destinations in household cascade routing.
 

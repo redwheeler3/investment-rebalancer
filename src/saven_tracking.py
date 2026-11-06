@@ -2,6 +2,7 @@
 
 import math
 import re
+from collections.abc import Callable
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
@@ -141,6 +142,7 @@ def refresh_saven_balances(
     existing: dict,
     directory: Path | None = None,
     source_file: Path | None = None,
+    on_status: Callable[[str, str, str], None] | None = None,
 ) -> tuple[dict, set[str]]:
     """Refresh configured accounts; retain their dated snapshots without new exports."""
     if directory is not None and source_file is not None:
@@ -166,38 +168,54 @@ def refresh_saven_balances(
                 path = None
             if path is not None:
                 exported = read_saven_export(path, number)
-        if exported is None or (
-            cached is not None and exported.source_sha256 == cached.get("source_sha256")
-        ):
+        if exported is None:
             if cached is None:
                 raise ValueError(
                     f"No export or cached balance for configured account ending {number[-4:]}."
                 )
             snapshots[number] = cached
-            continue
-        if cached is not None and (
+            status = (
+                "absent"
+                if directory is not None or source_file is not None
+                else "cached"
+            )
+        elif cached is not None and exported.source_sha256 == cached["source_sha256"]:
+            snapshots[number] = cached
+            status = "unchanged"
+        elif cached is not None and (
             cached.get("last_transaction_date", "")
             > exported.last_transaction_date.isoformat()
             or datetime.fromisoformat(cached["source_modified_at"])
             > exported.source_modified_at
         ):
             snapshots[number] = cached
-            continue
-        snapshots[number] = exported.as_snapshot()
-        validate_saven_balance(number, snapshots[number])
-        refreshed.add(number)
+            status = "older"
+        else:
+            snapshots[number] = exported.as_snapshot()
+            validate_saven_balance(number, snapshots[number])
+            refreshed.add(number)
+            status = "found"
+        if on_status is not None:
+            on_status(number, status, snapshots[number]["last_transaction_date"])
     return {"accounts": snapshots}, refreshed
 
 
 def load_saven_balances(
-    account_numbers: list[str], directory: Path | None = None
+    account_numbers: list[str],
+    directory: Path | None = None,
+    on_status: Callable[[str, str, str], None] | None = None,
 ) -> dict:
     """Local runs refresh exports; scheduled runs consume encrypted snapshots only."""
     if not account_numbers:
         return {}
     destination = get_data_dir() / "saven_balance.json"
     existing = read_encrypted_json(destination) if destination.exists() else {}
-    snapshot, _ = refresh_saven_balances(account_numbers, existing, directory=directory)
+    snapshot, _ = refresh_saven_balances(
+        account_numbers,
+        existing,
+        directory=directory,
+        on_status=on_status,
+    )
     if snapshot != existing:
         write_encrypted_json(destination, snapshot)
     return snapshot["accounts"]

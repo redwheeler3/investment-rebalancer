@@ -159,3 +159,24 @@ def test_older_export_retains_cached_balance(tmp_path):
     )
     assert snapshots == existing
     assert not refreshed
+
+
+@pytest.mark.parametrize("status", ["found", "unchanged", "absent", "older", "cached"])
+def test_refresh_status_describes_source_and_dates_the_balance_in_use(tmp_path, status):
+    path = export(tmp_path / "source.csv")
+    existing = {} if status == "found" else cached(path)
+    if status == "absent":
+        path.unlink()
+    elif status == "older":
+        export(path, amount="5.00", transaction_date="01/09/2026")
+    events = []
+    snapshot, _ = refresh_saven_balances(
+        [ACCOUNT_A],
+        existing,
+        directory=None if status == "cached" else tmp_path,
+        on_status=lambda *event: events.append(event),
+    )
+    assert events == [(ACCOUNT_A, status, "2026-10-07")]
+    assert snapshot["accounts"][ACCOUNT_A]["balance_cad"] == "10.00"
+    if existing:
+        assert snapshot == existing

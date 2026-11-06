@@ -358,6 +358,20 @@ def _render_report(
     )
 
 
+def _display_saven_status(account_number: str, status: str, last_activity: str) -> None:
+    """Report the CSV lookup outcome and the activity date of the balance in use."""
+    style, label = {
+        "found": ("green", "CSV found"),
+        "unchanged": ("dim", "CSV unchanged; cached balance"),
+        "absent": ("dim", "CSV absent; cached balance"),
+        "older": ("yellow", "older CSV ignored; cached balance"),
+        "cached": ("dim", "cached balance"),
+    }[status]
+    console.print(
+        f"  [{style}]Saven …{account_number[-4:]}: {label}; last activity {last_activity}[/{style}]"
+    )
+
+
 def run_rebalancer():
     """Main rebalancer logic."""
 
@@ -375,7 +389,9 @@ def run_rebalancer():
     ) = load_config()
 
     saven_balances = load_saven_balances(
-        saven_account_numbers, Path.home() / "Downloads"
+        saven_account_numbers,
+        Path.home() / "Downloads",
+        on_status=_display_saven_status,
     )
     clients = _connect_clients(accounts)
     usd_to_cad_rate = _fetch_exchange_rate(clients[0])
