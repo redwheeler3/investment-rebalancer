@@ -1,8 +1,7 @@
-"""Reconcile recommended Saven transfers without changing reported account cash."""
+"""Reconcile recommended external transfers without changing reported account cash."""
 
 import hashlib
 import json
-import re
 from collections import Counter
 from copy import deepcopy
 from datetime import UTC, datetime, timedelta
@@ -131,7 +130,7 @@ class TransferLedger:
                     for count in bank["seen"].values()
                 )
             ):
-                raise ValueError("Invalid Saven activity cursor.")
+                raise ValueError("Invalid external activity cursor.")
         seen = record["broker_seen"]
         if seen is not None and (
             not isinstance(seen, dict)
@@ -200,7 +199,7 @@ class TransferLedger:
             },
         )
 
-    def observe_saven(self, symbol, snapshot, exported=None):
+    def observe_external_balance(self, symbol, snapshot, exported=None):
         """Process a changed ledger against the previous reported balance, excluding interest."""
         record = self.account(symbol)
         current = {
@@ -221,7 +220,7 @@ class TransferLedger:
             return
         if exported is None or exported.source_sha256 != current["hash"]:
             raise ValueError(
-                "New Saven balance requires its CSV evidence; refresh the export locally."
+                "New external balance requires statement evidence; refresh the export locally."
             )
         rows = list(exported.transactions)
         if prior["seen"] is not None:
@@ -256,19 +255,18 @@ class TransferLedger:
             change = balance - running
             if abs(change) != abs(cents(row.amount_cad)):
                 raise ValueError(
-                    "Saven CSV must include continuous activity since the tracked balance."
+                    "External statements must include continuous activity since the tracked balance."
                 )
-            description = row.description.casefold()
-            if "interest" not in description and not re.search(
-                r"\b(fees?|charges?)\b", description
-            ):
+            if row.is_transfer:
                 if change > 0:
                     incoming += change
                 else:
                     outgoing -= change
             running = balance
         if running != current["balance"]:
-            raise ValueError("Saven CSV does not reconcile the tracked balance.")
+            raise ValueError(
+                "External statement does not reconcile the tracked balance."
+            )
         record["bank"] = current
         record["bank_in"] += incoming
         record["bank_out"] += outgoing
@@ -370,7 +368,7 @@ class TransferLedger:
             amounts = self._amounts(record)
             if amounts is not None and (amounts[2] > 0 or amounts[3] > 0):
                 raise ValueError(
-                    "Keep a Saven target and its broker endpoint configured until its transfer settles."
+                    "Keep an external target and its Questrade endpoint configured until its transfer settles."
                 )
             del self.data["accounts"][symbol]
 
@@ -403,14 +401,14 @@ class TransferLedger:
             if progress is None:
                 continue
             portfolio.transfer_progress.append(progress)
-            if progress.awaiting_csv_cad:
+            if progress.source_offset_cad:
                 holding = portfolio.holdings[symbol]
-                if progress.awaiting_csv_cad > holding.value_cad:
+                if progress.source_offset_cad > holding.value_cad:
                     raise ValueError(
-                        "A stale Saven adjustment exceeds its reported balance."
+                        "An external source adjustment exceeds its reported balance."
                     )
-                holding.value_cad -= progress.awaiting_csv_cad
-                portfolio.total_value_cad -= progress.awaiting_csv_cad
+                holding.value_cad -= progress.source_offset_cad
+                portfolio.total_value_cad -= progress.source_offset_cad
             if progress.in_transit_cad:
                 portfolio.holdings[progress.transit_symbol] = HoldingSummary(
                     value_cad=progress.in_transit_cad
@@ -435,7 +433,7 @@ class TransferLedger:
             cycle = record["cycle"]
             if cycle is not None:
                 moved = progress.source_cad > 0 or progress.received_cad > 0
-                pending = progress.in_transit_cad > 0 or progress.awaiting_csv_cad > 0
+                pending = progress.in_transit_cad > 0 or progress.source_offset_cad > 0
                 if moved and pending:
                     continue
                 if (
@@ -477,7 +475,7 @@ def reconcile_transfer_activity(portfolio, balances, clients, endpoints):
         ledger.save()
         return None
     for symbol in endpoints:
-        ledger.observe_saven(symbol, balances[symbol.split(":", 1)[1]])
+        ledger.observe_external_balance(symbol, balances[symbol])
     client_accounts = {}
     needed_accounts = {endpoint.number for endpoint in endpoints.values()}
     for client in clients:
@@ -491,7 +489,7 @@ def reconcile_transfer_activity(portfolio, balances, clients, endpoints):
             client_accounts[account["number"]] = client
     if len({endpoint.number for endpoint in endpoints.values()}) != len(endpoints):
         raise ValueError(
-            "Each Saven account requires a distinct broker transfer endpoint."
+            "Each external account requires a distinct Questrade transfer endpoint."
         )
     now = datetime.now(UTC)
     for symbol, endpoint in endpoints.items():

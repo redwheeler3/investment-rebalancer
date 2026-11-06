@@ -3,45 +3,26 @@
 import csv
 import hashlib
 import re
-from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+
+from src.models import ExternalExport, ExternalExportNotFound, ExternalTransaction
 
 EXPORT_TITLE = "Your Transactions List"
 EXPORT_HEADER = ["Date", "Description", "Amount (CAD)", "Balance (CAD)"]
 NUMBER_PATTERN = r"(?:\d+|\d{1,3}(?:,\d{3})+)\.\d{2}"
 
 
-class SavenExportNotFound(ValueError):
+class SavenExportNotFound(ExternalExportNotFound):
     """No export is available for the requested account."""
 
 
-@dataclass(frozen=True)
-class SavenTransaction:
-    date: date
-    description: str
-    amount_cad: Decimal
-    balance_cad: Decimal
-
-
-@dataclass(frozen=True)
-class SavenExportBalance:
-    account_number: str
-    balance_cad: Decimal
-    last_transaction_date: date
-    source_sha256: str
-    source_modified_at: datetime
-    transactions: tuple[SavenTransaction, ...]
-
-    def as_snapshot(self) -> dict:
-        """Preserve ledger/source dates and identify unchanged exports."""
-        return {
-            "balance_cad": str(self.balance_cad),
-            "last_transaction_date": self.last_transaction_date.isoformat(),
-            "source_sha256": self.source_sha256,
-            "source_modified_at": self.source_modified_at.isoformat(),
-        }
+def validate_saven_identifier(identifier: str) -> None:
+    if not re.fullmatch(r"\d+", identifier):
+        raise ValueError(
+            "Saven identifiers must use SAVEN:<account-number> with digits."
+        )
 
 
 def _read_prefix(reader, account_number: str | None = None) -> str | None:
@@ -82,7 +63,7 @@ def _read_cad(value: str, dollar_prefix: bool) -> Decimal:
 
 def read_saven_export(
     path: Path, account_number: str | None = None
-) -> SavenExportBalance | None:
+) -> ExternalExport | None:
     raw = path.read_bytes()
     reader = csv.reader(raw.decode("utf-8-sig").splitlines())
     exported_account = _read_prefix(reader, account_number)
@@ -122,14 +103,22 @@ def read_saven_export(
         if abs(newer[2] - older[2]) != abs(newer[1]):
             raise ValueError("Transaction amounts do not reconcile adjacent balances.")
 
-    return SavenExportBalance(
+    return ExternalExport(
         account_number=exported_account,
         balance_cad=transactions[0][2],
         last_transaction_date=transactions[0][0],
         source_sha256=hashlib.sha256(raw).hexdigest(),
         source_modified_at=datetime.fromtimestamp(path.stat().st_mtime, UTC),
         transactions=tuple(
-            SavenTransaction(transaction_date, row_description, amount, balance)
+            ExternalTransaction(
+                transaction_date,
+                row_description,
+                amount,
+                balance,
+                "interest" not in row_description.casefold()
+                and re.search(r"\b(fees?|charges?)\b", row_description.casefold())
+                is None,
+            )
             for (transaction_date, amount, balance), row_description in zip(
                 transactions, descriptions, strict=True
             )

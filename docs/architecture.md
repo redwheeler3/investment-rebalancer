@@ -13,7 +13,9 @@ A deep dive into how the investment rebalancer works — following the code from
 └─────────────┘    └──────────────┘    └──────────────┘    └──────────────┘    └──────────────┘
 ```
 
-Each stage produces data that feeds into the next. There are no circular dependencies — data flows strictly left to right.
+Each stage produces data that feeds into the next. Questrade is the native
+brokerage integration; its API and account rules are deliberately not pluggable.
+External institutions have the adapter boundary described below.
 
 ---
 
@@ -25,16 +27,16 @@ The `run_rebalancer()` function is the spine of the app. Every other module is c
 def run_rebalancer():
     (accounts, targets, transient_symbols, norberts_gambit_fee_cad,
      fx_target_rules, drift_trade_threshold_pct, tactical_config,
-     saven_accounts, external_transfer_accounts) = load_config()
+     external_accounts) = load_config()
 
-    saven_balances = load_saven_balances(saven_accounts, Path.home() / "Downloads")
+    balances = load_external_balances(external_accounts, Path.home() / "Downloads")
     clients = _connect_clients(accounts)
     usd_to_cad_rate = _fetch_exchange_rate(clients[0])
     resolved_targets = resolve_targets(targets, fx_target_rules, usd_to_cad_rate)
     portfolio = _build_priced_portfolio(clients, usd_to_cad_rate)
-    attach_saven_balances(portfolio, saven_balances)
-    transfer_accounts = resolve_external_transfer_accounts(portfolio, external_transfer_accounts)
-    transfer_ledger = reconcile_transfer_activity(portfolio, saven_balances, clients, transfer_accounts)
+    attach_external_balances(portfolio, balances, external_accounts)
+    transfer_accounts = resolve_external_transfer_accounts(portfolio, external_accounts)
+    transfer_ledger = reconcile_transfer_activity(portfolio, balances, clients, transfer_accounts)
     dlr_quotes = _fetch_dlr_quotes(clients[0])
 
     # Tactical posture (if configured) shifts the resolved targets before sizing.
@@ -53,9 +55,8 @@ def run_rebalancer():
         transfer_ledger.save()
 ```
 
-`load_config()` returns a 9-tuple (accounts, targets, transient symbols, gambit
-fee, FX rules, drift threshold, tactical config, Saven account identifiers, and
-external transfer endpoints); the snippet above keeps the
+`load_config()` returns an 8-tuple (accounts, targets, transient symbols, gambit
+fee, FX rules, drift threshold, tactical config, and external account settings); the snippet above keeps the
 interesting names and elides the rest.
 
 This is the **interactive** path. Before any of it, `_pull_latest()` does a
@@ -96,38 +97,42 @@ and every app-managed file under `data/` are SOPS/age ciphertext at rest.
 - **drift_trade_threshold_pct** — minimum drift before a trade is recommended
 - **norberts_gambit_fee_cad** — per-conversion fee
 - **tactical_config** — drawdown-based regime state machine that dynamically shifts the fixed/equity split (parsed via `parse_tactical_config()`)
-- **saven_accounts** — external account identifiers derived from target membership
-- **external_transfer_accounts** — owner/type selection for personal Margin transfer endpoints
+- **external_accounts** — enabled provider IDs with configured display names/types and linked Questrade endpoints
 
-Local runs refresh Saven CSVs from Downloads into encrypted private snapshots;
-scheduled runs consume only those Saven snapshots. Both entry points read posted
-broker cash activity and reconcile encrypted `data/transfer_tracking.json` before
-history, tactical evaluation, or allocation math. CSV imports update the bank
-evidence even when invoked through the standalone importer. Missing or malformed
-external data fail closed. Reported bank balances and broker cash remain separate
-from transit assets and provisional stale-source offsets. The shared planning
-ledger projects pending arrivals without increasing actual broker buying power.
+Local runs select each configured provider's adapter and refresh its normalized
+exports into encrypted caches. Scheduled runs consume cached external balances.
+Both read posted Questrade activity and reconcile transit before history, tactical
+evaluation, or allocation math. Shared import persistence updates statement
+evidence and balances together. Source failures do not become zero balances.
 
-### Transfer state boundary
+### External account boundary
 
-`transfer_tracking.py` stores cash-event observation cursors, cumulative integer
-cent amounts, and one original recommendation cap per route. It baselines existing
-activity and registers only displayed local recommendations. Broker activity
-queries cover the polling gap and active recommendation period in API-sized
-windows; multiplicity-aware signatures prevent replay without collapsing repeated
-identical cash records. Saven ledger observations distinguish new principal from
-interest/fees and validate continuity from the saved balance.
+`src/external_providers.py` is the extension point. A provider key such as `SAVEN`
+selects ID validation, export discovery/reading, and a cache filename. The adapter
+returns the common `ExternalExport` / `ExternalTransaction` types in `models.py`,
+including an `is_transfer` flag. Institution-specific parsing and fee/interest
+classification stay in the adapter. `external_accounts.py` owns common settings,
+loading, validation, cache persistence, and native Questrade endpoint matching.
 
-`PortfolioSummary.transfer_progress` carries derived adjustments for display and
-planning. External snapshots retain their original four fields. Current holdings
-include separate transit values and adjusted Saven valuation; both summary tables
-show the raw Saven balance plus adjustment rows so totals reconcile. Saven-bound
-cash is assigned to its destination in allocation math, while its physical transit
-location stays visible in the summaries. In-progress transfer actions participate
-in the normal projection/FX pipeline while remaining
-distinct from new instructions. See [transfer reconciliation](rebalancer.md#automatic-transit-reconciliation)
-for planner details and the [Saven guide](saven.md) for setup, workflow, limits,
-and the real-transfer checklist.
+`external_accounts` settings supply `display_name`, `account_type`, and
+`questrade_account`. `PortfolioSummary.external_balances` carries those runtime
+labels; they are not repeated in the four-field balance cache. Display code gets
+its account names, types, and transfer-table titles from that data, without
+institution-name branches. Raw ID abbreviation uses the configured external keys.
+
+`transfer_tracking.py` consumes normalized balances/rows, not provider formats.
+Its existing encrypted record shape, integer-cent counters, original caps, and
+multiset observation cursors remain common across adapters. Questrade activity
+queries cover polling gaps and active cycles within API-sized windows.
+
+`PortfolioSummary.transfer_progress` carries valuation adjustments. Summaries show
+raw reported balances with separate transit/offset rows; allocation math groups
+external-bound transit with its destination. In-progress actions use the shared
+projection/FX funding pipeline while remaining distinct from new instructions.
+Only displayed local recommendations arm new intent. See the
+[external account guide](external-accounts.md) for the contract and workflow,
+[planner reconciliation](rebalancer.md#automatic-transit-reconciliation) for math,
+and [Saven adapter notes](saven.md) for the current format.
 
 Optional fields gracefully default:
 ```python
@@ -673,7 +678,7 @@ The chart auto-sizes to fill the terminal and picks month-start labels that don'
 
 GitHub Actions runs `python main.py --sync` on a schedule. This mode:
 1. Refreshes all tokens (keeps them alive even when you don't run locally)
-2. Reconciles existing transfer intent using broker activities and saved Saven
+2. Reconciles existing transfer intent using broker activities and saved external
    data, then snapshots household value including transit/source adjustments
 3. Evaluates tactical regime transitions (so drawdown triggers are caught daily)
 4. Resolves the final targets (FX rules + tactical adjustment) and computes the

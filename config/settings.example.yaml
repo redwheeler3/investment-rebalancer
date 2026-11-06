@@ -21,15 +21,19 @@ accounts:
     account_type_display_overrides:
       Corporation: HoldingCo
 
-# Broker endpoints for external CAD transfers, via your linked bank account.
-# Targets select tracked external accounts; this mapping only selects routing.
-# Each owner/type must match exactly one personal Questrade Margin account.
-external_transfer_accounts: {}
+# External institution labels and their linked Questrade transfer accounts.
+# The symbol prefix chooses the statement adapter; labels come from these settings.
+# Targets select tracked accounts. Each Questrade owner/type must identify one
+# personal Margin account, with a distinct endpoint for each external account.
+external_accounts: {}
 # Example when SAVEN:0001112223 is included in targets/fixed_composition:
-# external_transfer_accounts:
+# external_accounts:
 #   "SAVEN:0001112223":
-#     owner_name: Secondary
-#     account_type: Margin
+#     display_name: Saven
+#     account_type: HISA
+#     questrade_account:
+#       owner_name: Secondary
+#       account_type: Margin
 
 targets:
   CAD: 0.0

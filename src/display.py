@@ -76,12 +76,17 @@ def _format_account_label(owner: str, account_type: str, account_number: str) ->
     return f"{owner} {account_type} ({account_number})"
 
 
-def _format_symbol(symbol: str) -> str:
-    if symbol.startswith("SAVEN:"):
-        return f"SAVEN:...{symbol[-4:]}"
-    if symbol.startswith("TRANSIT:SAVEN:"):
+def _format_symbol(symbol: str, external_symbols) -> str:
+    if symbol in external_symbols:
+        provider, identifier = symbol.split(":", 1)
+        return f"{provider}:...{identifier[-4:]}"
+    if symbol.startswith("TRANSIT:") and symbol[len("TRANSIT:") :] in external_symbols:
         return f"Transit (...{symbol[-4:]})"
     return symbol
+
+
+def _external_account_label(symbol, balance):
+    return f"{balance.display_name} {balance.account_type} (…{symbol[-4:]})"
 
 
 def _transfer_value_rows(portfolio):
@@ -89,12 +94,12 @@ def _transfer_value_rows(portfolio):
     for progress in portfolio.transfer_progress:
         if progress.in_transit_cad:
             yield "Cash in transit", "Transit", progress.symbol, progress.in_transit_cad
-        if progress.awaiting_csv_cad:
+        if progress.source_offset_cad:
             yield (
-                "Awaiting CSV",
+                "Awaiting export",
                 "Adjustment",
                 progress.symbol,
-                -progress.awaiting_csv_cad,
+                -progress.source_offset_cad,
             )
 
 
@@ -129,7 +134,7 @@ def _add_drift_row(
         drift_style = "yellow"
         status = "[yellow]UNDER[/yellow]"
     table.add_row(
-        _format_symbol(symbol),
+        symbol,
         f"{target:.1f}%",
         f"{value_pct:.1f}%",
         Text(f"{drift:+.1f}%", style=drift_style),
@@ -240,7 +245,7 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
         table.add_section()
         for symbol, balance in sorted(portfolio.external_balances.items()):
             table.add_row(
-                f"Saven HISA (…{symbol[-4:]})",
+                _external_account_label(symbol, balance),
                 "",
                 "",
                 _format_money(balance.balance_cad),
@@ -626,6 +631,7 @@ def _display_allocation_table(
     targets: dict,
     value_column_name: str = "Current %",
     tolerance_pct: float = 0.1,
+    external_symbols=(),
 ):
     """Display an allocation vs target table — shared by current and projected views."""
     # Calculate drifts inline
@@ -650,7 +656,7 @@ def _display_allocation_table(
     for symbol in stock_symbols:
         _add_drift_row(
             table,
-            symbol,
+            _format_symbol(symbol, external_symbols),
             allocations.get(symbol, 0.0),
             targets.get(symbol, 0.0),
             drifts.get(symbol, 0.0),
@@ -662,7 +668,7 @@ def _display_allocation_table(
         for symbol in cash_list:
             _add_drift_row(
                 table,
-                symbol,
+                _format_symbol(symbol, external_symbols),
                 allocations.get(symbol, 0.0),
                 targets.get(symbol, 0.0),
                 drifts.get(symbol, 0.0),
@@ -677,6 +683,7 @@ def display_allocations(
     current_allocations: dict,
     targets: dict,
     tolerance_pct: float,
+    external_symbols=(),
 ):
     """Display current vs target allocation table, sorted by drift ascending."""
     _display_allocation_table(
@@ -685,6 +692,7 @@ def display_allocations(
         allocations=current_allocations,
         targets=targets,
         tolerance_pct=tolerance_pct,
+        external_symbols=external_symbols,
     )
 
 
@@ -874,8 +882,8 @@ def display_account_summary(portfolio, usd_to_cad_rate: float):
         for symbol, balance in sorted(portfolio.external_balances.items()):
             total_value_sum += balance.balance_cad
             table.add_row(
-                "Saven",
-                "HISA",
+                balance.display_name,
+                balance.account_type,
                 f"…{symbol[-4:]}",
                 _format_money(balance.balance_cad),
                 "",
@@ -910,15 +918,22 @@ def display_account_summary(portfolio, usd_to_cad_rate: float):
     console.print()
 
 
-def display_external_transfers(actions: list, progress: list | None = None) -> None:
+def display_external_transfers(portfolio, actions: list) -> None:
     """Show external CAD transfer instructions alongside currency conversions."""
     transfers = [
         action for action in actions if action.action in {"DEPOSIT", "WITHDRAW"}
     ]
-    awaiting = [item for item in progress or [] if item.awaiting_csv_cad > 0]
+    awaiting = [
+        item for item in portfolio.transfer_progress if item.source_offset_cad > 0
+    ]
     if not transfers and not awaiting:
         return
-    table = Table(title="Saven Transfers", box=box.ROUNDED, header_style="bold yellow")
+    symbols = {item.symbol for item in transfers + awaiting}
+    names = {portfolio.external_balances[symbol].display_name for symbol in symbols}
+    title = (
+        f"{next(iter(names))} Transfers" if len(names) == 1 else "External Transfers"
+    )
+    table = Table(title=title, box=box.ROUNDED, header_style="bold yellow")
     table.add_column("Direction")
     table.add_column("Amount CAD", justify="right")
     table.add_column("Status")
@@ -926,11 +941,13 @@ def display_external_transfers(actions: list, progress: list | None = None) -> N
         account_label = _format_account_label(
             transfer.owner, transfer.account_type, transfer.account_number
         )
-        saven_label = f"Saven HISA (…{transfer.symbol[-4:]})"
+        external_label = _external_account_label(
+            transfer.symbol, portfolio.external_balances[transfer.symbol]
+        )
         source, destination = (
-            (account_label, saven_label)
+            (account_label, external_label)
             if transfer.action == "DEPOSIT"
-            else (saven_label, account_label)
+            else (external_label, account_label)
         )
         table.add_row(
             f"{source} -> {destination}",
@@ -942,9 +959,9 @@ def display_external_transfers(actions: list, progress: list | None = None) -> N
             item.owner, item.account_type, item.account_number
         )
         table.add_row(
-            f"Saven HISA (...{item.symbol[-4:]}) -> {account_label}",
-            _format_money(item.awaiting_csv_cad),
-            "Awaiting CSV",
+            f"{_external_account_label(item.symbol, portfolio.external_balances[item.symbol])} -> {account_label}",
+            _format_money(item.source_offset_cad),
+            "Awaiting export",
         )
     console.print(table)
     console.print()
@@ -954,6 +971,7 @@ def display_projected_allocations(
     projected_allocations: dict,
     targets: dict,
     tolerance_pct: float,
+    external_symbols=(),
 ):
     """Display projected allocation table after trades, sorted by drift ascending."""
     if not projected_allocations:
@@ -966,6 +984,7 @@ def display_projected_allocations(
         targets=targets,
         value_column_name="Projected %",
         tolerance_pct=tolerance_pct,
+        external_symbols=external_symbols,
     )
 
 
@@ -1072,11 +1091,19 @@ def display_full_report(
     display_year_to_date_chart(ytd_history or [])
     display_holdings_summary(portfolio, usd_to_cad_rate)
     display_account_summary(portfolio, usd_to_cad_rate)
-    display_allocations(current_allocations, targets, drift_trade_threshold_pct)
+    display_allocations(
+        current_allocations,
+        targets,
+        drift_trade_threshold_pct,
+        portfolio.external_balances,
+    )
     display_transient_alerts(transient_alerts)
     display_trades(trades)
     display_currency_conversions(currency_conversions)
-    display_external_transfers(trades, portfolio.transfer_progress)
+    display_external_transfers(portfolio, trades)
     display_projected_allocations(
-        projected_allocations, targets, drift_trade_threshold_pct
+        projected_allocations,
+        targets,
+        drift_trade_threshold_pct,
+        portfolio.external_balances,
     )

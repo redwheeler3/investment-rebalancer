@@ -1,7 +1,7 @@
 # Investment Rebalancer
 
-A Python-based portfolio rebalancer that combines accounts across multiple
-Questrade logins and supported external accounts into one household portfolio.
+A Questrade portfolio rebalancer that combines accounts across multiple
+Questrade logins and supported external CAD cash/savings accounts into one household portfolio.
 
 Questrade data comes from its API. External accounts without a suitable API can
 be included through dated balance exports; the current integration is **Saven
@@ -65,7 +65,7 @@ CAD/USD planning, and Questrade-specific workflow details.
 ## Features
 
 - **Unified Portfolio View** — Aggregates all accounts into one portfolio view
-- **External Account Tracking** — Includes Saven HISA through CSV exports, reusing dated encrypted balances between imports
+- **External Account Tracking** — Uses registered statement adapters and dated encrypted balance caches for supported institutions
 - **Cash in Transit** — Reconciles recommended transfers between the broker and external account while keeping actual buying power separate
 - **Fail-Closed Account Loading** — Stops before portfolio evaluation if any configured Questrade account is unavailable
 - **Target Allocation Tracking** — Compares holdings against configurable targets
@@ -374,7 +374,7 @@ Private repo: investment-rebalancer-state/
 │   ├── portfolio_history.jsonl  (SOPS-encrypted)
 │   ├── tactical_state.json       (SOPS-encrypted; created on first regime change)
 │   ├── fx_targets_state.json     (SOPS-encrypted; created on first FX target resolution)
-│   ├── saven_balance.json        (SOPS-encrypted; created on first Saven import)
+│   ├── <adapter-cache>.json      (SOPS-encrypted; filename selected by the adapter)
 │   └── transfer_tracking.json    (SOPS-encrypted; created when Saven tracking starts)
 └── tokens/
     ├── primary_token.json       (SOPS-encrypted)
@@ -394,9 +394,10 @@ The private repo contains the live state the app reads through
 | `src/rebalancer.py` | Core decision engine — decides what to trade and which accounts to use |
 | `src/cash_deploy.py` | Residual cash deployment — builds buy trades from leftover cash |
 | `src/models.py` | Shared trade, transfer, transfer-progress, and alert data types |
-| `src/saven_export.py` | Validates Saven CSV ledgers and exposes dated balances and transactions |
-| `src/saven_tracking.py` | Target-owned Saven loading, encrypted balance refresh, and broker routing |
-| `src/transfer_tracking.py` | Prospective transfer evidence, recommendation caps, and transit valuation |
+| `src/saven_export.py` | Saven-specific CSV parser returning common external balances and ledger rows |
+| `src/external_accounts.py` | External settings, shared loading/cache persistence, labels, and Questrade endpoint selection |
+| `src/external_providers.py` | External statement-adapter registration and provider-ID selection |
+| `src/transfer_tracking.py` | Provider-independent transfer evidence, recommendation caps, and transit valuation |
 | `src/fx_math.py` | Currency conversion math (Norbert's Gambit sizing, cross-currency capacity) |
 | `src/fx_rate.py` | Live USD/CAD rate fetching and DLR quote retrieval |
 | `src/fx_conversions.py` | Post-rebalance DLR trade planning (Norbert's Gambit execution) |
@@ -817,34 +818,42 @@ persisted to `data/fx_targets_state.json` so stickiness carries across runs.
 
 ## External accounts without API access
 
-External account support uses provider-specific balance loaders. Saven CSV is the
-current implementation, with balances included in household value, history,
-tactical posture, and allocation reporting. Local runs refresh matching CSVs from
-Downloads; scheduled runs use the encrypted cached balance. Missing exports reuse
-the saved balance with its original dates.
+A target such as `SAVEN:<account-number>` selects a registered statement adapter.
+The adapter owns the institution's format and returns common CAD balances and
+ledger evidence. Loading, transit, valuation, planning, and rendering use that
+common data. Questrade remains the native broker; this is not a brokerage-plugin
+interface.
 
-Include a quoted `SAVEN:<account-number>` in `targets` or, with tactical deployment,
-`fixed_composition`. Configure its personal Margin endpoint separately:
+Account names/types and the linked Questrade account are explicit settings:
 
 ```yaml
-external_transfer_accounts:
+external_accounts:
   "SAVEN:0001112223":
-    owner_name: Secondary
-    account_type: Margin
+    display_name: Saven
+    account_type: HISA
+    questrade_account:
+      owner_name: Secondary
+      account_type: Margin
 ```
 
-Displayed recommendations automatically supply intent for tracking new posted
-transfers. Recognized transit is capped at the recommendation; actual balances
-remain uncapped, including linked-bank top-ups. Broker cash stays separate from
-transit valuation and projected funding. There is no manual start/pause flag.
+Target membership enables tracking. Names/types control console nomenclature;
+the identifier prefix chooses the parser. Saven CSV is the current production
+adapter. Adding another institution means an adapter/registration and settings,
+with no institution-specific changes to the planner.
+
+Displayed recommendations supply intent for new posted transfers. Transit is
+capped at the original recommendation; actual balances remain uncapped, including
+bank top-ups. Actual broker cash stays separate from transit/projected funding.
+There is no manual start/pause flag.
 
 **Run locally and let private state sync before initiating the first transfer.**
-The first observation baselines old activity. Keep the account and route configured
-until its balance is zero and its transfers have settled.
+The first observation baselines old activity. Keep the external target and route
+configured until its balance is zero and its transfers are settled.
 
-See the [Saven guide](docs/saven.md) for CSV selection, both transfer directions,
-partial/excess amounts, lifecycle/state, display behavior, and the real-transfer
-checklist. Keep real identifiers and financial state in the private repo.
+See the [external account guide](docs/external-accounts.md) for setup, imports,
+transit rules, state, console behavior, and real-transfer checks. The
+[Saven adapter notes](docs/saven.md) describe its specific export format. Keep real
+identifiers and financial state in the private repo.
 
 ## Configuration
 

@@ -25,6 +25,13 @@ if sys.platform == "win32":
 
 from src.display import console, display_full_report
 from src.encrypted_state import EncryptedStateError, validate_encrypted_state_files
+from src.external_accounts import (
+    ExternalAccountConfig,
+    attach_external_balances,
+    load_external_balances,
+    parse_external_accounts,
+    resolve_external_transfer_accounts,
+)
 from src.fx_conversions import calculate_currency_needs
 from src.fx_rate import fetch_dlr_quotes, get_usd_to_cad_rate
 from src.fx_targets import resolve_targets
@@ -39,13 +46,6 @@ from src.portfolio import (
 from src.questrade_client import QuestradeClient
 from src.rebalancer import calculate_trades
 from src.report_builder import build_report_data
-from src.saven_tracking import (
-    attach_saven_balances,
-    load_saven_balances,
-    parse_external_transfer_accounts,
-    parse_saven_account_numbers,
-    resolve_external_transfer_accounts,
-)
 from src.tactical import (
     evaluate_tactical_posture,
     parse_tactical_config,
@@ -66,8 +66,7 @@ def load_config() -> tuple:
             fx_target_rules dict,
             drift_trade_threshold_pct float,
             tactical_config,
-            saven_account_numbers list,
-            external_transfer_accounts dict,
+            external_accounts dict,
         ).
     """
     targets_path = get_config_dir() / "settings.yaml"
@@ -114,10 +113,7 @@ def load_config() -> tuple:
     fx_target_rules = data.get("fx_target_rules", {})
     drift_trade_threshold_pct = float(data.get("drift_trade_threshold_pct", 0.1))
     tactical_config = parse_tactical_config(data.get("tactical_deployment", {}))
-    saven_account_numbers = parse_saven_account_numbers(data)
-    external_transfer_accounts = parse_external_transfer_accounts(
-        data, saven_account_numbers
-    )
+    external_accounts = parse_external_accounts(data)
 
     return (
         accounts,
@@ -127,8 +123,7 @@ def load_config() -> tuple:
         fx_target_rules,
         drift_trade_threshold_pct,
         tactical_config,
-        saven_account_numbers,
-        external_transfer_accounts,
+        external_accounts,
     )
 
 
@@ -159,12 +154,11 @@ def run_scheduled_sync():
         fx_target_rules,
         _drift_trade_threshold_pct,
         tactical_config,
-        saven_account_numbers,
-        external_transfer_accounts,
+        external_accounts,
     ) = load_config()
     validate_encrypted_state_files()
     # Missing/corrupt external balances must fail before history or tactical state.
-    saven_balances = load_saven_balances(saven_account_numbers)
+    external_balances = load_external_balances(external_accounts)
 
     all_ok = True
     clients = []
@@ -197,16 +191,12 @@ def run_scheduled_sync():
         try:
             usd_to_cad_rate = get_usd_to_cad_rate(client=clients[0])
             portfolio = build_portfolio(clients, usd_to_cad_rate)
-            attach_saven_balances(portfolio, saven_balances)
-            transfer_accounts = (
-                resolve_external_transfer_accounts(
-                    portfolio, external_transfer_accounts
-                )
-                if saven_account_numbers
-                else {}
+            attach_external_balances(portfolio, external_balances, external_accounts)
+            transfer_accounts = resolve_external_transfer_accounts(
+                portfolio, external_accounts
             )
             reconcile_transfer_activity(
-                portfolio, saven_balances, clients, transfer_accounts
+                portfolio, external_balances, clients, transfer_accounts
             )
             record_value(portfolio.total_value_cad)
             print(f"  ✓ Portfolio value recorded: ${portfolio.total_value_cad:,.2f}")
@@ -369,17 +359,19 @@ def _render_report(
     )
 
 
-def _display_saven_status(account_number: str, status: str, last_activity: str) -> None:
-    """Report the CSV lookup outcome and the activity date of the balance in use."""
+def _display_external_status(
+    account: ExternalAccountConfig, status: str, last_activity: str
+) -> None:
+    """Report the export lookup outcome and the activity date of the balance in use."""
     style, label = {
-        "found": ("green", "CSV found"),
-        "unchanged": ("dim", "CSV unchanged; cached balance"),
-        "absent": ("dim", "CSV absent; cached balance"),
-        "older": ("yellow", "older CSV ignored; cached balance"),
+        "found": ("green", "Export found"),
+        "unchanged": ("dim", "Export unchanged; cached balance"),
+        "absent": ("dim", "Export absent; cached balance"),
+        "older": ("yellow", "older export ignored; cached balance"),
         "cached": ("dim", "cached balance"),
     }[status]
     console.print(
-        f"  [{style}]Saven …{account_number[-4:]}: {label}; last activity {last_activity}[/{style}]"
+        f"  [{style}]{account.display_name} …{account.identifier[-4:]}: {label}; last activity {last_activity}[/{style}]"
     )
 
 
@@ -395,25 +387,24 @@ def run_rebalancer():
         fx_target_rules,
         drift_trade_threshold_pct,
         tactical_config,
-        saven_account_numbers,
-        external_transfer_accounts,
+        external_accounts,
     ) = load_config()
 
-    saven_balances = load_saven_balances(
-        saven_account_numbers,
+    external_balances = load_external_balances(
+        external_accounts,
         Path.home() / "Downloads",
-        on_status=_display_saven_status,
+        on_status=lambda symbol, status, activity: _display_external_status(
+            external_accounts[symbol], status, activity
+        ),
     )
     clients = _connect_clients(accounts)
     usd_to_cad_rate = _fetch_exchange_rate(clients[0])
     resolved_targets = resolve_targets(targets, fx_target_rules, usd_to_cad_rate)
     portfolio = _build_priced_portfolio(clients, usd_to_cad_rate)
-    attach_saven_balances(portfolio, saven_balances)
-    transfer_accounts = resolve_external_transfer_accounts(
-        portfolio, external_transfer_accounts
-    )
+    attach_external_balances(portfolio, external_balances, external_accounts)
+    transfer_accounts = resolve_external_transfer_accounts(portfolio, external_accounts)
     transfer_ledger = reconcile_transfer_activity(
-        portfolio, saven_balances, clients, transfer_accounts
+        portfolio, external_balances, clients, transfer_accounts
     )
     dlr_quotes = _fetch_dlr_quotes(clients[0])
 

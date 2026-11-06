@@ -105,6 +105,8 @@ class ExternalBalance:
     balance_cad: float
     last_transaction_date: str
     source_modified_at: str
+    display_name: str
+    account_type: str
 
 
 @dataclass

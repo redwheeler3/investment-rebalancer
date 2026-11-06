@@ -30,7 +30,6 @@ def _config():
         {},
         0.1,
         None,
-        [],
         {},
     )
 
@@ -136,7 +135,7 @@ def test_partial_connection_stops_before_portfolio_or_tactical_evaluation(tmp_pa
     for filename in ("jeff.json", "eunee.json"):
         (tmp_path / filename).write_text("encrypted placeholder")
 
-    config = (accounts, {}, [], 0.0, {}, 1.0, object(), [], {})
+    config = (accounts, {}, [], 0.0, {}, 1.0, object(), {})
     with (
         patch("main.load_config", return_value=config),
         patch("main.get_tokens_dir", return_value=Path(tmp_path)),

@@ -7,7 +7,16 @@ import pytest
 from rich.console import Console
 
 import main
-from src import display, saven_tracking
+from src import display, external_accounts
+from src.external_accounts import (
+    ExternalAccountConfig,
+    attach_external_balances,
+    load_external_balances,
+    parse_external_accounts,
+    refresh_external_balances,
+    resolve_external_transfer_accounts,
+)
+from src.external_providers import PROVIDERS
 from src.fx_conversions import calculate_currency_needs
 from src.fx_rate import DlrQuotes
 from src.models import TransferRecommendation
@@ -21,16 +30,10 @@ from src.portfolio import (
 )
 from src.rebalancer import calculate_trades
 from src.saven_export import read_saven_export
-from src.saven_tracking import (
-    attach_saven_balances,
-    load_saven_balances,
-    parse_external_transfer_accounts,
-    refresh_saven_balances,
-    resolve_external_transfer_accounts,
-)
 from tests.test_saven_tracking import ACCOUNT_A, cached, export
 
 SAVEN = f"SAVEN:{ACCOUNT_A}"
+CONFIGS = {SAVEN: ExternalAccountConfig(SAVEN, "Saven", "HISA", "Primary", "Margin")}
 IDEAL = {"EQUITY": 80.0, "RESERVE": 10.0, "CORE": 5.0, SAVEN: 5.0}
 
 
@@ -68,7 +71,9 @@ def household(tmp_path, savings="5000.00", cash=0):
         total_value_cad=sum(values.values()) + cash,
         cash_cad_total=cash,
     )
-    attach_saven_balances(portfolio, snapshot["accounts"])
+    attach_external_balances(
+        portfolio, {SAVEN: snapshot["accounts"][ACCOUNT_A]}, CONFIGS
+    )
     return portfolio, snapshot
 
 
@@ -144,13 +149,19 @@ def test_updated_export_and_broker_balance_complete_transfer_without_double_coun
     updated = export(
         tmp_path / "new.csv", amount="5000.00", transaction_date="08/10/2026"
     )
-    refreshed, _ = refresh_saven_balances([ACCOUNT_A], existing, source_file=updated)
+    refreshed, _ = refresh_external_balances(
+        PROVIDERS["SAVEN"], [ACCOUNT_A], existing, source_file=updated
+    )
     broker_after_transfer = PortfolioSummary(accounts=[], total_value_cad=95000)
-    attach_saven_balances(broker_after_transfer, refreshed["accounts"])
+    attach_external_balances(
+        broker_after_transfer, {SAVEN: refreshed["accounts"][ACCOUNT_A]}, CONFIGS
+    )
     assert portfolio.total_value_cad == broker_after_transfer.total_value_cad == 100000
     assert broker_after_transfer.holdings[SAVEN].value_cad == 5000
     with pytest.raises(ValueError, match="already included"):
-        attach_saven_balances(broker_after_transfer, refreshed["accounts"])
+        attach_external_balances(
+            broker_after_transfer, {SAVEN: refreshed["accounts"][ACCOUNT_A]}, CONFIGS
+        )
 
 
 def test_scheduled_read_uses_encrypted_cache_without_scanning_downloads(tmp_path):
@@ -158,14 +169,16 @@ def test_scheduled_read_uses_encrypted_cache_without_scanning_downloads(tmp_path
     destination = tmp_path / "saven_balance.json"
     destination.write_text("ciphertext")
     with (
-        patch.object(saven_tracking, "get_data_dir", return_value=tmp_path),
+        patch.object(external_accounts, "get_data_dir", return_value=tmp_path),
         patch.object(
-            saven_tracking, "read_encrypted_json", return_value=existing
+            external_accounts, "read_encrypted_json", return_value=existing
         ) as read,
-        patch.object(saven_tracking, "find_latest_saven_export") as scan,
-        patch.object(saven_tracking, "write_encrypted_json") as write,
+        patch("src.saven_export.find_latest_saven_export") as scan,
+        patch.object(external_accounts, "write_encrypted_json") as write,
     ):
-        assert load_saven_balances([ACCOUNT_A]) == existing["accounts"]
+        assert load_external_balances(CONFIGS) == {
+            SAVEN: existing["accounts"][ACCOUNT_A]
+        }
     read.assert_called_once_with(destination)
     scan.assert_not_called()
     write.assert_not_called()
@@ -175,23 +188,23 @@ def test_local_refresh_saves_encrypted_snapshot_and_keeps_original_dates(tmp_pat
     path = export(tmp_path / "download.csv")
     events = []
     with (
-        patch.object(saven_tracking, "get_data_dir", return_value=tmp_path),
-        patch.object(saven_tracking, "write_encrypted_json") as write,
+        patch.object(external_accounts, "get_data_dir", return_value=tmp_path),
+        patch.object(external_accounts, "write_encrypted_json") as write,
         patch("src.transfer_tracking.write_encrypted_json"),
     ):
-        balances = load_saven_balances(
-            [ACCOUNT_A],
+        balances = load_external_balances(
+            CONFIGS,
             directory=tmp_path,
             on_status=lambda *event: events.append(event),
         )
-    assert events == [(ACCOUNT_A, "found", "2026-10-07")]
-    assert balances[ACCOUNT_A]["last_transaction_date"] == "2026-10-07"
+    assert events == [(SAVEN, "found", "2026-10-07")]
+    assert balances[SAVEN]["last_transaction_date"] == "2026-10-07"
     assert (
-        balances[ACCOUNT_A]["source_modified_at"]
+        balances[SAVEN]["source_modified_at"]
         == read_saven_export(path).source_modified_at.isoformat()
     )
     write.assert_called_once_with(
-        tmp_path / "saven_balance.json", {"accounts": balances}
+        tmp_path / "saven_balance.json", {"accounts": {ACCOUNT_A: balances[SAVEN]}}
     )
 
 
@@ -211,15 +224,15 @@ def test_corrupt_cache_cannot_reach_portfolio_math(tmp_path, key, value):
     existing = cached(export(tmp_path / "source.csv"))
     existing["accounts"][ACCOUNT_A][key] = value
     with pytest.raises(ValueError, match="Invalid cached"):
-        refresh_saven_balances([ACCOUNT_A], existing)
+        refresh_external_balances(PROVIDERS["SAVEN"], [ACCOUNT_A], existing)
 
 
 def test_missing_savings_stops_sync_before_token_rotation_and_history(tmp_path):
-    config = ([], {}, [], 0, {}, 0.1, None, [ACCOUNT_A], {})
+    config = ([], {}, [], 0, {}, 0.1, None, CONFIGS)
     with (
         patch.object(main, "load_config", return_value=config),
         patch.object(main, "validate_encrypted_state_files"),
-        patch.object(saven_tracking, "get_data_dir", return_value=tmp_path),
+        patch.object(external_accounts, "get_data_dir", return_value=tmp_path),
         patch.object(main, "QuestradeClient") as connect,
         patch.object(main, "record_value") as record,
         patch.object(main, "evaluate_tactical_posture") as evaluate,
@@ -250,14 +263,15 @@ def test_scheduled_history_and_accuracy_include_savings(tmp_path, capsys):
         {},
         0.1,
         None,
-        [ACCOUNT_A],
-        {SAVEN: {"owner_name": "Primary", "account_type": "Margin"}},
+        CONFIGS,
     )
     with (
         patch.object(main, "load_config", return_value=config),
         patch.object(main, "validate_encrypted_state_files"),
         patch.object(
-            main, "load_saven_balances", return_value=snapshot["accounts"]
+            main,
+            "load_external_balances",
+            return_value={SAVEN: snapshot["accounts"][ACCOUNT_A]},
         ) as load,
         patch.object(main, "get_tokens_dir", return_value=tmp_path),
         patch.object(main, "QuestradeClient", return_value=object()),
@@ -267,7 +281,7 @@ def test_scheduled_history_and_accuracy_include_savings(tmp_path, capsys):
         patch.object(main, "record_value") as record,
     ):
         main.run_scheduled_sync()
-    load.assert_called_once_with([ACCOUNT_A])
+    load.assert_called_once_with(CONFIGS)
     record.assert_called_once_with(100000)
     assert "Accuracy: 100.0%" in capsys.readouterr().out
 
@@ -283,15 +297,15 @@ def test_loading_status_dates_balance_and_report_shows_manual_transfer(
     actions = calculate_trades(
         portfolio, IDEAL, 1.3, 0, 0.1, set(), None, {SAVEN: portfolio.accounts[0]}
     )
-    main._display_saven_status(ACCOUNT_A, "found", "2026-10-07")
+    main._display_external_status(CONFIGS[SAVEN], "found", "2026-10-07")
     display.display_holdings_summary(portfolio, 1.3)
-    display.display_external_transfers(actions)
+    display.display_external_transfers(portfolio, actions)
     text = output.getvalue()
     assert "Primary Margin (broker) -> Saven HISA (…2223)" in text
     assert "$4,000.00" in text
     assert "last activity 2026-10-07" in text
     assert text.count("last activity") == 1
-    assert text.index("CSV found") < text.index("Portfolio Holdings")
+    assert text.index("Export found") < text.index("Portfolio Holdings")
 
 
 def test_target_config_loads_external_fixed_membership_without_separate_account_list(
@@ -302,24 +316,20 @@ def test_target_config_loads_external_fixed_membership_without_separate_account_
         "targets:\n  EQUITY: 80\n"
         "tactical_deployment:\n  baseline_fixed_pct: 20\n  fixed_composition:\n"
         f'    "{SAVEN}": 25\n    RESERVE: 50\n    CORE: 25\n'
-        f'external_transfer_accounts:\n  "{SAVEN}":\n    owner_name: Primary\n    account_type: Margin\n'
+        f'external_accounts:\n  "{SAVEN}":\n    display_name: Saven\n    account_type: HISA\n    questrade_account:\n      owner_name: Primary\n      account_type: Margin\n'
     )
     with patch.object(main, "get_config_dir", return_value=tmp_path):
         config = main.load_config()
-    assert config[-2] == [ACCOUNT_A]
-    assert config[-3].fixed_composition[SAVEN] == 0.25
+    assert config[-1] == CONFIGS
+    assert config[-2].fixed_composition[SAVEN] == 0.25
 
 
 def test_transfer_endpoint_resolves_owner_and_type_and_rejects_ambiguity(tmp_path):
     portfolio, _ = household(tmp_path)
     portfolio.accounts[0].owner = "Secondary"
-    routes = {SAVEN: {"owner_name": "Secondary", "account_type": "Margin"}}
-    assert (
-        parse_external_transfer_accounts(
-            {"external_transfer_accounts": routes}, [ACCOUNT_A]
-        )
-        == routes
-    )
+    routes = {
+        SAVEN: ExternalAccountConfig(SAVEN, "Saven", "HISA", "Secondary", "Margin")
+    }
     assert (
         resolve_external_transfer_accounts(portfolio, routes)[SAVEN]
         is portfolio.accounts[0]
@@ -330,14 +340,21 @@ def test_transfer_endpoint_resolves_owner_and_type_and_rejects_ambiguity(tmp_pat
 
 
 def test_registered_account_cannot_fund_external_transfer():
-    with pytest.raises(ValueError, match="personal Margin"):
-        parse_external_transfer_accounts(
+    with pytest.raises(ValueError, match="personal Questrade Margin"):
+        parse_external_accounts(
             {
-                "external_transfer_accounts": {
-                    SAVEN: {"owner_name": "Primary", "account_type": "RRSP"},
-                }
-            },
-            [ACCOUNT_A],
+                "targets": {SAVEN: 5},
+                "external_accounts": {
+                    SAVEN: {
+                        "display_name": "Saven",
+                        "account_type": "HISA",
+                        "questrade_account": {
+                            "owner_name": "Primary",
+                            "account_type": "RRSP",
+                        },
+                    },
+                },
+            }
         )
 
 
@@ -430,7 +447,7 @@ def test_transfer_only_plan_renders_without_fake_share_quantity(tmp_path, monkey
     monkeypatch.setattr(
         display, "console", Console(file=output, width=160, force_terminal=False)
     )
-    display.display_external_transfers([transfer])
+    display.display_external_transfers(portfolio, [transfer])
     display.display_trades([transfer])
     assert "Saven HISA (…2223) -> Primary Margin (broker)" in output.getvalue()
     assert "$5,000.00" in output.getvalue()

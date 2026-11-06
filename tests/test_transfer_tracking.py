@@ -9,7 +9,14 @@ import pytest
 from rich.console import Console
 
 import main
-from src import display, saven_tracking, transfer_tracking
+from src import display
+from src.external_accounts import (
+    ExternalAccountConfig,
+    attach_external_balances,
+    load_external_balances,
+    save_external_balances,
+)
+from src.external_providers import PROVIDERS
 from src.fx_conversions import calculate_currency_needs
 from src.fx_math import build_account_trade_impacts, net_account_cash
 from src.fx_rate import DlrQuotes
@@ -24,11 +31,6 @@ from src.portfolio import (
 )
 from src.rebalancer import calculate_trades
 from src.saven_export import read_saven_export
-from src.saven_tracking import (
-    attach_saven_balances,
-    load_saven_balances,
-    save_saven_balances,
-)
 from src.tactical import TacticalState, evaluate_tactical_posture, parse_tactical_config
 from src.transfer_tracking import TransferLedger, cents, reconcile_transfer_activity
 
@@ -36,6 +38,7 @@ SAVEN = "SAVEN:0001112223"
 NOW = datetime(2026, 11, 1, 12, tzinfo=UTC)
 ACCOUNT = AccountInfo("broker", "Margin", "Individual", "Example")
 ROUTES = {SAVEN: ACCOUNT}
+CONFIGS = {SAVEN: ExternalAccountConfig(SAVEN, "Saven", "HISA", "Example", "Margin")}
 
 
 def export(tmp_path, rows=None, name="bank.csv"):
@@ -78,7 +81,7 @@ def recommendation(action="DEPOSIT", amount=180000, in_progress=False):
 def baseline(tmp_path, action="DEPOSIT", old_activities=None):
     snapshot, parsed = export(tmp_path)
     ledger = TransferLedger()
-    ledger.observe_saven(SAVEN, snapshot, parsed)
+    ledger.observe_external_balance(SAVEN, snapshot, parsed)
     ledger.observe_broker(SAVEN, "broker", old_activities or [], NOW)
     ledger.remember_recommendations([recommendation(action)], ROUTES, NOW)
     return ledger, snapshot
@@ -106,7 +109,7 @@ def portfolio(snapshot, broker_value=500000, cash=0):
         total_value_cad=broker_value,
         cash_cad_total=cash,
     )
-    attach_saven_balances(result, {"0001112223": snapshot})
+    attach_external_balances(result, {SAVEN: snapshot}, CONFIGS)
     return result
 
 
@@ -147,7 +150,7 @@ def test_source_amount_is_capped_without_fictitious_cash(
         broker_value -= amount
     else:
         bank, parsed = bank_withdrawal(tmp_path, amount)
-        ledger.observe_saven(SAVEN, bank, parsed)
+        ledger.observe_external_balance(SAVEN, bank, parsed)
     current = portfolio(bank, broker_value)
     ledger.apply(current, ROUTES)
     assert current.total_value_cad == total
@@ -162,18 +165,18 @@ def test_top_up_from_external_bank_is_counted_once(tmp_path, action):
     if action == "DEPOSIT":
         ledger.observe_broker(SAVEN, "broker", [activity(-165000)])
         bank, parsed = bank_deposit(tmp_path, 180000)
-        ledger.observe_saven(SAVEN, bank, parsed)
+        ledger.observe_external_balance(SAVEN, bank, parsed)
         broker_value, cash = 335000, 0
     else:
         bank, parsed = bank_withdrawal(tmp_path, 165000)
-        ledger.observe_saven(SAVEN, bank, parsed)
+        ledger.observe_external_balance(SAVEN, bank, parsed)
         ledger.observe_broker(SAVEN, "broker", [activity(180000)])
         broker_value, cash = 680000, 180000
     current = portfolio(bank, broker_value, cash)
     ledger.apply(current, ROUTES)
     assert current.total_value_cad == 1015000
     assert current.transfer_progress[0].in_transit_cad == 0
-    assert current.transfer_progress[0].awaiting_csv_cad == 0
+    assert current.transfer_progress[0].source_offset_cad == 0
     ledger.remember_recommendations([recommendation(action, 10000)], ROUTES)
     assert ledger.account(SAVEN)["cycle"]["limit"] == cents(10000)
 
@@ -187,11 +190,11 @@ def test_excess_withdrawal_is_an_outflow_but_actual_receipt_is_uncapped(
     if action == "DEPOSIT":
         ledger.observe_broker(SAVEN, "broker", [activity(-200000)])
         bank, parsed = bank_deposit(tmp_path, receipt)
-        ledger.observe_saven(SAVEN, bank, parsed)
+        ledger.observe_external_balance(SAVEN, bank, parsed)
         broker_value, cash = 300000, 0
     else:
         bank, parsed = bank_withdrawal(tmp_path, 200000)
-        ledger.observe_saven(SAVEN, bank, parsed)
+        ledger.observe_external_balance(SAVEN, bank, parsed)
         ledger.observe_broker(SAVEN, "broker", [activity(receipt)])
         broker_value, cash = 500000 + receipt, receipt
     current = portfolio(bank, broker_value, cash)
@@ -211,13 +214,13 @@ def test_recipient_first_offsets_stale_saven_until_csv_confirms_partial_source(
     assert current.external_balances[SAVEN].balance_cad == 500000
     assert current.holdings[SAVEN].value_cad == 320000
     assert current.cash_cad_total == 180000
-    assert current.transfer_progress[0].awaiting_csv_cad == 180000
+    assert current.transfer_progress[0].source_offset_cad == 180000
     bank, parsed = bank_withdrawal(tmp_path, 165000)
-    ledger.observe_saven(SAVEN, bank, parsed)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
     settled = portfolio(bank, 680000, 180000)
     ledger.apply(settled, ROUTES)
     assert settled.total_value_cad == 1015000
-    assert settled.transfer_progress[0].awaiting_csv_cad == 0
+    assert settled.transfer_progress[0].source_offset_cad == 0
 
 
 def test_destination_first_deposit_and_later_broker_record_do_not_double_count(
@@ -225,7 +228,7 @@ def test_destination_first_deposit_and_later_broker_record_do_not_double_count(
 ):
     ledger, bank = baseline(tmp_path)
     bank, parsed = bank_deposit(tmp_path, 180000)
-    ledger.observe_saven(SAVEN, bank, parsed)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
     current = portfolio(bank, 320000)
     ledger.apply(current, ROUTES)
     assert current.total_value_cad == 1000000
@@ -261,8 +264,8 @@ def test_bank_replay_interest_and_same_day_round_trip_are_safe(tmp_path):
             ("01/11/2026", "Deposit", 500000, 500000),
         ],
     )
-    ledger.observe_saven(SAVEN, bank, parsed)
-    ledger.observe_saven(SAVEN, bank, parsed)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
     assert ledger.account(SAVEN)["bank_out"] == cents(100000)
     assert ledger.account(SAVEN)["bank_in"] == cents(100000)
     bank, parsed = export(
@@ -274,7 +277,7 @@ def test_bank_replay_interest_and_same_day_round_trip_are_safe(tmp_path):
             ("01/11/2026", "Deposit", 500000, 500000),
         ],
     )
-    ledger.observe_saven(SAVEN, bank, parsed)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
     assert ledger.account(SAVEN)["bank_in"] == cents(100000)
 
 
@@ -283,7 +286,7 @@ def test_noncontinuous_csv_fails_without_partially_advancing_state(tmp_path):
     before = deepcopy(ledger.data)
     bank, parsed = export(tmp_path, [("02/11/2026", "Deposit", 100000, 700000)])
     with pytest.raises(ValueError, match="continuous activity"):
-        ledger.observe_saven(SAVEN, bank, parsed)
+        ledger.observe_external_balance(SAVEN, bank, parsed)
     assert ledger.data == before
 
 
@@ -291,29 +294,29 @@ def test_noncontinuous_csv_fails_without_partially_advancing_state(tmp_path):
 def test_cached_only_startup_can_reconcile_a_later_statement(tmp_path, include_anchor):
     bank, _ = export(tmp_path)
     ledger = TransferLedger()
-    ledger.observe_saven(SAVEN, bank)
+    ledger.observe_external_balance(SAVEN, bank)
     ledger.observe_broker(SAVEN, "broker", [], NOW)
     ledger.remember_recommendations([recommendation("WITHDRAW")], ROUTES, NOW)
     rows = [("02/11/2026", "Withdrawal", 180000, 320000)]
     if include_anchor:
         rows.append(("01/11/2026", "Deposit", 500000, 500000))
     bank, parsed = export(tmp_path, rows)
-    ledger.observe_saven(SAVEN, bank, parsed)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
     assert ledger.progress(SAVEN, ACCOUNT).in_transit_cad == 180000
 
 
 def test_expanding_a_csv_date_range_does_not_replay_older_bank_history(tmp_path):
     bank, _ = export(tmp_path)
     ledger = TransferLedger()
-    ledger.observe_saven(SAVEN, bank)
+    ledger.observe_external_balance(SAVEN, bank)
     ledger.observe_broker(SAVEN, "broker", [], NOW)
     ledger.remember_recommendations([recommendation("WITHDRAW")], ROUTES, NOW)
     rows = [("01/11/2026", "Withdrawal", 180000, 320000)]
     bank, parsed = export(tmp_path, rows)
-    ledger.observe_saven(SAVEN, bank, parsed)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
     rows.append(("01/11/2026", "Deposit", 500000, 500000))
     bank, parsed = export(tmp_path, rows)
-    ledger.observe_saven(SAVEN, bank, parsed)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
     assert ledger.progress(SAVEN, ACCOUNT).source_cad == 180000
     assert ledger.account(SAVEN)["bank_in"] == 0
 
@@ -322,7 +325,7 @@ def test_partly_settled_cycle_keeps_its_remaining_limit(tmp_path):
     ledger, bank = baseline(tmp_path)
     ledger.observe_broker(SAVEN, "broker", [activity(-50000)])
     bank, parsed = bank_deposit(tmp_path, 50000)
-    ledger.observe_saven(SAVEN, bank, parsed)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
     ledger.remember_recommendations([recommendation(amount=300000)], ROUTES)
     assert ledger.account(SAVEN)["cycle"]["limit"] == cents(180000)
     ledger.observe_broker(SAVEN, "broker", [activity(-50000), activity(-150000, day=3)])
@@ -335,7 +338,7 @@ def test_partly_settled_cycle_is_not_lost_when_remaining_gap_is_below_tolerance(
     ledger, _ = baseline(tmp_path)
     ledger.observe_broker(SAVEN, "broker", [activity(-165000)])
     bank, parsed = bank_deposit(tmp_path, 165000)
-    ledger.observe_saven(SAVEN, bank, parsed)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
     ledger.remember_recommendations([], ROUTES)
     ledger.observe_broker(SAVEN, "broker", [activity(-165000), activity(-15000, day=3)])
     assert ledger.progress(SAVEN, ACCOUNT).in_transit_cad == 15000
@@ -346,7 +349,7 @@ def test_settled_cycle_starts_new_intent_without_reusing_past_activity(tmp_path)
     rows = [activity(-180000)]
     ledger.observe_broker(SAVEN, "broker", rows)
     bank, parsed = bank_deposit(tmp_path, 180000)
-    ledger.observe_saven(SAVEN, bank, parsed)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
     ledger.remember_recommendations([recommendation(amount=10000)], ROUTES)
     ledger.observe_broker(SAVEN, "broker", rows)
     assert ledger.progress(SAVEN, ACCOUNT).in_transit_cad == 0
@@ -367,7 +370,7 @@ def test_in_flight_transfer_funds_projection_once_without_changing_actual_cash(
         broker_value = 320000
     else:
         bank, parsed = bank_withdrawal(tmp_path, 180000)
-        ledger.observe_saven(SAVEN, bank, parsed)
+        ledger.observe_external_balance(SAVEN, bank, parsed)
     current = portfolio(bank, broker_value)
     ledger.apply(current, ROUTES)
     actions = calculate_trades(current, targets, 1.3, 0, 0.1, set(), None, ROUTES)
@@ -455,7 +458,7 @@ def test_rendered_summaries_reconcile_and_names_are_shortened(
         current = portfolio(bank, 680000, 180000)
     else:
         bank, parsed = bank_withdrawal(tmp_path, 180000)
-        ledger.observe_saven(SAVEN, bank, parsed)
+        ledger.observe_external_balance(SAVEN, bank, parsed)
         current = portfolio(bank)
     ledger.apply(current, ROUTES)
     actions = calculate_trades(
@@ -468,8 +471,10 @@ def test_rendered_summaries_reconcile_and_names_are_shortened(
     display.display_holdings_summary(current, 1.3)
     display.display_account_summary(current, 1.3)
     snapshot = build_allocation_snapshot(current, {"EQ": 68, SAVEN: 32}, 1.3)
-    display.display_allocations(snapshot.allocations, {"EQ": 68, SAVEN: 32}, 0.1)
-    display.display_external_transfers(actions, current.transfer_progress)
+    display.display_allocations(
+        snapshot.allocations, {"EQ": 68, SAVEN: 32}, 0.1, current.external_balances
+    )
+    display.display_external_transfers(current, actions)
     rendered = output.getvalue()
     assert (
         len(
@@ -482,29 +487,7 @@ def test_rendered_summaries_reconcile_and_names_are_shortened(
         == 2
     )
     assert SAVEN not in rendered and "SAVEN:...2223" in rendered
-    assert ("Awaiting CSV" if recipient_first else "In transit") in rendered
-
-
-@pytest.fixture
-def encrypted_store(tmp_path, monkeypatch):
-    """Keep test plaintext in memory while paths contain only ciphertext markers."""
-    data = tmp_path / "data"
-    data.mkdir()
-    storage = {}
-
-    def read(path):
-        return deepcopy(storage[path])
-
-    def write(path, value):
-        path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text("encrypted-test-placeholder", encoding="utf-8")
-        storage[path] = deepcopy(value)
-
-    for module in (transfer_tracking, saven_tracking):
-        monkeypatch.setattr(module, "read_encrypted_json", read)
-        monkeypatch.setattr(module, "write_encrypted_json", write)
-        monkeypatch.setattr(module, "get_data_dir", lambda: data)
-    return data, storage
+    assert ("Awaiting export" if recipient_first else "In transit") in rendered
 
 
 def test_csv_refresh_then_scheduled_reconciliation_preserves_transfer_evidence(
@@ -512,14 +495,14 @@ def test_csv_refresh_then_scheduled_reconciliation_preserves_transfer_evidence(
 ):
     data, storage = encrypted_store
     bank, parsed = export(tmp_path)
-    assert load_saven_balances(["0001112223"], tmp_path)["0001112223"] == bank
+    assert load_external_balances(CONFIGS, tmp_path)[SAVEN] == bank
     ledger = TransferLedger.load()
     ledger.observe_broker(SAVEN, "broker", [], NOW)
     ledger.remember_recommendations([recommendation("WITHDRAW")], ROUTES, NOW)
     ledger.save()
     new_bank, parsed = bank_withdrawal(tmp_path, 165000)
-    balances = load_saven_balances(["0001112223"], tmp_path)
-    assert balances["0001112223"] == new_bank
+    balances = load_external_balances(CONFIGS, tmp_path)
+    assert balances[SAVEN] == new_bank
     assert storage[data / "transfer_tracking.json"]["accounts"][SAVEN][
         "bank_out"
     ] == cents(165000)
@@ -536,7 +519,7 @@ def test_csv_refresh_then_scheduled_reconciliation_preserves_transfer_evidence(
     assert current.total_value_cad == 1015000
     assert current.transfer_progress[0].in_transit_cad == 0
     before = deepcopy(storage[data / "transfer_tracking.json"])
-    load_saven_balances(["0001112223"], tmp_path)
+    load_external_balances(CONFIGS, tmp_path)
     assert storage[data / "transfer_tracking.json"] == before
     assert set(storage[data / "saven_balance.json"]["accounts"]["0001112223"]) == {
         "balance_cad",
@@ -551,7 +534,7 @@ def test_pending_route_cannot_be_pruned_out_of_the_saved_bank_cache(
 ):
     data, storage = encrypted_store
     export(tmp_path)
-    balances = load_saven_balances(["0001112223"], tmp_path)
+    balances = load_external_balances(CONFIGS, tmp_path)
     ledger = TransferLedger.load()
     ledger.observe_broker(SAVEN, "broker", [], NOW)
     ledger.remember_recommendations([recommendation()], ROUTES, NOW)
@@ -559,8 +542,13 @@ def test_pending_route_cannot_be_pruned_out_of_the_saved_bank_cache(
     ledger.save()
     saved = deepcopy(storage[data / "saven_balance.json"])
     with pytest.raises(ValueError, match="until its transfer settles"):
-        save_saven_balances(
-            data / "saven_balance.json", {"accounts": {}}, {"accounts": balances}, {}
+        save_external_balances(
+            PROVIDERS["SAVEN"],
+            data / "saven_balance.json",
+            {"accounts": {}},
+            {"accounts": {"0001112223": balances[SAVEN]}},
+            {},
+            set(),
         )
     assert storage[data / "saven_balance.json"] == saved
 
@@ -583,7 +571,7 @@ def test_activity_windows_preserve_duplicate_multiplicity_without_boundary_repla
             return [activity(-50000), activity(-50000)]
 
     current = portfolio(bank, 400000)
-    reconcile_transfer_activity(current, {"0001112223": bank}, [Client()], ROUTES)
+    reconcile_transfer_activity(current, {SAVEN: bank}, [Client()], ROUTES)
     assert len(windows) > 1
     assert all((end - start).days <= 30 for start, end in windows)
     assert current.transfer_progress[0].in_transit_cad == 100000
@@ -649,7 +637,7 @@ def test_saven_service_fee_remains_an_expense_not_transfer_principal(tmp_path):
             ("01/11/2026", "Deposit", 500000, 500000),
         ],
     )
-    ledger.observe_saven(SAVEN, bank, parsed)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
     current = portfolio(bank)
     ledger.apply(current, ROUTES)
     assert current.total_value_cad == 999995
@@ -666,11 +654,11 @@ def test_interest_only_statement_does_not_clear_a_recipient_first_offset(tmp_pat
             ("01/11/2026", "Deposit", 500000, 500000),
         ],
     )
-    ledger.observe_saven(SAVEN, bank, parsed)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
     current = portfolio(bank, 680000, 180000)
     ledger.apply(current, ROUTES)
     assert current.total_value_cad == pytest.approx(1000019.91)
-    assert current.transfer_progress[0].awaiting_csv_cad == 180000
+    assert current.transfer_progress[0].source_offset_cad == 180000
 
 
 @pytest.mark.parametrize("action", ["DEPOSIT", "WITHDRAW"])
@@ -680,7 +668,7 @@ def test_partial_destination_arrivals_release_only_received_principal(tmp_path, 
         ledger.observe_broker(SAVEN, "broker", [activity(-180000)])
     else:
         bank, parsed = bank_withdrawal(tmp_path, 180000)
-        ledger.observe_saven(SAVEN, bank, parsed)
+        ledger.observe_external_balance(SAVEN, bank, parsed)
     received = []
     bank_rows = [("01/11/2026", "Deposit", 500000, 500000)]
     total_received = 0
@@ -691,7 +679,7 @@ def test_partial_destination_arrivals_release_only_received_principal(tmp_path, 
                 0, (f"0{day}/11/2026", "Deposit", amount, 500000 + total_received)
             )
             bank, parsed = export(tmp_path, bank_rows)
-            ledger.observe_saven(SAVEN, bank, parsed)
+            ledger.observe_external_balance(SAVEN, bank, parsed)
             current = portfolio(bank, 320000)
         else:
             received.append(activity(amount, day))
@@ -710,11 +698,11 @@ def test_same_day_duplicate_bank_rows_keep_multiplicity_across_full_exports(tmp_
         ("01/11/2026", "Deposit", 500000, 500000),
     ]
     bank, parsed = export(tmp_path, rows)
-    ledger.observe_saven(SAVEN, bank, parsed)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
     rows = rows[:2] + rows
     bank, parsed = export(tmp_path, rows)
-    ledger.observe_saven(SAVEN, bank, parsed)
-    ledger.observe_saven(SAVEN, bank, parsed)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
     assert ledger.account(SAVEN)["bank_out"] == cents(200000)
     assert ledger.progress(SAVEN, ACCOUNT).source_cad == 180000
 
@@ -748,7 +736,7 @@ def test_transit_withdrawal_can_fund_usd_buys_and_conversion_in_one_projection(
 ):
     ledger, bank = baseline(tmp_path, "WITHDRAW")
     bank, parsed = bank_withdrawal(tmp_path, 180000)
-    ledger.observe_saven(SAVEN, bank, parsed)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
     current = portfolio(bank)
     holding = current.holdings["EQ"]
     holding.currency = "USD"
@@ -818,13 +806,12 @@ def test_scheduled_sync_reconciles_before_recording_history_or_tactical_evaluati
         {},
         0.1,
         config,
-        ["0001112223"],
-        {SAVEN: {"owner_name": "Example", "account_type": "Margin"}},
+        CONFIGS,
     )
     with (
         patch.object(main, "load_config", return_value=raw),
         patch.object(main, "validate_encrypted_state_files"),
-        patch.object(main, "load_saven_balances", return_value={"0001112223": bank}),
+        patch.object(main, "load_external_balances", return_value={SAVEN: bank}),
         patch.object(main, "get_tokens_dir", return_value=tmp_path),
         patch.object(main, "QuestradeClient", return_value=Client()),
         patch.object(main, "get_usd_to_cad_rate", return_value=1.3),

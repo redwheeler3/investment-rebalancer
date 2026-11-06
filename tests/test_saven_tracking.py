@@ -4,8 +4,9 @@ import os
 
 import pytest
 
+from src.external_accounts import parse_external_accounts, refresh_external_balances
+from src.external_providers import PROVIDERS
 from src.saven_export import read_saven_export
-from src.saven_tracking import parse_saven_account_numbers, refresh_saven_balances
 
 ACCOUNT_A = "0001112223"
 ACCOUNT_B = "0001114445"
@@ -26,11 +27,24 @@ def cached(path):
     return {"accounts": {result.account_number: result.as_snapshot()}}
 
 
+def metadata(settings):
+    settings = dict(settings)
+    settings["external_accounts"] = {
+        f"SAVEN:{number}": {
+            "display_name": "Saven",
+            "account_type": "HISA",
+            "questrade_account": {"owner_name": "Primary", "account_type": "Margin"},
+        }
+        for number in (ACCOUNT_A, ACCOUNT_B)
+    }
+    return settings
+
+
 def test_config_preserves_leading_zeros_and_missing_section_disables_tracking():
-    assert parse_saven_account_numbers({"targets": {f"SAVEN:{ACCOUNT_A}": 5.0}}) == [
-        ACCOUNT_A
-    ]
-    assert parse_saven_account_numbers({"targets": {"CAD": 0.0}}) == []
+    assert list(
+        parse_external_accounts(metadata({"targets": {f"SAVEN:{ACCOUNT_A}": 5}}))
+    ) == [f"SAVEN:{ACCOUNT_A}"]
+    assert parse_external_accounts({"targets": {"CAD": 0}}) == {}
 
 
 @pytest.mark.parametrize(
@@ -55,17 +69,21 @@ def test_config_preserves_leading_zeros_and_missing_section_disables_tracking():
 )
 def test_config_rejects_invalid_or_duplicate_account_identifiers(settings):
     with pytest.raises(ValueError):
-        parse_saven_account_numbers(settings)
+        parse_external_accounts(metadata(settings))
 
 
 def test_fixed_membership_tracks_zero_weight_accounts_until_emptied():
-    assert parse_saven_account_numbers(
-        {
-            "tactical_deployment": {
-                "fixed_composition": {f"SAVEN:{ACCOUNT_A}": 0, "ZMMK.TO": 100},
-            }
-        }
-    ) == [ACCOUNT_A]
+    assert list(
+        parse_external_accounts(
+            metadata(
+                {
+                    "tactical_deployment": {
+                        "fixed_composition": {f"SAVEN:{ACCOUNT_A}": 0, "ZMMK.TO": 100}
+                    }
+                }
+            )
+        )
+    ) == [f"SAVEN:{ACCOUNT_A}"]
 
 
 def test_newer_untracked_account_does_not_replace_tracked_account(tmp_path):
@@ -73,7 +91,9 @@ def test_newer_untracked_account_does_not_replace_tracked_account(tmp_path):
     untracked = export(tmp_path / "newer-guid.csv", ACCOUNT_B, "20.00")
     os.utime(tracked, (100, 100))
     os.utime(untracked, (200, 200))
-    snapshots, refreshed = refresh_saven_balances([ACCOUNT_A], {}, directory=tmp_path)
+    snapshots, refreshed = refresh_external_balances(
+        PROVIDERS["SAVEN"], [ACCOUNT_A], {}, directory=tmp_path
+    )
     assert set(snapshots["accounts"]) == {ACCOUNT_A}
     assert snapshots["accounts"][ACCOUNT_A]["balance_cad"] == "10.00"
     assert refreshed == {ACCOUNT_A}
@@ -85,7 +105,9 @@ def test_untracked_account_is_ignored_before_header_or_transaction_validation(tm
         f"Your Transactions List\n\nAccount Number: {ACCOUNT_B}\nmalformed header and data\n",
         encoding="utf-8",
     )
-    snapshots, _ = refresh_saven_balances([ACCOUNT_A], {}, directory=tmp_path)
+    snapshots, _ = refresh_external_balances(
+        PROVIDERS["SAVEN"], [ACCOUNT_A], {}, directory=tmp_path
+    )
     assert set(snapshots["accounts"]) == {ACCOUNT_A}
 
 
@@ -94,8 +116,8 @@ def test_newer_untracked_file_keeps_existing_tracked_balance_and_dates(tmp_path)
     existing = cached(initial)
     initial.unlink()
     export(tmp_path / "another-account.csv", ACCOUNT_B, "20.00")
-    snapshots, refreshed = refresh_saven_balances(
-        [ACCOUNT_A], existing, directory=tmp_path
+    snapshots, refreshed = refresh_external_balances(
+        PROVIDERS["SAVEN"], [ACCOUNT_A], existing, directory=tmp_path
     )
     assert snapshots == existing
     assert not refreshed
@@ -104,8 +126,8 @@ def test_newer_untracked_file_keeps_existing_tracked_balance_and_dates(tmp_path)
 def test_explicit_untracked_file_does_not_change_cached_account(tmp_path):
     existing = cached(export(tmp_path / "initial.csv"))
     other = export(tmp_path / "other.csv", ACCOUNT_B, "20.00")
-    snapshots, refreshed = refresh_saven_balances(
-        [ACCOUNT_A], existing, source_file=other
+    snapshots, refreshed = refresh_external_balances(
+        PROVIDERS["SAVEN"], [ACCOUNT_A], existing, source_file=other
     )
     assert snapshots == existing
     assert not refreshed
@@ -114,8 +136,8 @@ def test_explicit_untracked_file_does_not_change_cached_account(tmp_path):
 def test_multiple_configured_accounts_have_independent_balances(tmp_path):
     export(tmp_path / "one.csv", ACCOUNT_A, "10.00")
     export(tmp_path / "two.csv", ACCOUNT_B, "20.00")
-    snapshots, refreshed = refresh_saven_balances(
-        [ACCOUNT_A, ACCOUNT_B], {}, directory=tmp_path
+    snapshots, refreshed = refresh_external_balances(
+        PROVIDERS["SAVEN"], [ACCOUNT_A, ACCOUNT_B], {}, directory=tmp_path
     )
     assert snapshots["accounts"][ACCOUNT_A]["balance_cad"] == "10.00"
     assert snapshots["accounts"][ACCOUNT_B]["balance_cad"] == "20.00"
@@ -125,8 +147,8 @@ def test_multiple_configured_accounts_have_independent_balances(tmp_path):
 def test_unchanged_export_does_not_advance_source_dates(tmp_path):
     path = export(tmp_path / "one.csv")
     existing = cached(path)
-    snapshots, refreshed = refresh_saven_balances(
-        [ACCOUNT_A], existing, directory=tmp_path
+    snapshots, refreshed = refresh_external_balances(
+        PROVIDERS["SAVEN"], [ACCOUNT_A], existing, directory=tmp_path
     )
     assert snapshots == existing
     assert not refreshed
@@ -134,28 +156,32 @@ def test_unchanged_export_does_not_advance_source_dates(tmp_path):
 
 def test_removing_account_from_config_excludes_its_cache(tmp_path):
     existing = cached(export(tmp_path / "one.csv"))
-    snapshots, refreshed = refresh_saven_balances([], existing)
+    snapshots, refreshed = refresh_external_balances(PROVIDERS["SAVEN"], [], existing)
     assert snapshots == {"accounts": {}}
     assert not refreshed
 
 
 def test_missing_initial_balance_is_not_treated_as_zero(tmp_path):
     with pytest.raises(ValueError, match="No export or cached balance"):
-        refresh_saven_balances([ACCOUNT_A], {}, directory=tmp_path)
+        refresh_external_balances(
+            PROVIDERS["SAVEN"], [ACCOUNT_A], {}, directory=tmp_path
+        )
 
 
 def test_invalid_tracked_export_is_reported_even_if_cached_balance_exists(tmp_path):
     existing = cached(export(tmp_path / "one.csv"))
     invalid = export(tmp_path / "invalid.csv", amount="NaN")
     with pytest.raises(ValueError, match="Invalid transaction"):
-        refresh_saven_balances([ACCOUNT_A], existing, source_file=invalid)
+        refresh_external_balances(
+            PROVIDERS["SAVEN"], [ACCOUNT_A], existing, source_file=invalid
+        )
 
 
 def test_older_export_retains_cached_balance(tmp_path):
     existing = cached(export(tmp_path / "one.csv"))
     older = export(tmp_path / "older.csv", amount="5.00", transaction_date="01/09/2026")
-    snapshots, refreshed = refresh_saven_balances(
-        [ACCOUNT_A], existing, source_file=older
+    snapshots, refreshed = refresh_external_balances(
+        PROVIDERS["SAVEN"], [ACCOUNT_A], existing, source_file=older
     )
     assert snapshots == existing
     assert not refreshed
@@ -170,13 +196,14 @@ def test_refresh_status_describes_source_and_dates_the_balance_in_use(tmp_path, 
     elif status == "older":
         export(path, amount="5.00", transaction_date="01/09/2026")
     events = []
-    snapshot, _ = refresh_saven_balances(
+    snapshot, _ = refresh_external_balances(
+        PROVIDERS["SAVEN"],
         [ACCOUNT_A],
         existing,
         directory=None if status == "cached" else tmp_path,
         on_status=lambda *event: events.append(event),
     )
-    assert events == [(ACCOUNT_A, status, "2026-10-07")]
+    assert events == [(f"SAVEN:{ACCOUNT_A}", status, "2026-10-07")]
     assert snapshot["accounts"][ACCOUNT_A]["balance_cad"] == "10.00"
     if existing:
         assert snapshot == existing

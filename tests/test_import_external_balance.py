@@ -7,8 +7,8 @@ from unittest.mock import patch
 from tests.test_saven_tracking import ACCOUNT_A, ACCOUNT_B, cached, export
 
 spec = importlib.util.spec_from_file_location(
-    "import_saven_balance",
-    Path(__file__).resolve().parents[1] / "scripts" / "import_saven_balance.py",
+    "import_external_balance",
+    Path(__file__).resolve().parents[1] / "scripts" / "import_external_balance.py",
 )
 importer = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(importer)
@@ -17,14 +17,24 @@ spec.loader.exec_module(importer)
 def run_import(tmp_path, account_numbers, existing=None, extra_args=()):
     config = tmp_path / "config"
     config.mkdir()
+    import yaml
+
+    settings = {
+        "targets": {f"SAVEN:{number}": 5 for number in account_numbers},
+        "external_accounts": {
+            f"SAVEN:{number}": {
+                "display_name": "Saven",
+                "account_type": "HISA",
+                "questrade_account": {
+                    "owner_name": "Primary",
+                    "account_type": "Margin",
+                },
+            }
+            for number in account_numbers
+        },
+    }
     config.joinpath("settings.yaml").write_text(
-        "targets:\n"
-        + (
-            "".join(f'  "SAVEN:{number}": 5.0\n' for number in account_numbers)
-            if account_numbers
-            else "  CAD: 0.0\n"
-        ),
-        encoding="utf-8",
+        yaml.safe_dump(settings), encoding="utf-8"
     )
     data = tmp_path / "data"
     data.mkdir()
@@ -35,12 +45,12 @@ def run_import(tmp_path, account_numbers, existing=None, extra_args=()):
         patch.object(importer, "get_config_dir", return_value=config),
         patch.object(importer, "get_data_dir", return_value=data),
         patch.object(importer, "read_encrypted_json", return_value=existing),
-        patch("src.saven_tracking.write_encrypted_json") as write,
+        patch("src.external_accounts.write_encrypted_json") as write,
         patch("src.transfer_tracking.write_encrypted_json"),
         patch(
             "sys.argv",
             [
-                "import_saven_balance",
+                "import_external_balance",
                 "--directory",
                 str(tmp_path),
                 "--save",
@@ -79,7 +89,7 @@ def test_refreshing_one_configured_account_preserves_the_other_cache(tmp_path):
     second = export(tmp_path / "two.csv", ACCOUNT_B, "20.00")
     existing = cached(second)
     code, write, _ = run_import(
-        tmp_path, [ACCOUNT_A, ACCOUNT_B], existing, ["--account-number", ACCOUNT_A]
+        tmp_path, [ACCOUNT_A, ACCOUNT_B], existing, ["--account", f"SAVEN:{ACCOUNT_A}"]
     )
     assert code == 0
     result = write.call_args.args[1]["accounts"]

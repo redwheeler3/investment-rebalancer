@@ -398,7 +398,7 @@ class RebalancePlanner:
                 None,
             )
             if progress is not None:
-                unsettled = progress.in_transit_cad > 0 or progress.awaiting_csv_cad > 0
+                unsettled = progress.in_transit_cad > 0 or progress.source_offset_cad > 0
                 if unsettled and action != progress.action:
                     continue
                 if action == progress.action and (

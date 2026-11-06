@@ -1,6 +1,43 @@
 """Shared data types and constants used across the rebalancer."""
 
 from dataclasses import dataclass
+from datetime import date, datetime
+from decimal import Decimal
+
+
+class ExternalExportNotFound(ValueError):
+    """No export is available for a configured external account."""
+
+
+@dataclass(frozen=True)
+class ExternalTransaction:
+    """Provider-normalized newest-first CAD ledger row."""
+
+    date: date
+    description: str
+    amount_cad: Decimal
+    balance_cad: Decimal
+    is_transfer: bool
+
+
+@dataclass(frozen=True)
+class ExternalExport:
+    """Common account balance and ledger evidence returned by an adapter."""
+
+    account_number: str
+    balance_cad: Decimal
+    last_transaction_date: date
+    source_sha256: str
+    source_modified_at: datetime
+    transactions: tuple[ExternalTransaction, ...]
+
+    def as_snapshot(self) -> dict:
+        return {
+            "balance_cad": str(self.balance_cad),
+            "last_transaction_date": self.last_transaction_date.isoformat(),
+            "source_sha256": self.source_sha256,
+            "source_modified_at": self.source_modified_at.isoformat(),
+        }
 
 
 @dataclass
@@ -55,7 +92,7 @@ class TransferProgress:
     source_cad: float
     received_cad: float
     in_transit_cad: float
-    awaiting_csv_cad: float = 0.0
+    source_offset_cad: float = 0.0
 
     @property
     def transit_symbol(self) -> str:
