@@ -135,6 +135,33 @@ The plan assumes its transfers and conversions complete before dependent buys.
 It stores no settlement state and changes no temporary target weights. A new
 Saven CSV plus refreshed broker data establish actual balances on the next run.
 
+### Planned automatic transit reconciliation
+
+Implementation is deferred until a real transfer is available for validation.
+The current runtime does not track actual money in transit.
+
+An outstanding transfer recommendation and its configured broker endpoint supply
+the intent for matching newly observed cash movements. Track partial movements
+automatically, capped cumulatively at the recommendation amount. An unexecuted
+recommendation is not an asset; amounts withdrawn above the cap are ordinary
+outflows from the tracked portfolio. Actual destination balances remain uncapped,
+so a larger receipt funded partly from an external bank is valid.
+
+For a broker-to-Saven transfer, recognized withdrawals contribute external transit
+cash until reconciled against a new Saven CSV. For the reverse direction, the CSV
+can be imported as soon as it shows the withdrawal. If the broker deposit is seen
+first, temporarily offset the stale Saven valuation until the CSV catches up.
+Keep those adjustments separate from reported account balances and broker buying
+power. Reconcile before household valuation and tactical evaluation in both local
+and scheduled runs, and prevent repeated recommendations or imports from counting
+the same principal again.
+
+History, tactical evaluation, accuracy reporting, and planning continue normally.
+No manual start/pause flag or warning merely for differing amounts is planned.
+Use minimal encrypted transfer state alongside the existing balance snapshot;
+validate movement identification, recommendation lifecycle, partial transfers,
+top-ups, cumulative limits, and both arrival orders against the real transfer.
+
 ## Layer 1: Sell Overweight (`_sell_overweight_starters`)
 
 ### Step 1: Find overweight symbols
