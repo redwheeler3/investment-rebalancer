@@ -61,6 +61,17 @@ def _response(status_code: int, reason: str, data: dict | None = None):
     return response
 
 
+def test_reads_account_activity_with_explicit_date_bounds():
+    client = _client()
+    rows = [{"type": "Withdrawals", "currency": "CAD", "netAmount": -50000}]
+    with patch.object(client, "_get", return_value={"activities": rows}) as get:
+        assert client.get_activities("00012345", "start", "end") == rows
+    get.assert_called_once_with(
+        "v1/accounts/00012345/activities",
+        params={"startTime": "start", "endTime": "end"},
+    )
+
+
 def test_get_refreshes_auth_once_after_401_and_displays_recovery(capsys):
     client = _client()
     unauthorized = _response(401, "Unauthorized")

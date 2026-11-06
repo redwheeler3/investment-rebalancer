@@ -34,6 +34,8 @@ def build_account_trade_impacts(trades: list) -> dict:
     """Return per-account cash impacts where buys spend and sells raise cash."""
     impacts = {}
     for trade in trades:
+        if trade.action == "DEPOSIT" and trade.in_progress:
+            continue
         totals = impacts.setdefault(trade.account_number, CurrencyTotals())
         amount = (
             trade.estimated_value

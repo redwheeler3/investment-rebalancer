@@ -177,6 +177,7 @@ def test_local_refresh_saves_encrypted_snapshot_and_keeps_original_dates(tmp_pat
     with (
         patch.object(saven_tracking, "get_data_dir", return_value=tmp_path),
         patch.object(saven_tracking, "write_encrypted_json") as write,
+        patch("src.transfer_tracking.write_encrypted_json"),
     ):
         balances = load_saven_balances(
             [ACCOUNT_A],
@@ -250,7 +251,7 @@ def test_scheduled_history_and_accuracy_include_savings(tmp_path, capsys):
         0.1,
         None,
         [ACCOUNT_A],
-        {},
+        {SAVEN: {"owner_name": "Primary", "account_type": "Margin"}},
     )
     with (
         patch.object(main, "load_config", return_value=config),
@@ -262,6 +263,7 @@ def test_scheduled_history_and_accuracy_include_savings(tmp_path, capsys):
         patch.object(main, "QuestradeClient", return_value=object()),
         patch.object(main, "get_usd_to_cad_rate", return_value=1.3),
         patch.object(main, "build_portfolio", return_value=portfolio),
+        patch.object(main, "reconcile_transfer_activity"),
         patch.object(main, "record_value") as record,
     ):
         main.run_scheduled_sync()

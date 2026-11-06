@@ -34,6 +34,7 @@ def run_rebalancer():
     portfolio = _build_priced_portfolio(clients, usd_to_cad_rate)
     attach_saven_balances(portfolio, saven_balances)
     transfer_accounts = resolve_external_transfer_accounts(portfolio, external_transfer_accounts)
+    transfer_ledger = reconcile_transfer_activity(portfolio, saven_balances, clients, transfer_accounts)
     dlr_quotes = _fetch_dlr_quotes(clients[0])
 
     # Tactical posture (if configured) shifts the resolved targets before sizing.
@@ -47,6 +48,9 @@ def run_rebalancer():
     report = build_report_data(portfolio, resolved_targets, ..., trades, ...)
     record_value(portfolio.total_value_cad)
     _render_report(portfolio, resolved_targets, ..., report)
+    if transfer_ledger:
+        transfer_ledger.remember_recommendations(trades, transfer_accounts)
+        transfer_ledger.save()
 ```
 
 `load_config()` returns a 9-tuple (accounts, targets, transient symbols, gambit
@@ -96,10 +100,34 @@ and every app-managed file under `data/` are SOPS/age ciphertext at rest.
 - **external_transfer_accounts** — owner/type selection for personal Margin transfer endpoints
 
 Local runs refresh Saven CSVs from Downloads into encrypted private snapshots;
-scheduled runs consume only snapshots. Balances are attached before history,
-tactical evaluation, and allocation math. Missing or malformed external data fail
-closed. The portfolio holds external savings separately from available broker
-cash; planned transfers connect the two through the shared planning ledger.
+scheduled runs consume only those Saven snapshots. Both entry points read posted
+broker cash activity and reconcile encrypted `data/transfer_tracking.json` before
+history, tactical evaluation, or allocation math. CSV imports update the bank
+evidence even when invoked through the standalone importer. Missing or malformed
+external data fail closed. Reported bank balances and broker cash remain separate
+from transit assets and provisional stale-source offsets. The shared planning
+ledger projects pending arrivals without increasing actual broker buying power.
+
+### Transfer state boundary
+
+`transfer_tracking.py` stores cash-event observation cursors, cumulative integer
+cent amounts, and one original recommendation cap per route. It baselines existing
+activity and registers only displayed local recommendations. Broker activity
+queries cover the polling gap and active recommendation period in API-sized
+windows; multiplicity-aware signatures prevent replay without collapsing repeated
+identical cash records. Saven ledger observations distinguish new principal from
+interest/fees and validate continuity from the saved balance.
+
+`PortfolioSummary.transfer_progress` carries derived adjustments for display and
+planning. External snapshots retain their original four fields. Current holdings
+include separate transit values and adjusted Saven valuation; both summary tables
+show the raw Saven balance plus adjustment rows so totals reconcile. Saven-bound
+cash is assigned to its destination in allocation math, while its physical transit
+location stays visible in the summaries. In-progress transfer actions participate
+in the normal projection/FX pipeline while remaining
+distinct from new instructions. See [transfer reconciliation](rebalancer.md#automatic-transit-reconciliation)
+for planner details and the [Saven guide](saven.md) for setup, workflow, limits,
+and the real-transfer checklist.
 
 Optional fields gracefully default:
 ```python
@@ -645,7 +673,8 @@ The chart auto-sizes to fill the terminal and picks month-start labels that don'
 
 GitHub Actions runs `python main.py --sync` on a schedule. This mode:
 1. Refreshes all tokens (keeps them alive even when you don't run locally)
-2. Snapshots the portfolio value (so ATH tracking works even on days you don't check)
+2. Reconciles existing transfer intent using broker activities and saved Saven
+   data, then snapshots household value including transit/source adjustments
 3. Evaluates tactical regime transitions (so drawdown triggers are caught daily)
 4. Resolves the final targets (FX rules + tactical adjustment) and computes the
    current **accuracy** score, which it writes to `GITHUB_OUTPUT` as `accuracy=...`

@@ -51,6 +51,7 @@ from src.tactical import (
     parse_tactical_config,
     resolve_tactical_targets,
 )
+from src.transfer_tracking import reconcile_transfer_activity
 
 
 def load_config() -> tuple:
@@ -159,7 +160,7 @@ def run_scheduled_sync():
         _drift_trade_threshold_pct,
         tactical_config,
         saven_account_numbers,
-        _external_transfer_accounts,
+        external_transfer_accounts,
     ) = load_config()
     validate_encrypted_state_files()
     # Missing/corrupt external balances must fail before history or tactical state.
@@ -197,6 +198,16 @@ def run_scheduled_sync():
             usd_to_cad_rate = get_usd_to_cad_rate(client=clients[0])
             portfolio = build_portfolio(clients, usd_to_cad_rate)
             attach_saven_balances(portfolio, saven_balances)
+            transfer_accounts = (
+                resolve_external_transfer_accounts(
+                    portfolio, external_transfer_accounts
+                )
+                if saven_account_numbers
+                else {}
+            )
+            reconcile_transfer_activity(
+                portfolio, saven_balances, clients, transfer_accounts
+            )
             record_value(portfolio.total_value_cad)
             print(f"  ✓ Portfolio value recorded: ${portfolio.total_value_cad:,.2f}")
 
@@ -401,6 +412,9 @@ def run_rebalancer():
     transfer_accounts = resolve_external_transfer_accounts(
         portfolio, external_transfer_accounts
     )
+    transfer_ledger = reconcile_transfer_activity(
+        portfolio, saven_balances, clients, transfer_accounts
+    )
     dlr_quotes = _fetch_dlr_quotes(clients[0])
 
     # Evaluate tactical posture and adjust targets if configured
@@ -460,6 +474,9 @@ def run_rebalancer():
         drift_trade_threshold_pct,
         report,
     )
+    if transfer_ledger is not None:
+        transfer_ledger.remember_recommendations(trades, transfer_accounts)
+        transfer_ledger.save()
 
 
 def _pull_latest():

@@ -31,6 +31,7 @@ class TransferRecommendation:
     account_type: str
     owner: str
     requires_fx: bool = False
+    in_progress: bool = False
 
     @property
     def estimated_value(self) -> float:
@@ -39,6 +40,26 @@ class TransferRecommendation:
     @property
     def currency(self) -> str:
         return "CAD"
+
+
+@dataclass
+class TransferProgress:
+    """Valuation adjustments supported by an outstanding transfer recommendation."""
+
+    symbol: str
+    action: str
+    account_number: str
+    account_type: str
+    owner: str
+    recommended_cad: float
+    source_cad: float
+    received_cad: float
+    in_transit_cad: float
+    awaiting_csv_cad: float = 0.0
+
+    @property
+    def transit_symbol(self) -> str:
+        return f"TRANSIT:{self.symbol}"
 
 
 @dataclass

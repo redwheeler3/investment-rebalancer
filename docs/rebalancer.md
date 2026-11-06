@@ -124,21 +124,26 @@ shows the CSV lookup outcome and last activity date of the balance in use. An
 older export is identified relative to the cached source data; no age cutoff is
 assumed. Account Summary groups external accounts below brokerage
 accounts; both tables include external savings in their household totals while
-cash columns retain only brokerage cash. The Saven Transfers table follows
-currency conversions and contains only direction and amount. The direction names
+cash columns retain only brokerage cash. Cash and position cells for external
+balances and transfer adjustments are blank. The Saven Transfers table follows
+currency conversions and contains direction, amount, and status. The direction names
 both the Saven HISA and the configured broker endpoint, joined by an arrow.
 Transfer instructions and refresh guidance live in the README.
 Unfundable deposits remain visible as allocation gaps. Account-local external
 deficits also count as productive destinations in household cascade routing.
 
 The plan assumes its transfers and conversions complete before dependent buys.
-It stores no settlement state and changes no temporary target weights. A new
-Saven CSV plus refreshed broker data establish actual balances on the next run.
+Target weights stay unchanged. Reported balances and actual brokerage buying
+power remain separate from inferred transit assets and source adjustments.
 
-### Planned automatic transit reconciliation
+### Automatic transit reconciliation
 
-Implementation is deferred until a real transfer is available for validation.
-The current runtime does not track actual money in transit.
+`src/transfer_tracking.py` owns one prospective recommendation cycle per Saven
+route in encrypted `data/transfer_tracking.json`. The first run establishes bank
+and broker observation baselines. Only a recommendation rendered by a successful
+local run arms intent; scheduled syncs reconcile that existing intent without
+creating recommendations the user has not seen. Run locally before initiating
+the first transfer. The four-field Saven balance snapshot remains unchanged.
 
 An outstanding transfer recommendation and its configured broker endpoint supply
 the intent for matching newly observed cash movements. Track partial movements
@@ -147,20 +152,66 @@ recommendation is not an asset; amounts withdrawn above the cap are ordinary
 outflows from the tracked portfolio. Actual destination balances remain uncapped,
 so a larger receipt funded partly from an external bank is valid.
 
+Amounts and cumulative counters are stored as integer cents. Broker activity
+signatures are counted as multisets, so identical-looking repeated withdrawals
+remain distinct while overlapping API windows and repeated polls do not replay
+them. Requests are split into windows within the
+[API's 31-day limit](https://www.questrade.com/api/documentation/rest-operations/account-calls/accounts-id-activities). Late records
+dated before the recommendation are not matched. Saven row signatures identify
+new ledger movements and require continuity from the saved balance; interest
+and service fees stay outside transfer principal. The standalone CSV importer
+updates this evidence together with the balance cache.
+
+The original cap survives partial payments and subsequent changes to the same
+recommendation. Partly settled cycles retain their remaining allowance even if
+the remaining drift falls below the trade threshold. Once the full capped source
+amount is received, or receipts reach the original recommendation, a subsequent
+local plan can register new intent. A settled partial cycle can be superseded by
+an opposite-direction recommendation. Unused intent is removed if the local plan
+drops it. There is no elapsed-time expiry.
+
 For a broker-to-Saven transfer, recognized withdrawals contribute external transit
 cash until reconciled against a new Saven CSV. For the reverse direction, the CSV
 can be imported as soon as it shows the withdrawal. If the broker deposit is seen
-first, temporarily offset the stale Saven valuation until the CSV catches up.
+first, temporarily offset the stale Saven valuation until a CSV establishes the
+source withdrawal. An interest-only CSV does not establish that withdrawal.
 Keep those adjustments separate from reported account balances and broker buying
 power. Reconcile before household valuation and tactical evaluation in both local
 and scheduled runs, and prevent repeated recommendations or imports from counting
-the same principal again.
+the same principal again. New source activity is reconciled before `record_value`
+and `evaluate_tactical_posture` in both main entry points. If required activity
+cannot be read, no portfolio history or tactical evaluation uses an unreconciled
+snapshot.
+
+Transit appears as a separate holding and account-summary row.
+Bank-bound transit is grouped with Saven in current/projected allocation math;
+it does not create a false destination underweight. Broker-bound transit remains
+uninvested cash until the projected arrival and buys are applied.
+Source offsets
+appear as separate negative `Awaiting CSV` rows; reported Saven and broker cash
+remain visible unchanged. `TransferRecommendation.in_progress` carries an expected
+arrival through the same planner, projection, and FX cash-impact calculations as
+planned transfers. Outbound transit is already funded and is not debited from
+broker cash again. Inbound transit credits only the projected funding ledger.
+Netting keeps planned transfers and in-flight principal separate. New instructions
+respect the original remaining cap and do not reverse an unsettled transfer.
 
 History, tactical evaluation, accuracy reporting, and planning continue normally.
-No manual start/pause flag or warning merely for differing amounts is planned.
-Use minimal encrypted transfer state alongside the existing balance snapshot;
-validate movement identification, recommendation lifecycle, partial transfers,
-top-ups, cumulative limits, and both arrival orders against the real transfer.
+There is no manual start/pause flag or warning merely for differing amounts.
+The configured-route/recommendation rule is an inference: posted broker activity
+has no final-destination identifier through the linked bank. A partial withdrawal
+already confirmed by the current Saven CSV is authoritative; excess broker receipts
+are treated as outside-bank top-ups. Later unreported Saven withdrawals need a
+newer CSV. Validate this timing with the first real transfer.
+
+The display uses `Planned`, `In transit`, and `Awaiting CSV`. Settled movements are
+omitted immediately, so the transfer table disappears when nothing needs to be
+recommended or reconciled. Retaining an unused partial-cycle allowance internally
+does not create a display row.
+Account symbols such as `SAVEN:<account-number>` are abbreviated as
+`SAVEN:...<last-four>` only at rendering.
+The [Saven guide](saven.md) owns setup, CSV handling, operator workflow, and the
+first-real-transfer checklist; this section describes the planner's mechanics.
 
 ## Layer 1: Sell Overweight (`_sell_overweight_starters`)
 

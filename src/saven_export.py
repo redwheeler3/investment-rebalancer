@@ -18,12 +18,21 @@ class SavenExportNotFound(ValueError):
 
 
 @dataclass(frozen=True)
+class SavenTransaction:
+    date: date
+    description: str
+    amount_cad: Decimal
+    balance_cad: Decimal
+
+
+@dataclass(frozen=True)
 class SavenExportBalance:
     account_number: str
     balance_cad: Decimal
     last_transaction_date: date
     source_sha256: str
     source_modified_at: datetime
+    transactions: tuple[SavenTransaction, ...]
 
     def as_snapshot(self) -> dict:
         """Preserve ledger/source dates and identify unchanged exports."""
@@ -83,6 +92,7 @@ def read_saven_export(
         raise ValueError("This file does not have the Saven transaction-export format.")
 
     transactions = []
+    descriptions = []
     for row_number, row in enumerate(reader, start=6):
         if not row or all(not cell.strip() for cell in row):
             continue
@@ -101,6 +111,7 @@ def read_saven_export(
                 f"Invalid transaction at row {row_number}: {error}"
             ) from None
         transactions.append((transaction_date, amount, balance))
+        descriptions.append(row[1].strip())
 
     if not transactions:
         raise ValueError("The export has no transactions with a reported balance.")
@@ -117,6 +128,12 @@ def read_saven_export(
         last_transaction_date=transactions[0][0],
         source_sha256=hashlib.sha256(raw).hexdigest(),
         source_modified_at=datetime.fromtimestamp(path.stat().st_mtime, UTC),
+        transactions=tuple(
+            SavenTransaction(transaction_date, row_description, amount, balance)
+            for (transaction_date, amount, balance), row_description in zip(
+                transactions, descriptions, strict=True
+            )
+        ),
     )
 
 

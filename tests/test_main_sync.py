@@ -10,6 +10,11 @@ import main
 from src.encrypted_state import EncryptedStateError
 
 
+@pytest.fixture(autouse=True)
+def isolated_transfer_state(tmp_path, monkeypatch):
+    monkeypatch.setattr("src.transfer_tracking.get_data_dir", lambda: tmp_path / "data")
+
+
 def _config():
     return (
         [

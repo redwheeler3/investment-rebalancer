@@ -71,8 +71,9 @@ tactical_deployment:
     # To include a Saven HISA, assign it part of this composition, e.g.
     # "SAVEN:0001112223": 25.0
     # Rebalance the other weights so the composition still sums to 100.
-    # Membership selects tracked accounts; keep zero-weight entries until emptied.
+    # Keep zero-weight members until their balance is empty and transfers settle.
     # Local runs read Downloads CSVs; scheduled runs read encrypted cached balances.
+    # Run locally and sync the displayed recommendation before starting a transfer.
   deploy_thresholds:
     - { drawdown_pct: -10.0, fixed_pct: 15.0 }
     - { drawdown_pct: -20.0, fixed_pct: 10.0 }

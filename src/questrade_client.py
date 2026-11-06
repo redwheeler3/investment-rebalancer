@@ -121,9 +121,8 @@ class QuestradeClient:
                 self._authenticate()
                 continue
 
-            if (
-                resp.status_code in RETRYABLE_HTTP_STATUSES
-                and transient_retries < len(GET_RETRY_DELAYS_SECONDS)
+            if resp.status_code in RETRYABLE_HTTP_STATUSES and transient_retries < len(
+                GET_RETRY_DELAYS_SECONDS
             ):
                 delay = GET_RETRY_DELAYS_SECONDS[transient_retries]
                 transient_retries += 1
@@ -193,6 +192,13 @@ class QuestradeClient:
         ids_str = ",".join(str(sid) for sid in symbol_ids)
         data = self._get("v1/markets/quotes", params={"ids": ids_str})
         return data.get("quotes", [])
+
+    def get_activities(self, account_id: str, start_time: str, end_time: str) -> list:
+        """Read at most 31 days of posted account activities."""
+        return self._get(
+            f"v1/accounts/{account_id}/activities",
+            params={"startTime": start_time, "endTime": end_time},
+        ).get("activities", [])
 
     def get_symbols(self, symbol_ids: list) -> list:
         """

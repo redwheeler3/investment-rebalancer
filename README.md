@@ -1,6 +1,12 @@
 # Investment Rebalancer
 
-A Python-based portfolio rebalancer for Questrade accounts that treats multiple accounts across multiple Questrade logins as one unified portfolio.
+A Python-based portfolio rebalancer that combines accounts across multiple
+Questrade logins and supported external accounts into one household portfolio.
+
+Questrade data comes from its API. External accounts without a suitable API can
+be included through dated balance exports; the current integration is **Saven
+HISA via CSV**. External balances and cash in transit count toward household
+valuation, history, and tactical calculations while brokerage cash stays separate.
 
 Built as an alternative to [Passiv](https://passiv.com/), this project combines portfolio rebalancing
 with a public-code/private-state model that keeps expiring Questrade tokens
@@ -59,6 +65,8 @@ CAD/USD planning, and Questrade-specific workflow details.
 ## Features
 
 - **Unified Portfolio View** — Aggregates all accounts into one portfolio view
+- **External Account Tracking** — Includes Saven HISA through CSV exports, reusing dated encrypted balances between imports
+- **Cash in Transit** — Reconciles recommended transfers between the broker and external account while keeping actual buying power separate
 - **Fail-Closed Account Loading** — Stops before portfolio evaluation if any configured Questrade account is unavailable
 - **Target Allocation Tracking** — Compares holdings against configurable targets
 - **Accuracy Score** — Single percentage showing how close the portfolio is to target
@@ -365,7 +373,9 @@ Private repo: investment-rebalancer-state/
 ├── data/
 │   ├── portfolio_history.jsonl  (SOPS-encrypted)
 │   ├── tactical_state.json       (SOPS-encrypted; created on first regime change)
-│   └── fx_targets_state.json     (SOPS-encrypted; created on first FX target resolution)
+│   ├── fx_targets_state.json     (SOPS-encrypted; created on first FX target resolution)
+│   ├── saven_balance.json        (SOPS-encrypted; created on first Saven import)
+│   └── transfer_tracking.json    (SOPS-encrypted; created when Saven tracking starts)
 └── tokens/
     ├── primary_token.json       (SOPS-encrypted)
     └── secondary_token.json     (SOPS-encrypted)
@@ -383,7 +393,10 @@ The private repo contains the live state the app reads through
 | `src/portfolio.py` | Data model (positions, accounts, holdings), allocation math, and trade projection |
 | `src/rebalancer.py` | Core decision engine — decides what to trade and which accounts to use |
 | `src/cash_deploy.py` | Residual cash deployment — builds buy trades from leftover cash |
-| `src/models.py` | Shared data types (`TradeRecommendation`, `TransientAlert`) and constants |
+| `src/models.py` | Shared trade, transfer, transfer-progress, and alert data types |
+| `src/saven_export.py` | Validates Saven CSV ledgers and exposes dated balances and transactions |
+| `src/saven_tracking.py` | Target-owned Saven loading, encrypted balance refresh, and broker routing |
+| `src/transfer_tracking.py` | Prospective transfer evidence, recommendation caps, and transit valuation |
 | `src/fx_math.py` | Currency conversion math (Norbert's Gambit sizing, cross-currency capacity) |
 | `src/fx_rate.py` | Live USD/CAD rate fetching and DLR quote retrieval |
 | `src/fx_conversions.py` | Post-rebalance DLR trade planning (Norbert's Gambit execution) |
@@ -802,13 +815,16 @@ persisted to `data/fx_targets_state.json` so stickiness carries across runs.
 
 ---
 
-## Saven HISA balances and transfers
+## External accounts without API access
 
-Include a quoted `SAVEN:<account-number>` identifier in `targets`, or in
-`tactical_deployment.fixed_composition` when using tactical deployment. Target
-membership selects the accounts to track, including zero-weight entries. Keep an
-account configured until its balance is zero if you want it included in valuation.
-Configure its broker transfer endpoint separately:
+External account support uses provider-specific balance loaders. Saven CSV is the
+current implementation, with balances included in household value, history,
+tactical posture, and allocation reporting. Local runs refresh matching CSVs from
+Downloads; scheduled runs use the encrypted cached balance. Missing exports reuse
+the saved balance with its original dates.
+
+Include a quoted `SAVEN:<account-number>` in `targets` or, with tactical deployment,
+`fixed_composition`. Configure its personal Margin endpoint separately:
 
 ```yaml
 external_transfer_accounts:
@@ -817,41 +833,18 @@ external_transfer_accounts:
     account_type: Margin
 ```
 
-The endpoint must match exactly one personal Questrade Margin account. Local runs
-look in `~/Downloads` for the newest matching Saven CSV, selected by contents and
-account number rather than its filename. The newest transaction's ledger balance
-is used after validating transaction order and adjacent balances. It is saved as
-SOPS-encrypted `data/saven_balance.json` in the private state repo. Scheduled runs
-use that snapshot without accessing Downloads. Without a new export, the cached
-balance retains its original transaction and source-file dates. Each account's
-snapshot contains only `balance_cad`, `last_transaction_date`, `source_modified_at`,
-and `source_sha256`. The account number is the mapping key; provider and currency
-are defined by the Saven CAD loader. Missing
-initial balances and malformed tracked exports stop evaluation instead of using zero.
-Local loading status reports a found, unchanged, absent, or ignored older CSV
-alongside the last activity date of the balance being used.
+Displayed recommendations automatically supply intent for tracking new posted
+transfers. Recognized transit is capped at the recommendation; actual balances
+remain uncapped, including linked-bank top-ups. Broker cash stays separate from
+transit valuation and projected funding. There is no manual start/pause flag.
 
-The balance counts in household value, history, tactical posture, and allocation
-accuracy. Transfers and the share trades they fund are included in one projected
-plan, like currency conversions. A HISA deposit can use cash and funding sales in
-the configured Margin account; an unfillable amount remains an allocation gap.
-There is no temporary change to target weights or saved pending-transfer state.
+**Run locally and let private state sync before initiating the first transfer.**
+The first observation baselines old activity. Keep the account and route configured
+until its balance is zero and its transfers have settled.
 
-Transfers use **Questrade ↔ Vancity ↔ Saven**. Execute funding sales/conversions,
-move the money, then execute dependent buys. Once a transfer has posted at both
-ends, download a new Saven CSV and run again. Verify the reported balance against
-Saven: a filtered export may omit newer activity. While money is in transit,
-reported balances can temporarily undercount or double-count household value.
-
-To inspect or save a balance separately, use:
-
-```powershell
-python scripts/import_saven_balance.py --directory "$HOME/Downloads"
-python scripts/import_saven_balance.py --directory "$HOME/Downloads" --save
-```
-
-Seed the encrypted snapshot locally before publishing Saven targets to scheduled
-runs. Keep real identifiers and export data in your private state and Downloads.
+See the [Saven guide](docs/saven.md) for CSV selection, both transfer directions,
+partial/excess amounts, lifecycle/state, display behavior, and the real-transfer
+checklist. Keep real identifiers and financial state in the private repo.
 
 ## Configuration
 

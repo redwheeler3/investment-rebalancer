@@ -35,7 +35,8 @@ def run_import(tmp_path, account_numbers, existing=None, extra_args=()):
         patch.object(importer, "get_config_dir", return_value=config),
         patch.object(importer, "get_data_dir", return_value=data),
         patch.object(importer, "read_encrypted_json", return_value=existing),
-        patch.object(importer, "write_encrypted_json") as write,
+        patch("src.saven_tracking.write_encrypted_json") as write,
+        patch("src.transfer_tracking.write_encrypted_json"),
         patch(
             "sys.argv",
             [

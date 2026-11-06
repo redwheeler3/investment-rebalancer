@@ -11,6 +11,8 @@ from datetime import UTC, datetime, timedelta
 
 import requests
 
+from src.models import TransferProgress
+
 
 def _coerce_numeric(value, default: float = 0.0) -> float:
     """Convert an API field to float, defaulting to 0.0 for None."""
@@ -115,6 +117,7 @@ class PortfolioSummary:
     cash_cad_total: float = 0.0
     cash_usd_total: float = 0.0
     external_balances: dict[str, ExternalBalance] = field(default_factory=dict)
+    transfer_progress: list[TransferProgress] = field(default_factory=list)
 
 
 @dataclass
@@ -464,15 +467,29 @@ def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
             holding.prev_close_price = prev_close
 
 
+def _allocation_values(portfolio: PortfolioSummary, values: dict | None = None) -> dict:
+    """Assign bank-bound transit to its destination without changing reported balances."""
+    values = (
+        dict(values)
+        if values is not None
+        else {
+            symbol: holding.value_cad for symbol, holding in portfolio.holdings.items()
+        }
+    )
+    for progress in portfolio.transfer_progress:
+        if progress.action == "DEPOSIT":
+            amount = values.pop(progress.transit_symbol, 0.0)
+            values[progress.symbol] = values.get(progress.symbol, 0.0) + amount
+    return values
+
+
 def get_current_allocations(
     portfolio: PortfolioSummary,
     usd_to_cad_rate: float,
     excluded_symbols: set | None = None,
 ) -> dict:
     """Calculate current allocation percentages for each holding (includes CAD/USD cash entries)."""
-    holdings_value_cad = {
-        symbol: data.value_cad for symbol, data in portfolio.holdings.items()
-    }
+    holdings_value_cad = _allocation_values(portfolio)
     return calculate_allocations_for_values(
         holdings_value_cad=holdings_value_cad,
         total_value_cad=portfolio.total_value_cad,
@@ -548,9 +565,7 @@ def build_allocation_snapshot(
     excluded_symbols: set | None = None,
 ) -> AllocationSnapshot:
     """Build allocations, drifts, and accuracy from a portfolio."""
-    holdings_value_cad = {
-        symbol: data.value_cad for symbol, data in portfolio.holdings.items()
-    }
+    holdings_value_cad = _allocation_values(portfolio)
     return build_allocation_snapshot_from_values(
         holdings_value_cad=holdings_value_cad,
         cash_cad_total=portfolio.cash_cad_total,
@@ -581,6 +596,14 @@ def simulate_rebalance(
 
     for trade in trades:
         if trade.action in {"DEPOSIT", "WITHDRAW"}:
+            if trade.in_progress:
+                transit_symbol = f"TRANSIT:{trade.symbol}"
+                projected_holdings_value_cad[transit_symbol] -= trade.amount_cad
+                if trade.action == "DEPOSIT":
+                    projected_holdings_value_cad[trade.symbol] += trade.amount_cad
+                else:
+                    projected_cash_cad += trade.amount_cad
+                continue
             movement = (
                 trade.amount_cad if trade.action == "DEPOSIT" else -trade.amount_cad
             )
@@ -632,7 +655,7 @@ def simulate_rebalance(
     projected_total_value_cad += sum(projected_holdings_value_cad.values())
 
     return build_allocation_snapshot_from_values(
-        holdings_value_cad=projected_holdings_value_cad,
+        holdings_value_cad=_allocation_values(portfolio, projected_holdings_value_cad),
         cash_cad_total=projected_cash_cad,
         cash_usd_total=projected_cash_usd,
         total_value_cad=projected_total_value_cad,

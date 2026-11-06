@@ -50,6 +50,8 @@ def net_trades(all_trades: list) -> list:
     transfer_map = {}
     for trade in all_trades:
         key = (trade.symbol, trade.account_number)
+        if isinstance(trade, TransferRecommendation):
+            key += (trade.in_progress,)
         mapping = (
             transfer_map if isinstance(trade, TransferRecommendation) else position_map
         )
@@ -344,6 +346,24 @@ class RebalancePlanner:
             self.usd_to_cad_rate,
             self.fee_cad,
         )
+        for progress in self.portfolio.transfer_progress:
+            if progress.in_transit_cad <= 0:
+                continue
+            self.plan.add_trade(
+                TransferRecommendation(
+                    symbol=progress.symbol,
+                    action=progress.action,
+                    amount_cad=progress.in_transit_cad,
+                    account_number=progress.account_number,
+                    account_type=progress.account_type,
+                    owner=progress.owner,
+                    in_progress=True,
+                )
+            )
+            if progress.action == "WITHDRAW":
+                self.ledger.credit_sale(
+                    progress.account_number, "CAD", progress.in_transit_cad
+                )
 
     def build(self) -> list:
         """Run the planner phases and return the final recommended trades."""
@@ -368,15 +388,53 @@ class RebalancePlanner:
             if abs(drift) <= self.drift_trade_threshold_pct:
                 continue
             amount = round(abs(drift) / 100 * self.portfolio.total_value_cad, 2)
+            action = "WITHDRAW" if drift > 0 else "DEPOSIT"
+            progress = next(
+                (
+                    entry
+                    for entry in self.portfolio.transfer_progress
+                    if entry.symbol == symbol
+                ),
+                None,
+            )
+            if progress is not None:
+                unsettled = progress.in_transit_cad > 0 or progress.awaiting_csv_cad > 0
+                if unsettled and action != progress.action:
+                    continue
+                if action == progress.action and (
+                    unsettled
+                    or (
+                        progress.source_cad < progress.recommended_cad
+                        and progress.received_cad < progress.recommended_cad
+                    )
+                ):
+                    planned = sum(
+                        trade.amount_cad
+                        for trade in self.plan.trades
+                        if isinstance(trade, TransferRecommendation)
+                        and trade.symbol == symbol
+                        and not trade.in_progress
+                        and trade.action == action
+                    )
+                    amount = min(
+                        amount,
+                        round(
+                            max(
+                                0.0,
+                                progress.recommended_cad
+                                - progress.source_cad
+                                - planned,
+                            ),
+                            2,
+                        ),
+                    )
             if amount < 0.01:
                 continue
             account = self.external_transfer_accounts[symbol]
             requires_fx = False
             if drift > 0:
-                action = "WITHDRAW"
                 self.ledger.credit_sale(account.number, "CAD", amount)
             else:
-                action = "DEPOSIT"
                 if (
                     self.ledger.total_buying_power(
                         account.number, "CAD", self.dlr_quotes

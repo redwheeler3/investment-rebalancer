@@ -11,6 +11,7 @@ from src.encrypted_state import read_encrypted_json, write_encrypted_json
 from src.paths import get_data_dir
 from src.portfolio import ExternalBalance, HoldingSummary
 from src.saven_export import (
+    SavenExportBalance,
     SavenExportNotFound,
     find_latest_saven_export,
     read_saven_export,
@@ -143,6 +144,7 @@ def refresh_saven_balances(
     directory: Path | None = None,
     source_file: Path | None = None,
     on_status: Callable[[str, str, str], None] | None = None,
+    on_export: Callable[[str, SavenExportBalance], None] | None = None,
 ) -> tuple[dict, set[str]]:
     """Refresh configured accounts; retain their dated snapshots without new exports."""
     if directory is not None and source_file is not None:
@@ -197,6 +199,12 @@ def refresh_saven_balances(
             status = "found"
         if on_status is not None:
             on_status(number, status, snapshots[number]["last_transaction_date"])
+        if (
+            on_export is not None
+            and exported is not None
+            and exported.source_sha256 == snapshots[number]["source_sha256"]
+        ):
+            on_export(number, exported)
     return {"accounts": snapshots}, refreshed
 
 
@@ -210,15 +218,35 @@ def load_saven_balances(
         return {}
     destination = get_data_dir() / "saven_balance.json"
     existing = read_encrypted_json(destination) if destination.exists() else {}
+    exports = {}
     snapshot, _ = refresh_saven_balances(
         account_numbers,
         existing,
         directory=directory,
         on_status=on_status,
+        on_export=lambda number, exported: exports.update({number: exported}),
     )
+    save_saven_balances(destination, snapshot, existing, exports)
+    return snapshot["accounts"]
+
+
+def save_saven_balances(
+    destination: Path, snapshot: dict, existing: dict, exports: dict
+) -> bool:
+    """Update existing transfer evidence before publishing a changed bank snapshot."""
+    from src.transfer_tracking import TransferLedger
+
+    transfer_path = destination.parent / "transfer_tracking.json"
+    if transfer_path.exists() or exports:
+        ledger = TransferLedger.load(transfer_path)
+        ledger.retain_routes({f"SAVEN:{number}" for number in snapshot["accounts"]})
+        for number, balance in snapshot["accounts"].items():
+            ledger.observe_saven(f"SAVEN:{number}", balance, exports.get(number))
+        ledger.save()
     if snapshot != existing:
         write_encrypted_json(destination, snapshot)
-    return snapshot["accounts"]
+        return True
+    return False
 
 
 def attach_saven_balances(portfolio, balances: dict) -> None:

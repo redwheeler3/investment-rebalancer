@@ -76,6 +76,28 @@ def _format_account_label(owner: str, account_type: str, account_number: str) ->
     return f"{owner} {account_type} ({account_number})"
 
 
+def _format_symbol(symbol: str) -> str:
+    if symbol.startswith("SAVEN:"):
+        return f"SAVEN:...{symbol[-4:]}"
+    if symbol.startswith("TRANSIT:SAVEN:"):
+        return f"Transit (...{symbol[-4:]})"
+    return symbol
+
+
+def _transfer_value_rows(portfolio):
+    """Yield external valuation adjustments, separate from reported balances."""
+    for progress in portfolio.transfer_progress:
+        if progress.in_transit_cad:
+            yield "Cash in transit", "Transit", progress.symbol, progress.in_transit_cad
+        if progress.awaiting_csv_cad:
+            yield (
+                "Awaiting CSV",
+                "Adjustment",
+                progress.symbol,
+                -progress.awaiting_csv_cad,
+            )
+
+
 def _partition_symbols(allocations: dict, targets: dict, drifts: dict):
     """Split symbols into stocks (sorted by drift) and cash (sorted alphabetically)."""
     all_symbols = allocations.keys() | targets.keys()
@@ -107,7 +129,7 @@ def _add_drift_row(
         drift_style = "yellow"
         status = "[yellow]UNDER[/yellow]"
     table.add_row(
-        symbol,
+        _format_symbol(symbol),
         f"{target:.1f}%",
         f"{value_pct:.1f}%",
         Text(f"{drift:+.1f}%", style=drift_style),
@@ -145,8 +167,11 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
     total_day_pnl_cad = 0.0
     total_value_for_pct = 0.0
     rows = []
+    transit_symbols = {
+        progress.transit_symbol for progress in portfolio.transfer_progress
+    }
     for symbol in sorted(portfolio.holdings.keys()):
-        if symbol in portfolio.external_balances:
+        if symbol in portfolio.external_balances or symbol in transit_symbols:
             continue
         holding = portfolio.holdings[symbol]
         qty = holding.total_quantity
@@ -220,6 +245,10 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
                 "",
                 _format_money(balance.balance_cad),
                 "",
+            )
+        for label, _kind, symbol, value in _transfer_value_rows(portfolio):
+            table.add_row(
+                f"{label} (...{symbol[-4:]})", "", "", _format_money_colored(value), ""
             )
 
     # Total row
@@ -849,9 +878,20 @@ def display_account_summary(portfolio, usd_to_cad_rate: float):
                 "HISA",
                 f"…{symbol[-4:]}",
                 _format_money(balance.balance_cad),
-                "—",
-                "—",
-                "—",
+                "",
+                "",
+                "",
+            )
+        for label, kind, symbol, value in _transfer_value_rows(portfolio):
+            total_value_sum += value
+            table.add_row(
+                label,
+                kind,
+                f"...{symbol[-4:]}",
+                _format_money_colored(value),
+                "",
+                "",
+                "",
             )
 
     # Add total row
@@ -870,16 +910,18 @@ def display_account_summary(portfolio, usd_to_cad_rate: float):
     console.print()
 
 
-def display_external_transfers(actions: list) -> None:
+def display_external_transfers(actions: list, progress: list | None = None) -> None:
     """Show external CAD transfer instructions alongside currency conversions."""
     transfers = [
         action for action in actions if action.action in {"DEPOSIT", "WITHDRAW"}
     ]
-    if not transfers:
+    awaiting = [item for item in progress or [] if item.awaiting_csv_cad > 0]
+    if not transfers and not awaiting:
         return
     table = Table(title="Saven Transfers", box=box.ROUNDED, header_style="bold yellow")
     table.add_column("Direction")
     table.add_column("Amount CAD", justify="right")
+    table.add_column("Status")
     for transfer in transfers:
         account_label = _format_account_label(
             transfer.owner, transfer.account_type, transfer.account_number
@@ -890,7 +932,20 @@ def display_external_transfers(actions: list) -> None:
             if transfer.action == "DEPOSIT"
             else (saven_label, account_label)
         )
-        table.add_row(f"{source} -> {destination}", _format_money(transfer.amount_cad))
+        table.add_row(
+            f"{source} -> {destination}",
+            _format_money(transfer.amount_cad),
+            "In transit" if transfer.in_progress else "Planned",
+        )
+    for item in awaiting:
+        account_label = _format_account_label(
+            item.owner, item.account_type, item.account_number
+        )
+        table.add_row(
+            f"Saven HISA (...{item.symbol[-4:]}) -> {account_label}",
+            _format_money(item.awaiting_csv_cad),
+            "Awaiting CSV",
+        )
     console.print(table)
     console.print()
 
@@ -1021,7 +1076,7 @@ def display_full_report(
     display_transient_alerts(transient_alerts)
     display_trades(trades)
     display_currency_conversions(currency_conversions)
-    display_external_transfers(trades)
+    display_external_transfers(trades, portfolio.transfer_progress)
     display_projected_allocations(
         projected_allocations, targets, drift_trade_threshold_pct
     )

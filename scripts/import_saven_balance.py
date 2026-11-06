@@ -10,10 +10,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from src.encrypted_state import (
     read_encrypted_json,
-    write_encrypted_json,
 )
 from src.paths import get_config_dir, get_data_dir
-from src.saven_tracking import parse_saven_account_numbers, refresh_saven_balances
+from src.saven_tracking import (
+    parse_saven_account_numbers,
+    refresh_saven_balances,
+    save_saven_balances,
+)
 
 
 def main() -> int:
@@ -51,11 +54,13 @@ def main() -> int:
             if args.account_number is not None
             else account_numbers
         )
+        exports = {}
         selected_snapshot, refreshed = refresh_saven_balances(
             selected_numbers,
             existing,
             args.directory,
             args.file,
+            on_export=lambda number, exported: exports.update({number: exported}),
         )
         snapshot = {
             "accounts": {
@@ -77,11 +82,11 @@ def main() -> int:
             "Compare this reported balance with Saven's current balance before saving."
         )
         print("The export does not identify its selected date-range cutoff.")
-        if args.save and (refreshed or snapshot != existing):
-            write_encrypted_json(destination, snapshot)
-            print(f"Encrypted snapshot saved: {destination}")
-        elif args.save:
-            print("The saved balances are unchanged.")
+        if args.save:
+            if save_saven_balances(destination, snapshot, existing, exports):
+                print(f"Encrypted snapshot saved: {destination}")
+            else:
+                print("The saved balances are unchanged.")
         else:
             print("Inspection only. Add --save after verifying the balance.")
         print(
