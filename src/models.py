@@ -11,7 +11,11 @@ class ExternalExportNotFound(ValueError):
 
 @dataclass(frozen=True)
 class ExternalTransaction:
-    """Provider-normalized newest-first CAD ledger row."""
+    """One row in a provider-normalized, newest-first CAD ledger.
+
+    amount_cad may be unsigned; adjacent balances establish movement direction.
+    The adapter sets is_transfer to distinguish principal from interest and fees.
+    """
 
     date: date
     description: str
@@ -68,7 +72,7 @@ class TransferRecommendation:
     account_type: str
     owner: str
     requires_fx: bool = False
-    in_progress: bool = False
+    in_progress: bool = False  # Already left the source; project its arrival only
 
     @property
     def estimated_value(self) -> float:
@@ -89,10 +93,10 @@ class TransferProgress:
     account_type: str
     owner: str
     recommended_cad: float
-    source_cad: float
-    received_cad: float
-    in_transit_cad: float
-    source_offset_cad: float = 0.0
+    source_cad: float  # Observed source withdrawals, capped at the recommendation
+    received_cad: float  # Actual destination receipts, including outside top-ups
+    in_transit_cad: float  # Positive asset: recognized source money not yet received
+    source_offset_cad: float = 0.0  # Positive amount to deduct from a stale source
 
     @property
     def transit_symbol(self) -> str:

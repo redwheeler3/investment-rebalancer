@@ -466,6 +466,8 @@ def run_rebalancer():
         report,
     )
     if transfer_ledger is not None:
+        # Arm only recommendations the local user has seen in a successful report.
+        # Scheduled reconciliation consumes saved intent without creating it.
         transfer_ledger.remember_recommendations(trades, transfer_accounts)
         transfer_ledger.save()
 

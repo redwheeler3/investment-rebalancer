@@ -64,6 +64,12 @@ def _read_cad(value: str, dollar_prefix: bool) -> Decimal:
 def read_saven_export(
     path: Path, account_number: str | None = None
 ) -> ExternalExport | None:
+    """Normalize a Saven export into common balance and ledger evidence.
+
+    When filtering for an account, another format/account returns None. Recognized
+    malformed exports raise errors. Validate the ledger before exposing its newest
+    balance; classify transfer evidence here rather than in the tracker.
+    """
     raw = path.read_bytes()
     reader = csv.reader(raw.decode("utf-8-sig").splitlines())
     exported_account = _read_prefix(reader, account_number)

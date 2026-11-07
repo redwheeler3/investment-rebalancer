@@ -184,6 +184,35 @@ so pay attention to same-day ordering.
 See [architecture](architecture.md#external-account-boundary) and
 [planner reconciliation](rebalancer.md#automatic-transit-reconciliation).
 
+## Reading the implementation
+
+Follow the external-account path in this order:
+
+1. `models.py`: `ExternalExport` and `ExternalTransaction` define adapter output;
+   `TransferProgress` names the valuation amounts passed to planning/display.
+2. `external_providers.py` and `external_accounts.py`: select the parser from the
+   symbol prefix, validate settings, refresh caches, and attach reported balances.
+   Loading also saves new ledger evidence; it can write state.
+3. `transfer_tracking.py`: `observe_external_balance` and `observe_broker` count
+   new movements; `progress` calculates each cycle's amounts; `apply` adjusts
+   household valuation before history and tactical evaluation.
+4. `rebalancer.py`, `portfolio.py`, and `fx_math.py`: carry expected arrivals
+   through the proposed trades, projected allocation, and currency funding.
+5. `display.py` renders the result. After the local report succeeds, `main.py`
+   calls `remember_recommendations` to establish intent for future observations.
+
+The tracker's persisted counters are **integer cents**; portfolio/planner amounts
+are **CAD dollars**. `DEPOSIT` means into the external account and `WITHDRAW` means
+out to Questrade. A recommendation cycle saves the cumulative counters at its
+start, then measures later movements against those baselines. Its source amount
+is capped, while actual receipts remain uncapped. Signature counts distinguish
+repeated transactions from repeated observations of the same transaction.
+
+`tests/test_transfer_tracking.py` walks through partial/excess amounts, either
+arrival order, repeat imports, valuation, funding, and display. The fictitious
+adapter in `tests/test_external_provider_boundary.py` demonstrates which code a
+second institution needs and which shared code stays the same.
+
 ## Saven statement adapter
 
 `SAVEN:<account-number>` selects the adapter registered in

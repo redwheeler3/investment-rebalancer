@@ -926,6 +926,8 @@ def display_external_transfers(portfolio, actions: list) -> None:
     awaiting = [
         item for item in portfolio.transfer_progress if item.source_offset_cad > 0
     ]
+    # A settled cycle can retain unused allowance internally. Show only actionable
+    # instructions, money in transit, or an export needed to reconcile valuation.
     if not transfers and not awaiting:
         return
     symbols = {item.symbol for item in transfers + awaiting}

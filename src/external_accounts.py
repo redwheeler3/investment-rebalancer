@@ -1,4 +1,10 @@
-"""External account configuration, adapter selection, cache loading and valuation."""
+"""Shared configuration, export loading and valuation for external CAD accounts.
+
+Settings provide labels and Questrade routes; registered adapters supply source
+data. load_external_balances refreshes encrypted caches and movement evidence,
+then attach_external_balances adds reported balances to the household portfolio.
+Transfer reconciliation applies transit/offset adjustments separately.
+"""
 
 import math
 from dataclasses import dataclass
@@ -14,6 +20,8 @@ from src.portfolio import ExternalBalance, HoldingSummary
 
 @dataclass(frozen=True)
 class ExternalAccountConfig:
+    """Full provider-qualified identity, console labels and native Questrade route."""
+
     symbol: str
     display_name: str
     account_type: str
@@ -76,6 +84,8 @@ def parse_external_accounts(settings: dict) -> dict[str, ExternalAccountConfig]:
             route["account_type"],
         )
     enabled = {}
+    # Target membership, including zero weight, enables tracking. Metadata can
+    # exist without enabling an account, but enabled accounts need explicit labels.
     for mapping in (static, fixed):
         for symbol, weight in mapping.items():
             if not isinstance(symbol, str) or ":" not in symbol:
@@ -111,6 +121,7 @@ def parse_external_accounts(settings: dict) -> dict[str, ExternalAccountConfig]:
 
 
 def resolve_external_transfer_accounts(portfolio, accounts: dict) -> dict:
+    """Resolve configured owner/type pairs to unique personal Questrade accounts."""
     endpoints = {}
     for symbol, config in accounts.items():
         matches = [
@@ -129,6 +140,7 @@ def resolve_external_transfer_accounts(portfolio, accounts: dict) -> dict:
 
 
 def validate_external_balance(identifier: str, balance: dict) -> None:
+    """Require the common four-field cache shape, CAD value and dated source identity."""
     if not isinstance(balance, dict) or set(balance) != {
         "balance_cad",
         "last_transaction_date",
@@ -167,6 +179,12 @@ def refresh_external_balances(
     on_status=None,
     on_export=None,
 ):
+    """Select current snapshots without writing state; return (snapshot, refreshed IDs).
+
+    Without a source, retain the cached balance and its dates. Source hashes detect
+    repeats; both activity date and file time protect against replacing newer data.
+    Callbacks expose status and the matching ledger evidence needed when saving.
+    """
     if directory is not None and source_file is not None:
         raise ValueError("Specify a directory or a source file, not both.")
     if existing and "accounts" not in existing:
@@ -231,17 +249,21 @@ def refresh_external_balances(
 def save_external_balances(
     provider, destination, snapshot, existing, exports, active_symbols
 ) -> bool:
+    """Reconcile export evidence before saving the cache; return whether it changed."""
     from src.transfer_tracking import TransferLedger
 
     transfer_path = destination.parent / "transfer_tracking.json"
     if transfer_path.exists() or exports:
         ledger = TransferLedger.load(transfer_path)
+        # This refresh handles one provider; retain routes for every active provider.
         ledger.retain_routes(active_symbols)
         for identifier, balance in snapshot["accounts"].items():
             ledger.observe_external_balance(
                 f"{provider.key}:{identifier}", balance, exports.get(identifier)
             )
         ledger.save()
+    # Persist the observation cursor first. A retry can safely replay this export;
+    # saving only its balance first would lose the evidence of its cash movement.
     if snapshot != existing:
         write_encrypted_json(destination, snapshot)
         return True
@@ -249,6 +271,11 @@ def save_external_balances(
 
 
 def load_external_balances(accounts: dict, directory=None, on_status=None) -> dict:
+    """Refresh per-provider caches and return balances keyed by full external symbol.
+
+    directory=None uses saved data only, as scheduled runs require. Loading can
+    write cache/transfer state when a source changes; it is not a read-only query.
+    """
     balances = {}
     groups = {}
     for symbol, config in accounts.items():
@@ -282,6 +309,7 @@ def load_external_balances(accounts: dict, directory=None, on_status=None) -> di
 
 
 def attach_external_balances(portfolio, balances: dict, accounts: dict) -> None:
+    """Add reported external values and labels once, without adding broker cash."""
     for symbol, balance in balances.items():
         validate_external_balance(accounts[symbol].identifier, balance)
         if symbol in portfolio.holdings:

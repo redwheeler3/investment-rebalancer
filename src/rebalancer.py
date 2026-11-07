@@ -51,6 +51,7 @@ def net_trades(all_trades: list) -> list:
     for trade in all_trades:
         key = (trade.symbol, trade.account_number)
         if isinstance(trade, TransferRecommendation):
+            # Arrivals already in flight must stay separate from new instructions.
             key += (trade.in_progress,)
         mapping = (
             transfer_map if isinstance(trade, TransferRecommendation) else position_map
@@ -346,6 +347,8 @@ class RebalancePlanner:
             self.usd_to_cad_rate,
             self.fee_cad,
         )
+        # Seed projected arrivals once. Inbound cash can fund the proposed buys,
+        # just like planned FX proceeds; reported Questrade cash stays untouched.
         for progress in self.portfolio.transfer_progress:
             if progress.in_transit_cad <= 0:
                 continue
@@ -400,6 +403,7 @@ class RebalancePlanner:
             if progress is not None:
                 unsettled = progress.in_transit_cad > 0 or progress.source_offset_cad > 0
                 if unsettled and action != progress.action:
+                    # Finish the observed movement before recommending a reversal.
                     continue
                 if action == progress.action and (
                     unsettled
@@ -408,6 +412,8 @@ class RebalancePlanner:
                         and progress.received_cad < progress.recommended_cad
                     )
                 ):
+                    # The cap belongs to the whole cycle. Subtract both principal
+                    # already sent and new instructions from earlier planner rounds.
                     planned = sum(
                         trade.amount_cad
                         for trade in self.plan.trades

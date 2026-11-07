@@ -720,6 +720,10 @@ single-use refresh token.
 | `display.py` | Terminal rendering — Rich tables and charts |
 | `history.py` | Persistence — ATH tracking, YTD chart data |
 | `models.py` | Shared types — TradeRecommendation, TransientAlert |
+| `external_providers.py` | External adapter registry — parser selection by provider prefix |
+| `external_accounts.py` | External settings, export/cache loading, and reported balance attachment |
+| `saven_export.py` | Saven adapter — CSV normalization and transfer-row classification |
+| `transfer_tracking.py` | Observations and recommendation cycles — transit/source valuation adjustments |
 | `tactical.py` | Tactical deployment — drawdown-based dynamic target adjustment |
 | `paths.py` | File locations — private state repo discovery |
 | `encrypted_state.py` | SOPS/age stream encryption and atomic ciphertext writes |

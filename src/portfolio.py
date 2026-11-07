@@ -480,6 +480,8 @@ def _allocation_values(portfolio: PortfolioSummary, values: dict | None = None) 
     )
     for progress in portfolio.transfer_progress:
         if progress.action == "DEPOSIT":
+            # Count money already heading to savings toward that target, preventing
+            # a second deposit recommendation caused solely by its travel time.
             amount = values.pop(progress.transit_symbol, 0.0)
             values[progress.symbol] = values.get(progress.symbol, 0.0) + amount
     return values
@@ -599,6 +601,8 @@ def simulate_rebalance(
     for trade in trades:
         if trade.action in {"DEPOSIT", "WITHDRAW"}:
             if trade.in_progress:
+                # The source has already lost this money. Move the transit asset
+                # to its destination without debiting the source a second time.
                 transit_symbol = f"TRANSIT:{trade.symbol}"
                 projected_holdings_value_cad[transit_symbol] -= trade.amount_cad
                 if trade.action == "DEPOSIT":

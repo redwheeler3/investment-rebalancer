@@ -1,4 +1,9 @@
-"""External parser registration; Questrade remains the native broker."""
+"""Register external statement adapters; Questrade remains the native broker.
+
+Adding an institution means providing ID validation, discovery, a normalized
+reader and a cache filename here. Shared valuation/planning use their common
+output; console names and account types come from settings.
+"""
 
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -35,6 +40,7 @@ PROVIDERS = {
 
 
 def provider_for(symbol: str) -> ExternalProvider:
+    """Validate PROVIDER:<account-id> and select its registered statement adapter."""
     if not isinstance(symbol, str) or ":" not in symbol:
         raise ValueError("External account identifiers must use PROVIDER:<account-id>.")
     key, identifier = symbol.split(":", 1)

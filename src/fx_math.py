@@ -35,6 +35,8 @@ def build_account_trade_impacts(trades: list) -> dict:
     impacts = {}
     for trade in trades:
         if trade.action == "DEPOSIT" and trade.in_progress:
+            # This money has already left Questrade; its arrival costs no more
+            # broker cash. Inbound WITHDRAW arrivals still supply projected CAD.
             continue
         totals = impacts.setdefault(trade.account_number, CurrencyTotals())
         amount = (

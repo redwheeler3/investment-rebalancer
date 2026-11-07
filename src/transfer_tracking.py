@@ -1,4 +1,18 @@
-"""Reconcile recommended external transfers without changing reported account cash."""
+"""Track cash moving between a configured external account and Questrade.
+
+Each route has cumulative movement counters and one recommendation cycle. The
+cycle records the counters at its start, so only subsequent movements count
+toward its original cap. Persisted amounts are integer cents; portfolio-facing
+amounts are CAD dollars.
+
+The two institutions can report in either order. A source withdrawal adds a
+transit asset until receipt; a Questrade receipt before an external export needs
+a temporary deduction from the stale external balance instead. Neither case
+changes the broker's reported cash.
+
+Read the flow as: observe_external_balance / observe_broker -> progress -> apply.
+After a successful local display, remember_recommendations arms future tracking.
+"""
 
 import hashlib
 import json
@@ -34,6 +48,8 @@ def _signature(value) -> str:
 
 
 def _broker_signature(row):
+    # Questrade supplies no transfer ID. Ignore mutable descriptions and numeric
+    # formatting; count identical signatures rather than assuming they are unique.
     return _signature(
         [
             _posted_at(row).astimezone(UTC).isoformat(),
@@ -68,7 +84,13 @@ def _bank_signature(row):
 
 
 class TransferLedger:
-    """Small encrypted observation cursors and one recommendation cycle per route."""
+    """Encrypted observations and recommendation intent, keyed by external symbol.
+
+    bank_in/out and broker_in/out are cumulative observed movements in cents.
+    bank and broker_seen remember source evidence to prevent replay. A cycle's
+    source_start/received_start are counter baselines, not account balances.
+    DEPOSIT and WITHDRAW always describe the external account's direction.
+    """
 
     def __init__(self, data: dict | None = None, path: Path | None = None):
         self.path = path
@@ -200,7 +222,12 @@ class TransferLedger:
         )
 
     def observe_external_balance(self, symbol, snapshot, exported=None):
-        """Process a changed ledger against the previous reported balance, excluding interest."""
+        """Reconcile newest-first rows; only adapter-marked transfers add principal.
+
+        A first observation establishes a baseline. Subsequent changed snapshots
+        require ledger evidence continuous from the previous reported balance.
+        Interest and fees change that balance without becoming transfer principal.
+        """
         record = self.account(symbol)
         current = {
             "hash": snapshot["source_sha256"],
@@ -212,6 +239,7 @@ class TransferLedger:
         }
         prior = record["bank"]
         if prior is None:
+            # Existing money is a starting balance, not a newly detected receipt.
             record["bank"] = current
             return
         if current["hash"] == prior["hash"]:
@@ -224,6 +252,8 @@ class TransferLedger:
             )
         rows = list(exported.transactions)
         if prior["seen"] is not None:
+            # Counts preserve genuinely repeated rows. Only the new prefix is
+            # eligible: a wider date range must not replay older transactions.
             new_counts = Counter(current["seen"]) - Counter(prior["seen"])
             new_rows = []
             for row in rows:
@@ -234,6 +264,8 @@ class TransferLedger:
                 new_counts[key] -= 1
             current["seen"] = dict(Counter(prior["seen"]) | Counter(current["seen"]))
         else:
+            # A cached balance can establish the baseline without ledger rows.
+            # Locate its closing balance in the export to identify later activity.
             anchor = next(
                 (
                     index
@@ -250,6 +282,8 @@ class TransferLedger:
             )
         running = prior["balance"]
         incoming = outgoing = 0
+        # Walk chronologically. Balance differences establish the sign even when
+        # an adapter's amount is unsigned. Validate the whole chain before saving.
         for row in reversed(new_rows):
             balance = cents(row.balance_cad)
             change = balance - running
@@ -311,6 +345,8 @@ class TransferLedger:
                 additional = max(0, count - previous.get(key, 0))
                 if record["cycle"] is not None:
                     started = datetime.fromisoformat(record["cycle"]["started_at"])
+                    # Late-posted historical activity is not evidence for this
+                    # recommendation. Same-day order relies on the saved baseline.
                     if dates[key].date() < started.astimezone(dates[key].tzinfo).date():
                         continue
                 amount = amounts[key]
@@ -327,6 +363,7 @@ class TransferLedger:
         )
 
     def activity_start(self, symbol, now):
+        """Cover recent activity, polling gaps and the active cycle, with a day of overlap."""
         record = self.account(symbol)
         starts = [now - timedelta(days=30)]
         if record["checked_at"]:
@@ -341,6 +378,7 @@ class TransferLedger:
         return min(starts)
 
     def _totals(self, record, action):
+        """Return cumulative (source withdrawals, destination receipts) in cents."""
         return (
             (record["broker_out"], record["bank_in"])
             if action == "DEPOSIT"
@@ -348,15 +386,21 @@ class TransferLedger:
         )
 
     def _amounts(self, record):
+        """Return cycle (source, received, in_transit, stale_source_offset) in cents."""
         cycle = record["cycle"]
         if cycle is None:
             return None
         source_total, received_total = self._totals(record, cycle["action"])
+        # Cap inferred source principal across the entire cycle. Actual receipts
+        # stay uncapped: extra money may have come from the intermediate bank.
         source = min(cycle["limit"], max(0, source_total - cycle["source_start"]))
         received = max(0, received_total - cycle["received_start"])
         pending = max(0, source - received)
         awaiting = 0
         if cycle["action"] == "WITHDRAW" and source == 0:
+            # Questrade has cash that the stale external balance still includes.
+            # Once an export confirms a withdrawal, trust that source evidence;
+            # larger receipts then represent outside-bank top-ups.
             awaiting = min(cycle["limit"], received)
         return source, received, pending, awaiting
 
@@ -373,6 +417,7 @@ class TransferLedger:
             del self.data["accounts"][symbol]
 
     def progress(self, symbol, endpoint):
+        """Expose cycle amounts as CAD dollars for valuation, planning and display."""
         record = self.account(symbol)
         amounts = self._amounts(record)
         if amounts is None:
@@ -435,6 +480,7 @@ class TransferLedger:
                 moved = progress.source_cad > 0 or progress.received_cad > 0
                 pending = progress.in_transit_cad > 0 or progress.source_offset_cad > 0
                 if moved and pending:
+                    # The original cap must survive until observed money settles.
                     continue
                 if (
                     moved
@@ -445,15 +491,19 @@ class TransferLedger:
                         or recommendation.action == cycle["action"]
                     )
                 ):
+                    # A settled partial payment can leave allowance for a later
+                    # instalment, even if today's residual drift is below tolerance.
                     continue
                 if (
                     not moved
                     and recommendation is not None
                     and recommendation.action == cycle["action"]
                 ):
+                    # Repeated reports must not resize an unexecuted cycle's cap.
                     continue
                 record["cycle"] = None
             if recommendation is not None and recommendation.amount_cad >= 0.01:
+                # Counter baselines separate this intent from all prior movements.
                 source, received = self._totals(record, recommendation.action)
                 record["cycle"] = {
                     "action": recommendation.action,
@@ -465,7 +515,12 @@ class TransferLedger:
 
 
 def reconcile_transfer_activity(portfolio, balances, clients, endpoints):
-    """Reconcile before history/tactical evaluation in local and scheduled runs."""
+    """Observe both sides, adjust valuation, and persist before history/tactical use.
+
+    External snapshots are already loaded; fresh export evidence is processed by
+    the loader. Here Questrade activities complete the picture. This function
+    reconciles existing intent; it does not arm new recommendations.
+    """
     path = get_data_dir() / "transfer_tracking.json"
     if not endpoints and not path.exists():
         return None
@@ -498,6 +553,7 @@ def reconcile_transfer_activity(portfolio, balances, clients, endpoints):
         counts = Counter()
         examples = {}
         while start < now:
+            # The API permits at most 31 days; 30-day windows stay within it.
             end = min(start + timedelta(days=30), now)
             rows = client.get_activities(
                 endpoint.number, start.isoformat(), end.isoformat()
@@ -515,6 +571,8 @@ def reconcile_transfer_activity(portfolio, balances, clients, endpoints):
                 window[key] += 1
                 examples[key] = row
             for key, count in window.items():
+                # Shared window boundaries can repeat records. Use the largest
+                # observed multiplicity, not the sum across overlapping windows.
                 counts[key] = max(counts[key], count)
             start = end
         rows = [examples[key] for key, count in counts.items() for _ in range(count)]
