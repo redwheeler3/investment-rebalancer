@@ -914,11 +914,11 @@ class RebalancePlanner:
         cash flows to wherever it has the most potential to be useful, which
         may mean crossing the currency boundary.
 
-        Both currencies are considered: the best same-currency candidate and
-        the best cross-currency candidate (each already the top of its
-        cascade-sorted list). We deploy into whichever has the higher cascade
-        score — the total underweight drift it can unlock in other accounts
-        that hold it — since buying a high-cascade symbol overshoots the
+        Both currencies are considered: the best affordable same-currency
+        candidate and the best affordable cross-currency candidate, preserving
+        cascade ranking within each currency. We deploy into whichever has the
+        higher cascade score — the total underweight drift it can unlock in
+        other accounts that hold it — since buying a high-cascade symbol overshoots the
         household allocation and a later round corrects it by selling from an
         account with underweight alternatives, routing the cash to where it's
         most needed. Ties favour the same-currency buy, which avoids a
@@ -933,8 +933,17 @@ class RebalancePlanner:
 
         other_currency = "USD" if source_currency == "CAD" else "CAD"
 
-        same = self._top_buyable_candidate(acct, source_currency, drifts)
-        cross = self._top_buyable_candidate(acct, other_currency, drifts)
+        # Compare only candidates we can fund. The cross-currency budget is in
+        # the destination currency, net of the fee and whole-share DLR rounding.
+        cross_cash = cross_currency_buying_power(
+            source_cash,
+            source_currency,
+            self.usd_to_cad_rate,
+            self.fee_cad,
+            dlr_quotes=self.dlr_quotes,
+        )
+        same = self._top_buyable_candidate(acct, source_currency, drifts, source_cash)
+        cross = self._top_buyable_candidate(acct, other_currency, drifts, cross_cash)
 
         # Choose the destination with the higher cascade score; prefer the
         # same-currency buy on ties so we don't convert without a reason.
@@ -953,13 +962,7 @@ class RebalancePlanner:
             symbol, ask_price_native, _cascade = cross
             buy_currency = other_currency
             requires_fx = True
-            available_cash = cross_currency_buying_power(
-                source_cash,
-                source_currency,
-                self.usd_to_cad_rate,
-                self.fee_cad,
-                dlr_quotes=self.dlr_quotes,
-            )
+            available_cash = cross_cash
         else:
             return None
 
@@ -992,19 +995,26 @@ class RebalancePlanner:
             requires_fx=requires_fx,
         )
 
-    def _top_buyable_candidate(self, acct, currency: str, drifts: dict[str, float]):
-        """Return the highest-cascade buyable ``(symbol, ask_price, cascade)`` in a currency, or None."""
+    def _top_buyable_candidate(
+        self, acct, currency: str, drifts: dict[str, float], available_cash: float
+    ):
+        """Return the best affordable ``(symbol, ask_price, cascade)``, or None.
+
+        The budget is in the buy currency. Skip unaffordable holdings without
+        changing the cascade/drift ranking of the remaining candidates.
+        """
         candidates = self._account_buyable_candidates(
             acct, currency, drifts, underweight_only=False
         )
-        if not candidates:
-            return None
-        _drift_pct, symbol, ask_price_native = candidates[0]
-        return (
-            symbol,
-            ask_price_native,
-            self._cascade_score(symbol, acct.number, drifts),
-        )
+        for _drift_pct, symbol, ask_price_native in candidates:
+            if math.floor(available_cash / ask_price_native) <= 0:
+                continue
+            return (
+                symbol,
+                ask_price_native,
+                self._cascade_score(symbol, acct.number, drifts),
+            )
+        return None
 
     def _deploy_residual_cash(self) -> int:
         """Minimize stranded cash, deploying it where it can be most useful.

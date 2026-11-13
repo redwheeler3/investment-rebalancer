@@ -1,5 +1,9 @@
 """Tests for the rebalancer module — sizing math, trade netting, and sell allocation."""
 
+from types import SimpleNamespace
+
+import pytest
+
 from src.models import TradeRecommendation
 from src.portfolio import AccountInfo, Position
 from src.rebalancer import (
@@ -585,8 +589,8 @@ class TestAllocateSell:
 # Full planner integration tests
 # ══════════════════════════════════════════════════════════════════
 
-from src.portfolio import HoldingSummary, PortfolioSummary
-from src.rebalancer import CashLedger, calculate_trades
+from src.portfolio import HoldingSummary, PortfolioSummary, get_current_allocations
+from src.rebalancer import CashLedger, RebalancePlanner, calculate_trades
 
 
 def _build_test_portfolio(
@@ -789,6 +793,177 @@ class TestPlannerOverweightSells:
 
 class TestPlannerCashDeployment:
     """Test that idle cash gets deployed into underweight positions."""
+
+    @pytest.mark.parametrize(
+        "zmmk_filled,rsi_filled,cash,expected",
+        [
+            (0, 0, 78.99, [("ZMMK.TO", 1), ("RSI.TO", 4)]),
+            (1, 0, 29.11, [("RSI.TO", 4)]),
+            (1, 4, 2.07, []),
+        ],
+    )
+    def test_deploys_rounding_remainder_into_affordable_holding(
+        self, zmmk_filled, rsi_filled, cash, expected
+    ):
+        """Buy ZMMK then RSI together; simulated fills leave no further buy."""
+        specs = [
+            {
+                "number": "11111",
+                "type": "TFSA",
+                "owner": "Alice",
+                "cash_cad": 78.99,
+                "positions": [
+                    {
+                        "symbol": "ZMMK.TO",
+                        "qty": 10000,
+                        "price": 49.88,
+                        "currency": "CAD",
+                    },
+                    {
+                        "symbol": "RSI.TO",
+                        "qty": 10000,
+                        "price": 6.76,
+                        "currency": "CAD",
+                    },
+                    {
+                        "symbol": "VSP.TO",
+                        "qty": 10000,
+                        "price": 118.35,
+                        "currency": "CAD",
+                    },
+                    {"symbol": "IVV", "qty": 398, "price": 760.33, "currency": "USD"},
+                ],
+            }
+        ]
+        original = _build_test_portfolio(specs, 1.4247)
+        allocations = get_current_allocations(original, 1.4247)
+        # CAD holdings are slightly overweight, with ZMMK ranked before RSI.
+        # IVV is underweight but a share costs more than the available cash.
+        targets = {
+            symbol: allocations[symbol] - drift
+            for symbol, drift in [
+                ("ZMMK.TO", 0.001),
+                ("RSI.TO", 0.01),
+                ("VSP.TO", 0.02),
+            ]
+        }
+        targets.update(IVV=100 - sum(targets.values()), CAD=0, USD=0)
+        specs[0]["cash_cad"] = cash
+        specs[0]["positions"][0]["qty"] += zmmk_filled
+        specs[0]["positions"][1]["qty"] += rsi_filled
+        portfolio = _build_test_portfolio(specs, 1.4247)
+        planner = RebalancePlanner(portfolio, targets, 1.4247, 10.49, 0.5)
+
+        trades = planner.build()
+
+        assert [(t.symbol, t.quantity) for t in trades] == expected
+        assert all(t.action == "BUY" and not t.requires_fx for t in trades)
+        assert planner.ledger.cash("11111", "CAD") == pytest.approx(2.07)
+        assert all(
+            value >= 0
+            for balance in planner.ledger.balances.values()
+            for value in balance.values()
+        )
+
+    @pytest.mark.parametrize(
+        "source_currency,expensive_price,cheap_price,remaining_cash",
+        [("CAD", 45.0, 20.0, 6.79), ("USD", 95.0, 40.0, 4.09)],
+    )
+    @pytest.mark.parametrize("affordable_cross", [True, False])
+    def test_best_available_compares_affordable_candidates_across_currencies(
+        self,
+        source_currency,
+        expensive_price,
+        cheap_price,
+        remaining_cash,
+        affordable_cross,
+    ):
+        """FX fees and DLR rounding can disqualify a higher-ranked holding."""
+        buy_currency = "USD" if source_currency == "CAD" else "CAD"
+        specs = [
+            {
+                "number": "1",
+                "type": "TFSA",
+                "owner": "Alice",
+                "cash_cad": 75.0 if source_currency == "CAD" else 0.0,
+                "cash_usd": 75.0 if source_currency == "USD" else 0.0,
+                "positions": [
+                    {
+                        "symbol": "SAME",
+                        "qty": 100,
+                        "price": 30.0,
+                        "currency": source_currency,
+                    },
+                    {
+                        "symbol": "EXPENSIVE",
+                        "qty": 100,
+                        "price": expensive_price,
+                        "currency": buy_currency,
+                    },
+                    {
+                        "symbol": "CHEAP",
+                        "qty": 100,
+                        "price": cheap_price if affordable_cross else expensive_price,
+                        "currency": buy_currency,
+                    },
+                ],
+            },
+            {
+                "number": "2",
+                "type": "Margin",
+                "owner": "Bob",
+                "positions": [
+                    {
+                        "symbol": "EXPENSIVE",
+                        "qty": 100,
+                        "price": expensive_price,
+                        "currency": buy_currency,
+                    },
+                    {
+                        "symbol": "CHEAP",
+                        "qty": 100,
+                        "price": cheap_price if affordable_cross else expensive_price,
+                        "currency": buy_currency,
+                    },
+                    {
+                        "symbol": "DEFICIT",
+                        "qty": 100,
+                        "price": 100.0,
+                        "currency": buy_currency,
+                    },
+                ],
+            },
+        ]
+        portfolio = _build_test_portfolio(specs, 1.4247)
+        quotes = SimpleNamespace(
+            cad_buy_price=14.43,
+            cad_sell_price=14.42,
+            usd_buy_price=10.13,
+            usd_sell_price=10.12,
+        )
+        planner = RebalancePlanner(
+            portfolio,
+            {"SAME": 30, "EXPENSIVE": 30, "CHEAP": 30, "DEFICIT": 10},
+            1.4247,
+            10.49,
+            0.5,
+            dlr_quotes=quotes,
+        )
+        # Both foreign holdings can unlock the same deficit in account 2;
+        # EXPENSIVE wins their drift tiebreak but is unaffordable after FX.
+        drifts = {"SAME": 0.01, "EXPENSIVE": 0.1, "CHEAP": 0.2, "DEFICIT": -1}
+
+        trade = planner._build_deploy_cash_any(
+            portfolio.accounts[0], source_currency, drifts
+        )
+
+        assert trade.symbol == ("CHEAP" if affordable_cross else "SAME")
+        assert trade.quantity == 2
+        assert trade.requires_fx == affordable_cross
+        assert planner.ledger.cash("1", source_currency) == pytest.approx(
+            remaining_cash if affordable_cross else 15.0
+        )
+        assert all(value >= 0 for value in planner.ledger.balances["1"].values())
 
     def test_deploys_cash_into_underweight(self):
         """Pre-existing cash in an account should be deployed."""

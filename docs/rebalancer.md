@@ -529,7 +529,13 @@ def _deploy_residual_cash(self) -> int:
 
 1. **`build_deploy_cash_underweight`** (from `cash_deploy.py`) — Buy the most underweight symbol in this account that matches the buy currency. Iterates through candidates if the top pick is too expensive. Caps at the number of shares needed to close the gap. Handles both same-currency (`source_currency == buy_currency`) and cross-currency cases. Cross-currency underweight buys are always allowed — closing a real drift gap justifies the conversion fee regardless of cascade.
 
-2. **`_build_deploy_cash_any`** — Best-available deployment once nothing is underweight. For a given source currency it takes the top (highest-cascade) buyable candidate on *each* side and deploys into whichever has the higher cascade score, preferring the same-currency buy on ties (no conversion fee). Crossing the currency boundary here is gated on cascade potential: the cross-currency buy only fires when its cascade score is **strictly positive** — otherwise a conversion would pay a fee to park cash in an at-target holding with no downstream benefit. Genuinely stranded foreign cash (no cascade destination) is left for the post-rebalance conversion sweep (see `fx_conversions.py`), which moves it into the account's home currency.
+2. **`_build_deploy_cash_any`** — Best-available deployment once nothing is underweight. For a given source currency it takes the top (highest-cascade) **affordable** candidate on *each* side and deploys into whichever has the higher cascade score, preferring the same-currency buy on ties (no conversion fee). Candidates must fit at least one whole share within the source cash or the destination-currency buying power after FX fees and DLR whole-share rounding. Crossing the currency boundary here is gated on cascade potential: the cross-currency buy only fires when its cascade score is **strictly positive** — otherwise a conversion would pay a fee to park cash in an at-target holding with no downstream benefit. Genuinely stranded foreign cash (no cascade destination) is left for the post-rebalance conversion sweep (see `fx_conversions.py`), which moves it into the account's home currency.
+
+After each buy, the existing deployment loop refreshes projected drift and checks
+the remaining cash against the ranked candidates again. An unaffordable top pick
+does not block cheaper holdings: $78.99 can fund one ZMMK share at $49.88 followed
+by four RSI shares at $6.76 in the same plan, leaving $2.07, when that is their
+ranking and both remain eligible.
 
 ### How `cash_deploy.py` picks candidates
 
@@ -577,7 +583,7 @@ def _account_buyable_candidates(self, acct, currency, drifts, *, underweight_onl
     return candidates
 ```
 
-`_build_deploy_cash_any` calls this for both the source currency and the other currency, takes the top (highest-cascade) candidate from each via `_top_buyable_candidate`, and deploys into whichever has the higher cascade score — see [Layer 3](#layer-3-residual-cash-deployment-_deploy_residual_cash).
+`_build_deploy_cash_any` calls this for both the source currency and the other currency. It passes each currency's available budget to `_top_buyable_candidate`, which scans the ranked list for the first affordable holding, then deploys into whichever affordable candidate has the higher cascade score — see [Layer 3](#layer-3-residual-cash-deployment-_deploy_residual_cash).
 
 ---
 
