@@ -1393,3 +1393,25 @@ rebalancer.py
 ├── effective_qty()                 # Position adjusted for planned trades
 └── _has_underweight_alternatives() # Can proceeds be redeployed?
 ```
+
+## Restricted redemptions
+
+An optional `redemption_rules` entry in private settings maps each actual broker
+symbol to `never` or to `{minimum_years: 2}`. Interactive and scheduled runs search backwards
+in 30-day windows until posted trades reconcile to the held units. It retains
+verified acquisition dates and quantities per account and symbol in encrypted
+`data/redemption_lots.json`, so lots can age beyond the broker's account-data
+window. Each lookup replays activity since the verified checkpoint. After a gap
+longer than the 16-month lookback it requires fresh evidence for the position.
+Whole-unit
+buys less redemptions must reconcile to the position. Unverified positions stay
+in the portfolio with zero eligible units. The holding period starts on the later
+of trade and settlement. Prior sales reduce the oldest eligible lots first,
+which gives a conservative limit when the broker does not identify redeemed lots.
+
+The redemption table shows each account's eligible quantity and the next date
+more units qualify. When a holding is overweight, the household recommendation
+is capped by verified mature units. Confirm the broker can redeem those lots
+without a penalty. Check outstanding requests because posted activity does not
+identify a pending request. Only posted payout cash funds ordinary share trades
+and currency conversions.

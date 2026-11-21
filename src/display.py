@@ -696,6 +696,35 @@ def display_allocations(
     )
 
 
+def display_redemptions(reviews):
+    """Show redemption eligibility separately from orders funded in this run."""
+    if not reviews:
+        return
+    table = Table(
+        title="Redemption eligibility", box=box.ROUNDED, header_style="bold magenta"
+    )
+    for label in ("Account", "Symbol", "Eligible", "Next eligible", "Action"):
+        table.add_column(label, justify="right" if label == "Eligible" else "left")
+    for account, symbol, limit, units in reviews:
+        held = sum(p.quantity for p in account.positions if p.symbol == symbol)
+        action = f"Redeem {units} mature units" if units else f"Hold ({limit.reason})"
+        if not units and limit.units:
+            action = "Hold (no redemption needed)"
+        table.add_row(
+            f"{account.owner} {account.account_type} (…{account.number[-4:]})",
+            symbol,
+            f"{limit.units} / {held:g}",
+            str(limit.next_eligible or "—"),
+            action,
+        )
+    console.print(table)
+    if any(units for _, _, _, units in reviews):
+        console.print(
+            "  Confirm fee-free lot selection and any outstanding request before submitting. "
+            "Proceeds become available after payout."
+        )
+
+
 def display_trades(trades: list):
     """Display recommended trades table, grouped by account with sells before buys."""
     trades = [trade for trade in trades if trade.action in {"BUY", "SELL"}]

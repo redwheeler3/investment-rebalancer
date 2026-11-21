@@ -195,10 +195,13 @@ class QuestradeClient:
 
     def get_activities(self, account_id: str, start_time: str, end_time: str) -> list:
         """Read at most 31 days of posted account activities."""
-        return self._get(
+        rows = self._get(
             f"v1/accounts/{account_id}/activities",
             params={"startTime": start_time, "endTime": end_time},
-        ).get("activities", [])
+        )["activities"]
+        if not isinstance(rows, list):
+            raise ValueError("Invalid account activities response")
+        return rows
 
     def get_symbols(self, symbol_ids: list) -> list:
         """

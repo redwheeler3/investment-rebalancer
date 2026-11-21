@@ -1590,3 +1590,25 @@ class TestCashLedger:
         assert usd_power > 0
         # Should be roughly $50,000 / 1.36 ≈ $36,764
         assert usd_power > 30000
+
+
+def test_restricted_overweight_cannot_fund_buys_and_redemption_is_capped_per_account():
+    from types import SimpleNamespace
+    from src.rebalancer import redemption_suggestions
+    from src.redemption import RedemptionLimit
+    from src.portfolio import build_allocation_snapshot
+
+    portfolio = _build_test_portfolio([
+        {"number": number, "owner": "Example", "type": "TFSA", "positions": [
+            {"symbol": "FUND", "qty": 20, "price": 100, "currency": "CAD"},
+            {"symbol": "EQ", "qty": 10, "price": 100, "currency": "CAD"},
+        ]} for number in ("111", "222")
+    ])
+    targets = {"FUND": 50, "EQ": 50}
+    for acct, mature in zip(portfolio.accounts, (2, 15)):
+        acct.redemption_limits["FUND"] = RedemptionLimit(mature, "2-year hold")
+    trades = calculate_trades(portfolio, targets, 1, 0, 0.1, set(), None)
+    assert trades == []
+    report = SimpleNamespace(current=build_allocation_snapshot(portfolio, targets, 1), projected=None)
+    reviews = redemption_suggestions(portfolio, report, 1, 0.1, set())
+    assert [units for _, _, _, units in reviews] == [2, 8]

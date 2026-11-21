@@ -685,6 +685,8 @@ class RebalancePlanner:
         candidates = []
 
         for pos in acct.positions:
+            if pos.symbol in acct.redemption_limits:
+                continue
             if pos.symbol == buy_symbol or pos.symbol in self.hidden_symbols:
                 continue
             if pos.quantity <= 0 or pos.currency != currency:
@@ -773,7 +775,7 @@ class RebalancePlanner:
         """
         score = 0.0
         for acct in self.portfolio.accounts:
-            if acct.number == current_account_number:
+            if acct.number == current_account_number or symbol in acct.redemption_limits:
                 continue
             if not any(p.symbol == symbol and p.quantity > 0 for p in acct.positions):
                 continue
@@ -876,7 +878,7 @@ class RebalancePlanner:
                 continue
 
             drift_pct = drifts.get(pos.symbol, 0.0)
-            if underweight_only and drift_pct >= 0:
+            if (underweight_only or pos.symbol in acct.redemption_limits) and drift_pct >= 0:
                 continue
 
             holding = self.holdings_view.get(pos.symbol)
@@ -1222,7 +1224,8 @@ def allocate_sell(
     if total_shares <= 0:
         return []
 
-    holders = find_accounts_for_symbol(symbol, accounts)
+    holders = [a for a in find_accounts_for_symbol(symbol, accounts)
+               if symbol not in a.redemption_limits]
     if not holders:
         return []
 
@@ -1274,3 +1277,38 @@ def allocate_sell(
             remaining -= shares_to_sell
 
     return trades
+
+
+def redemption_suggestions(
+    portfolio, report, usd_to_cad_rate, threshold, hidden_symbols
+):
+    """Size deferred requests separately so they never create projected cash or FX."""
+    remaining = {}
+    reviews = []
+    projected = report.projected or report.current
+    for acct in portfolio.accounts:
+        for symbol, limit in acct.redemption_limits.items():
+            if symbol in hidden_symbols:
+                continue
+            holding = portfolio.holdings[symbol]
+            if symbol not in remaining:
+                # Do not redeem units to unwind a buy proposed by the same run.
+                drift = min(
+                    report.current.drifts.get(symbol, 0),
+                    projected.drifts.get(symbol, 0),
+                )
+                remaining[symbol] = (
+                    shares_for_drift_gap(
+                        portfolio.total_value_cad,
+                        drift,
+                        holding.bid_price or holding.current_price,
+                        holding.currency,
+                        usd_to_cad_rate,
+                    )
+                    if drift > threshold
+                    else 0
+                )
+            units = min(remaining[symbol], limit.units)
+            remaining[symbol] -= units
+            reviews.append((acct, symbol, limit, units))
+    return reviews

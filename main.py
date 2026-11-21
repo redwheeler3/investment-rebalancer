@@ -23,7 +23,7 @@ if sys.platform == "win32":
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8")
 
-from src.display import console, display_full_report
+from src.display import console, display_full_report, display_redemptions
 from src.encrypted_state import EncryptedStateError, validate_encrypted_state_files
 from src.external_accounts import (
     ExternalAccountConfig,
@@ -44,7 +44,8 @@ from src.portfolio import (
     fetch_quotes_for_holdings,
 )
 from src.questrade_client import QuestradeClient
-from src.rebalancer import calculate_trades
+from src.rebalancer import calculate_trades, redemption_suggestions
+from src.redemption import parse_redemption_rules
 from src.report_builder import build_report_data
 from src.tactical import (
     evaluate_tactical_posture,
@@ -65,6 +66,7 @@ def load_config() -> tuple:
             norberts_gambit_fee_cad float,
             fx_target_rules dict,
             drift_trade_threshold_pct float,
+            redemption_rules dict,
             tactical_config,
             external_accounts dict,
         ).
@@ -122,6 +124,7 @@ def load_config() -> tuple:
         norberts_gambit_fee_cad,
         fx_target_rules,
         drift_trade_threshold_pct,
+        parse_redemption_rules(data.get("redemption_rules", {})),
         tactical_config,
         external_accounts,
     )
@@ -153,6 +156,7 @@ def run_scheduled_sync():
         _norberts_gambit_fee_cad,
         fx_target_rules,
         _drift_trade_threshold_pct,
+        redemption_rules,
         tactical_config,
         external_accounts,
     ) = load_config()
@@ -190,7 +194,7 @@ def run_scheduled_sync():
     if clients:
         try:
             usd_to_cad_rate = get_usd_to_cad_rate(client=clients[0])
-            portfolio = build_portfolio(clients, usd_to_cad_rate)
+            portfolio = build_portfolio(clients, usd_to_cad_rate, redemption_rules)
             attach_external_balances(portfolio, external_balances, external_accounts)
             transfer_accounts = resolve_external_transfer_accounts(
                 portfolio, external_accounts
@@ -301,10 +305,10 @@ def _fetch_exchange_rate(client) -> float:
     return usd_to_cad_rate
 
 
-def _build_priced_portfolio(clients: list, usd_to_cad_rate: float):
+def _build_priced_portfolio(clients: list, usd_to_cad_rate: float, redemption_rules):
     """Build the portfolio and enrich it with bid/ask quote data."""
     console.print("  [dim]Building portfolio...[/dim]")
-    portfolio = build_portfolio(clients, usd_to_cad_rate)
+    portfolio = build_portfolio(clients, usd_to_cad_rate, redemption_rules)
 
     console.print("  [dim]Fetching market quotes and previous close...[/dim]")
     fetch_quotes_for_holdings(portfolio, clients)
@@ -386,6 +390,7 @@ def run_rebalancer():
         norberts_gambit_fee_cad,
         fx_target_rules,
         drift_trade_threshold_pct,
+        redemption_rules,
         tactical_config,
         external_accounts,
     ) = load_config()
@@ -400,7 +405,7 @@ def run_rebalancer():
     clients = _connect_clients(accounts)
     usd_to_cad_rate = _fetch_exchange_rate(clients[0])
     resolved_targets = resolve_targets(targets, fx_target_rules, usd_to_cad_rate)
-    portfolio = _build_priced_portfolio(clients, usd_to_cad_rate)
+    portfolio = _build_priced_portfolio(clients, usd_to_cad_rate, redemption_rules)
     attach_external_balances(portfolio, external_balances, external_accounts)
     transfer_accounts = resolve_external_transfer_accounts(portfolio, external_accounts)
     transfer_ledger = reconcile_transfer_activity(
@@ -465,6 +470,9 @@ def run_rebalancer():
         drift_trade_threshold_pct,
         report,
     )
+    display_redemptions(redemption_suggestions(
+        portfolio, report, usd_to_cad_rate, drift_trade_threshold_pct, hidden_symbols
+    ))
     if transfer_ledger is not None:
         # Arm only recommendations the local user has seen in a successful report.
         # Scheduled reconciliation consumes saved intent without creating it.

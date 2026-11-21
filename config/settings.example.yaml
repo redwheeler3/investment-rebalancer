@@ -42,6 +42,13 @@ targets:
   VUN.TO: 25.0
   XEF.TO: 15.0
 
+# Restricted positions stay in the portfolio. Age-limited redemptions are
+# reported separately because proceeds arrive on the fund's schedule.
+redemption_rules: {}
+# redemption_rules:
+#   PRIVATE_FUND: {minimum_years: 2}
+#   CERTIFICATE_SYMBOL: never
+
 # FX-derived targets.
 # Each rule dynamically splits an allocation between a USD ETF and a
 # CAD-hedged ETF based on the current USD/CAD exchange rate.

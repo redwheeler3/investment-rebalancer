@@ -11,7 +11,10 @@ from datetime import UTC, datetime, timedelta
 
 import requests
 
+from src.encrypted_state import read_encrypted_json, write_encrypted_json
+from src.paths import get_data_dir
 from src.models import TransferProgress
+from src.redemption import RedemptionLimit, account_redemption_limits
 
 
 def _coerce_numeric(value, default: float = 0.0) -> float:
@@ -71,6 +74,7 @@ class AccountInfo:
     positions: list["Position"] = field(default_factory=list)
     cash_cad: float = 0.0
     cash_usd: float = 0.0
+    redemption_limits: dict[str, RedemptionLimit] = field(default_factory=dict)
 
 
 @dataclass
@@ -131,7 +135,7 @@ class AllocationSnapshot:
     accuracy: float
 
 
-def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
+def build_portfolio(clients: list, usd_to_cad_rate: float, redemption_rules=None) -> PortfolioSummary:
     """
     Build a unified portfolio from multiple Questrade client connections.
 
@@ -151,6 +155,14 @@ def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
     total_value_cad = 0.0
     total_cash_cad = 0.0
     total_cash_usd = 0.0
+
+    lot_path = None
+    saved_lots = {}
+    if redemption_rules and any(rule.minimum_years for rule in redemption_rules.values()):
+        lot_path = get_data_dir() / "redemption_lots.json"
+        if lot_path.exists():
+            saved_lots = read_encrypted_json(lot_path)
+    updated_lots = dict(saved_lots)
 
     for client in clients:
         accounts = client.get_accounts()
@@ -272,6 +284,9 @@ def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
                 client_account_type=client_acct_type,
                 owner=display_owner,
                 positions=positions,
+                redemption_limits=account_redemption_limits(
+                    client, positions, redemption_rules or {}, cache=updated_lots
+                ),
                 cash_cad=cash_cad,
                 cash_usd=cash_usd,
             )
@@ -280,6 +295,9 @@ def build_portfolio(clients: list, usd_to_cad_rate: float) -> PortfolioSummary:
             # Add cash to total (convert USD cash to CAD)
             total_cash_cad += cash_cad
             total_cash_usd += cash_usd
+
+    if lot_path and updated_lots != saved_lots:
+        write_encrypted_json(lot_path, updated_lots)
 
     # Calculate total portfolio value in CAD
     total_value_cad = total_cash_cad + (total_cash_usd * usd_to_cad_rate)
