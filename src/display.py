@@ -20,6 +20,7 @@ console = Console()
 
 # Shared constants
 _CASH_SYMBOLS = {"CAD", "USD"}
+_FOLLOW_UP_HEADER_STYLE = "bold yellow"
 
 
 def _normalize_amount(amount: float) -> float:
@@ -701,7 +702,9 @@ def display_redemptions(reviews):
     if not reviews:
         return
     table = Table(
-        title="Redemption eligibility", box=box.ROUNDED, header_style="bold magenta"
+        title="Redemption Eligibility",
+        box=box.ROUNDED,
+        header_style=_FOLLOW_UP_HEADER_STYLE,
     )
     for label in ("Account", "Symbol", "Eligible", "Next eligible", "Action"):
         table.add_column(label, justify="right" if label == "Eligible" else "left")
@@ -723,6 +726,7 @@ def display_redemptions(reviews):
             "  Confirm fee-free lot selection and any outstanding request before submitting. "
             "Proceeds become available after payout."
         )
+    console.print()
 
 
 def display_trades(trades: list):
@@ -798,7 +802,7 @@ def display_currency_conversions(conversions: list):
         title="Currency Conversions (Norbert's Gambit)",
         box=box.ROUNDED,
         show_header=True,
-        header_style="bold yellow",
+        header_style=_FOLLOW_UP_HEADER_STYLE,
     )
 
     table.add_column("Account")
@@ -964,7 +968,7 @@ def display_external_transfers(portfolio, actions: list) -> None:
     title = (
         f"{next(iter(names))} Transfers" if len(names) == 1 else "External Transfers"
     )
-    table = Table(title=title, box=box.ROUNDED, header_style="bold yellow")
+    table = Table(title=title, box=box.ROUNDED, header_style=_FOLLOW_UP_HEADER_STYLE)
     table.add_column("Direction")
     table.add_column("Amount CAD", justify="right")
     table.add_column("Status")
@@ -1109,6 +1113,8 @@ def display_full_report(
     ytd_history: list | None = None,
     drift_trade_threshold_pct: float = 0.1,
     tactical_posture=None,
+    *,
+    redemption_reviews: list | None = None,
 ):
     """Display the complete rebalancing report."""
     day_pnl_cad, day_pnl_pct = _compute_portfolio_day_pnl(portfolio, usd_to_cad_rate)
@@ -1132,6 +1138,7 @@ def display_full_report(
     display_trades(trades)
     display_currency_conversions(currency_conversions)
     display_external_transfers(portfolio, trades)
+    display_redemptions(redemption_reviews)
     display_projected_allocations(
         projected_allocations,
         targets,

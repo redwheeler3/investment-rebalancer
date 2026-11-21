@@ -23,7 +23,7 @@ if sys.platform == "win32":
     if hasattr(sys.stderr, "reconfigure"):
         sys.stderr.reconfigure(encoding="utf-8")
 
-from src.display import console, display_full_report, display_redemptions
+from src.display import console, display_full_report
 from src.encrypted_state import EncryptedStateError, validate_encrypted_state_files
 from src.external_accounts import (
     ExternalAccountConfig,
@@ -345,6 +345,8 @@ def _render_report(
     usd_to_cad_rate: float,
     drift_trade_threshold_pct: float,
     report,
+    *,
+    hidden_symbols: set,
 ) -> None:
     """Render the completed report data to the terminal."""
     projected_snapshot = report.projected
@@ -356,6 +358,9 @@ def _render_report(
         accuracy=report.current.accuracy,
         trades=report.trades,
         currency_conversions=report.currency_conversions,
+        redemption_reviews=redemption_suggestions(
+            portfolio, report, usd_to_cad_rate, drift_trade_threshold_pct, hidden_symbols
+        ),
         transient_alerts=report.transient_alerts,
         usd_to_cad_rate=usd_to_cad_rate,
         projected_accuracy=projected_snapshot.accuracy if projected_snapshot else None,
@@ -475,10 +480,8 @@ def run_rebalancer():
         usd_to_cad_rate,
         drift_trade_threshold_pct,
         report,
+        hidden_symbols=hidden_symbols,
     )
-    display_redemptions(redemption_suggestions(
-        portfolio, report, usd_to_cad_rate, drift_trade_threshold_pct, hidden_symbols
-    ))
     if transfer_ledger is not None:
         # Arm only recommendations the local user has seen in a successful report.
         # Scheduled reconciliation consumes saved intent without creating it.
