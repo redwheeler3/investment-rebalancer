@@ -26,7 +26,8 @@ This app has no external consumers — keep it simple:
 
 ## Git
 
-- **Never commit without explicit user approval.** When changes are ready to commit, present a summary of what will be committed and ask for confirmation before running `git commit`. One approval authorizes exactly one commit.
+- **Routine encrypted app-state syncs have standing approval.** Commit and push app-managed encrypted credentials and state in the private state repository after authorized app runs or API lookups, without asking for separate approval. Stage only the intended app-managed files and verify synchronization. This permission excludes code, configuration, and unrelated changes.
+- **Other commits require explicit user approval.** When changes are ready to commit, present a summary of what will be committed and ask for confirmation before running `git commit`. One approval authorizes exactly one commit.
 - **Always commit directly to `main` — never create feature branches.** This is a solo project with trunk-based development; commit to mainline every time.
 - **Commit messages: hybrid Conventional Commits.** Subject is `type(scope): summary` — lowercase type and scope, imperative mood, no trailing period, ≤ ~72 chars.
   - **type:** `feat` (user-facing) · `fix` · `docs` (docs/rules, no behavior change) · `refactor` (behavior-preserving) · `test` · `chore` · `perf` · `style`. Mostly-docs edits are `docs` even if a stray code line moved.
