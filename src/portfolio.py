@@ -158,7 +158,7 @@ def build_portfolio(clients: list, usd_to_cad_rate: float, redemption_rules=None
 
     lot_path = None
     saved_lots = {}
-    if redemption_rules and any(rule.minimum_years for rule in redemption_rules.values()):
+    if redemption_rules and any(rule.minimum_months for rule in redemption_rules.values()):
         lot_path = get_data_dir() / "redemption_lots.json"
         if lot_path.exists():
             saved_lots = read_encrypted_json(lot_path)

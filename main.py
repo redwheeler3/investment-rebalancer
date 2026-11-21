@@ -45,7 +45,7 @@ from src.portfolio import (
 )
 from src.questrade_client import QuestradeClient
 from src.rebalancer import calculate_trades, redemption_suggestions
-from src.redemption import parse_redemption_rules
+from src.redemption import parse_redemption_holding_months
 from src.report_builder import build_report_data
 from src.tactical import (
     evaluate_tactical_posture,
@@ -80,6 +80,12 @@ def load_config() -> tuple:
 
     with open(targets_path, "r") as f:
         data = yaml.safe_load(f)
+
+    if "redemption_rules" in data:
+        raise ValueError(
+            "Replace redemption_rules with redemption_holding_months in settings.yaml "
+            "(for example, use 24 for a two-year holding period)."
+        )
 
     raw_accounts = data.get("accounts", [])
     if not raw_accounts:
@@ -124,7 +130,7 @@ def load_config() -> tuple:
         norberts_gambit_fee_cad,
         fx_target_rules,
         drift_trade_threshold_pct,
-        parse_redemption_rules(data.get("redemption_rules", {})),
+        parse_redemption_holding_months(data.get("redemption_holding_months", {})),
         tactical_config,
         external_accounts,
     )

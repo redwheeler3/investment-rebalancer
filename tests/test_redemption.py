@@ -5,7 +5,7 @@ from unittest.mock import Mock
 import pytest
 import requests
 
-from src.redemption import account_redemption_limits, parse_redemption_rules
+from src.redemption import account_redemption_limits, parse_redemption_holding_months
 
 
 def buy(day, quantity, settled=None):
@@ -19,7 +19,7 @@ def buy(day, quantity, settled=None):
     )
 
 
-def check(rows, held, today="2028-07-20", cache=None, client=None):
+def check(rows, held, today="2028-07-20", cache=None, client=None, months=24):
     client = client or Mock()
     # One page contains these acquisitions. All other windows return no activity.
     client.get_activities.side_effect = lambda account, start, end: [
@@ -28,7 +28,7 @@ def check(rows, held, today="2028-07-20", cache=None, client=None):
     pos = SimpleNamespace(
         symbol="FUND", symbol_id=33, quantity=held, account_number="123"
     )
-    rules = parse_redemption_rules({"FUND": {"minimum_years": 2}})
+    rules = parse_redemption_holding_months({"FUND": months})
     now = datetime.fromisoformat(today + "T16:00:00+00:00")
     return account_redemption_limits(client, [pos], rules, now, cache)["FUND"]
 
@@ -71,18 +71,25 @@ def test_missing_or_unsupported_unit_history_blocks_sale():
     assert "verified" in check([buy("2026-07-01", 5), other], 6).reason
 
 
+def test_short_holding_period_waits_until_next_month_when_day_is_missing():
+    rows = [buy("2026-01-30", 5, "2026-01-31")]
+    limit = check(rows, 5, "2026-02-28", months=1)
+    assert (limit.units, limit.next_eligible) == (0, date(2026, 3, 1))
+    assert check(rows, 5, "2026-03-01", months=1).units == 5
+
+
 def test_permanent_rule_needs_no_history_and_lookup_failure_remains_restricted():
     client = Mock()
     client.get_activities.side_effect = requests.ConnectionError()
     p = SimpleNamespace(symbol="FUND", account_number="123")
     assert (
         account_redemption_limits(
-            client, [p], parse_redemption_rules({"FUND": "never"})
+            client, [p], parse_redemption_holding_months({"FUND": "never"})
         )["FUND"].units
         == 0
     )
     client.get_activities.assert_not_called()
-    rule = parse_redemption_rules({"FUND": {"minimum_years": 2}})
+    rule = parse_redemption_holding_months({"FUND": 24})
     assert (
         account_redemption_limits(client, [p], rule, datetime(2026, 2, 1, tzinfo=UTC))[
             "FUND"
@@ -96,10 +103,13 @@ def test_permanent_rule_needs_no_history_and_lookup_failure_remains_restricted()
     [
         False,
         None,
-        {"minimum_years": 0},
-        {"minimum_years": 2, "history_from": "invalid"},
+        0,
+        -1,
+        24.0,
+        "24",
+        {"minimum_years": 2},
     ],
 )
 def test_invalid_rule_rejected(bad):
     with pytest.raises(ValueError):
-        parse_redemption_rules({"FUND": bad})
+        parse_redemption_holding_months({"FUND": bad})

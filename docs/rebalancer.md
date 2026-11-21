@@ -1396,18 +1396,21 @@ rebalancer.py
 
 ## Restricted redemptions
 
-An optional `redemption_rules` entry in private settings maps each actual broker
-symbol to `never` or to `{minimum_years: 2}`. Interactive and scheduled runs search backwards
-in 30-day windows until posted trades reconcile to the held units. It retains
+The optional `redemption_holding_months` section in private settings maps each
+broker symbol to a positive whole number of calendar months, such as `24`, or
+to `never` for holdings the planner should never recommend selling. Interactive
+and scheduled runs search backwards in 30-day windows until posted trades
+reconcile to the held units. The app retains
 verified acquisition dates and quantities per account and symbol in encrypted
 `data/redemption_lots.json`, so lots can age beyond the broker's account-data
 window. Each lookup replays activity since the verified checkpoint. After a gap
 longer than the 16-month lookback it requires fresh evidence for the position.
-Whole-unit
-buys less redemptions must reconcile to the position. Unverified positions stay
+Whole-unit buys less redemptions must reconcile to the position. Unverified positions stay
 in the portfolio with zero eligible units. The holding period starts on the later
-of trade and settlement. Prior sales reduce the oldest eligible lots first,
-which gives a conservative limit when the broker does not identify redeemed lots.
+of trade and settlement. If the target month lacks the acquisition day, the
+lot qualifies on the first day of the following month. Prior sales reduce the
+oldest eligible lots first, which gives a conservative limit when the broker
+does not identify redeemed lots.
 
 The redemption table shows each account's eligible quantity and the next date
 more units qualify. When a holding is overweight, the household recommendation

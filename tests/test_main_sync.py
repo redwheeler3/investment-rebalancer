@@ -35,6 +35,23 @@ def _config():
     )
 
 
+def test_legacy_redemption_settings_stop_before_connecting(tmp_path, monkeypatch):
+    (tmp_path / "settings.yaml").write_text(
+        "accounts:\n  - owner_name: Primary\n    token_file: primary.json\n"
+        "redemption_rules:\n  FUND: {minimum_years: 2}\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(main, "get_config_dir", lambda: tmp_path)
+
+    with (
+        patch("main.QuestradeClient") as client,
+        pytest.raises(ValueError, match="Replace redemption_rules"),
+    ):
+        main.run_scheduled_sync()
+
+    client.assert_not_called()
+
+
 def test_scheduled_sync_fails_on_encrypted_state_error():
     portfolio = SimpleNamespace(total_value_cad=100.0)
     with (

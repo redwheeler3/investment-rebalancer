@@ -11,25 +11,23 @@ import requests
 
 @dataclass(frozen=True)
 class RedemptionRule:
-    minimum_years: int | None  # None means never recommend a redemption.
+    minimum_months: int | None  # None means never recommend a redemption.
 
 
-def parse_redemption_rules(raw: dict) -> dict[str, RedemptionRule]:
+def parse_redemption_holding_months(raw: dict) -> dict[str, RedemptionRule]:
     rules = {}
     if not isinstance(raw, dict):
-        raise ValueError("redemption_rules must map symbols to redemption policies")
+        raise ValueError("redemption_holding_months must map symbols to holding periods")
     for symbol, policy in raw.items():
         if policy == "never":
             rules[symbol] = RedemptionRule(None)
-        elif (
-            isinstance(policy, dict)
-            and set(policy) == {"minimum_years"}
-            and type(policy["minimum_years"]) is int
-            and policy["minimum_years"] > 0
-        ):
-            rules[symbol] = RedemptionRule(policy["minimum_years"])
+        elif type(policy) is int and policy > 0:
+            rules[symbol] = RedemptionRule(policy)
         else:
-            raise ValueError(f"Invalid redemption rule for {symbol}")
+            raise ValueError(
+                f"Invalid redemption holding period for {symbol}: "
+                "expected a positive whole number of months or 'never'"
+            )
     return rules
 
 
@@ -145,7 +143,7 @@ def account_redemption_limits(client, positions, rules, now=None, cache=None):
         rule = rules.get(position.symbol)
         if rule is None:
             continue
-        if rule.minimum_years is None:
+        if rule.minimum_months is None:
             limits[position.symbol] = RedemptionLimit(0, "redemption disabled")
             continue
         eastern = ZoneInfo("America/Toronto")
@@ -156,18 +154,20 @@ def account_redemption_limits(client, positions, rules, now=None, cache=None):
             next_date = None
             for day, units in sorted(lots.items()):
                 acquired = date.fromisoformat(day)
-                year = acquired.year + rule.minimum_years
-                # Feb 29 reaches its anniversary on March 1 in a non-leap year.
-                try:
-                    anniversary = acquired.replace(year=year)
-                except ValueError:
-                    anniversary = date(year, 3, 1)
+                month_index = acquired.year * 12 + acquired.month - 1
+                year, month = divmod(month_index + rule.minimum_months, 12)
+                month += 1
+                last_day = monthrange(year, month)[1]
+                anniversary = date(year, month, min(acquired.day, last_day))
+                # If the target month lacks that day, wait until the next month.
+                if acquired.day > last_day:
+                    anniversary += timedelta(days=1)
                 if anniversary <= as_of.date():
                     mature += units
                 elif next_date is None:
                     next_date = anniversary
             limits[position.symbol] = RedemptionLimit(
-                mature, f"{rule.minimum_years}-year hold", next_date
+                mature, f"{rule.minimum_months}-month hold", next_date
             )
         except requests.RequestException:
             limits[position.symbol] = RedemptionLimit(0, "activity lookup unavailable")
