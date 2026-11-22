@@ -347,6 +347,7 @@ def _render_report(
     report,
     *,
     hidden_symbols: set,
+    blocked_sales: set[tuple[str, str, str | None]],
 ) -> None:
     """Render the completed report data to the terminal."""
     projected_snapshot = report.projected
@@ -359,7 +360,12 @@ def _render_report(
         trades=report.trades,
         currency_conversions=report.currency_conversions,
         redemption_reviews=redemption_suggestions(
-            portfolio, report, usd_to_cad_rate, drift_trade_threshold_pct, hidden_symbols
+            portfolio,
+            report,
+            usd_to_cad_rate,
+            drift_trade_threshold_pct,
+            hidden_symbols,
+            blocked_sales=blocked_sales,
         ),
         transient_alerts=report.transient_alerts,
         usd_to_cad_rate=usd_to_cad_rate,
@@ -445,6 +451,7 @@ def run_rebalancer():
     transient_alerts = transient_status["alerts"]
 
     console.print("  [dim]Calculating trades...[/dim]")
+    blocked_sales = set()
     trades = calculate_trades(
         portfolio,
         resolved_targets,
@@ -454,6 +461,7 @@ def run_rebalancer():
         transient_symbols=hidden_symbols,
         dlr_quotes=dlr_quotes,
         external_transfer_accounts=transfer_accounts,
+        blocked_sales=blocked_sales,
     )
     currency_conversions = calculate_currency_needs(
         trades,
@@ -481,6 +489,7 @@ def run_rebalancer():
         drift_trade_threshold_pct,
         report,
         hidden_symbols=hidden_symbols,
+        blocked_sales=blocked_sales,
     )
     if transfer_ledger is not None:
         # Arm only recommendations the local user has seen in a successful report.

@@ -710,9 +710,11 @@ def display_redemptions(reviews):
         table.add_column(label, justify="right" if label == "Eligible" else "left")
     for account, symbol, limit, units in reviews:
         held = sum(p.quantity for p in account.positions if p.symbol == symbol)
-        action = f"Redeem {units} mature units" if units else f"Hold ({limit.reason})"
-        if not units and limit.units:
-            action = "Hold (no redemption needed)"
+        action = (
+            f"Redeem {units} mature units"
+            if units
+            else f"Sell blocked ({'payout delay' if limit.units else limit.reason})"
+        )
         table.add_row(
             f"{account.owner} {account.account_type} (…{account.number[-4:]})",
             symbol,

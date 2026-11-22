@@ -1412,9 +1412,11 @@ lot qualifies on the first day of the following month. Prior sales reduce the
 oldest eligible lots first, which gives a conservative limit when the broker
 does not identify redeemed lots.
 
-The redemption table shows each account's eligible quantity and the next date
-more units qualify. When a holding is overweight, the household recommendation
-is capped by verified mature units. Confirm the broker can redeem those lots
+The Redemption Eligibility table appears when the planner recommends a
+redemption or a restriction blocks an overweight or funding sale. Rows show
+the eligible quantity and the next date more units qualify. The household
+redemption recommendation is capped by verified mature units.
+Confirm the broker can redeem those lots
 without a penalty. Check outstanding requests because posted activity does not
 identify a pending request. Only posted payout cash funds ordinary share trades
 and currency conversions.

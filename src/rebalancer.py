@@ -152,8 +152,10 @@ def calculate_trades(
     transient_symbols: set,
     dlr_quotes,
     external_transfer_accounts: dict | None = None,
+    *,
+    blocked_sales: set[tuple[str, str, str | None]] | None = None,
 ) -> list:
-    """Calculate share trades and external transfers for the portfolio."""
+    """Calculate trades and optionally collect restricted sells for the report."""
     if portfolio.total_value_cad == 0:
         return []
 
@@ -167,7 +169,10 @@ def calculate_trades(
         dlr_quotes=dlr_quotes,
         external_transfer_accounts=external_transfer_accounts or {},
     )
-    return planner.build()
+    trades = planner.build()
+    if blocked_sales is not None:
+        blocked_sales.update(planner.blocked_sales)
+    return trades
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -320,6 +325,10 @@ class RebalancePlanner:
     initial_drifts: dict[str, float] = field(init=False)
     plan: TradePlan = field(init=False)
     ledger: CashLedger = field(init=False)
+    # Account, sell symbol, and optional buy or deposit symbol that needed funding.
+    blocked_sales: set[tuple[str, str, str | None]] = field(
+        default_factory=set, init=False
+    )
 
     def __post_init__(self) -> None:
         if (
@@ -520,6 +529,7 @@ class RebalancePlanner:
                 transient_symbols=self.hidden_symbols,
                 position_deltas=self.plan.position_deltas(),
                 productive_accounts=productive,
+                blocked_sales=self.blocked_sales,
             )
             for trade in sell_trades:
                 self.ledger.credit_sale(
@@ -683,10 +693,9 @@ class RebalancePlanner:
             min_useful_native = target_native
         drifts = self.plan.drifts()
         candidates = []
+        restricted = []
 
         for pos in acct.positions:
-            if pos.symbol in acct.redemption_limits:
-                continue
             if pos.symbol == buy_symbol or pos.symbol in self.hidden_symbols:
                 continue
             if pos.quantity <= 0 or pos.currency != currency:
@@ -717,7 +726,8 @@ class RebalancePlanner:
             if max_sellable <= 0:
                 continue
 
-            candidates.append((drift_pct, pos.symbol, bid_price_native, max_sellable))
+            group = restricted if pos.symbol in acct.redemption_limits else candidates
+            group.append((drift_pct, pos.symbol, bid_price_native, max_sellable))
 
         candidates.sort(key=lambda item: item[0], reverse=True)
 
@@ -738,6 +748,22 @@ class RebalancePlanner:
             proceeds = bid_price_native * sell_qty
             simulated_cash += proceeds
             planned_sells.append((symbol, sell_qty, bid_price_native, proceeds))
+
+        # A restriction matters only if otherwise usable proceeds could fund
+        # a buy or transfer that the available cash cannot fully cover.
+        potential_cash = simulated_cash
+        blocked = set()
+        restricted.sort(key=lambda item: item[0], reverse=True)
+        for _, symbol, price, max_sellable in restricted:
+            if potential_cash >= target_native:
+                break
+            quantity = min(
+                max_sellable, math.ceil((target_native - potential_cash) / price)
+            )
+            potential_cash += quantity * price
+            blocked.add((acct.number, symbol, buy_symbol))
+        if potential_cash >= min_useful_native:
+            self.blocked_sales.update(blocked)
 
         # Only commit if we can raise at least enough for one share
         if simulated_cash < min_useful_native:
@@ -1209,6 +1235,8 @@ def allocate_sell(
     transient_symbols: set,
     position_deltas: dict,
     productive_accounts: set | None = None,
+    *,
+    blocked_sales: set[tuple[str, str, str | None]] | None = None,
 ) -> list:
     """Allocate a SELL order across accounts.
 
@@ -1224,8 +1252,7 @@ def allocate_sell(
     if total_shares <= 0:
         return []
 
-    holders = [a for a in find_accounts_for_symbol(symbol, accounts)
-               if symbol not in a.redemption_limits]
+    holders = find_accounts_for_symbol(symbol, accounts)
     if not holders:
         return []
 
@@ -1251,12 +1278,17 @@ def allocate_sell(
 
     trades = []
     remaining = total_shares
+    restricted = []
 
     for acct in holders:
         if remaining <= 0:
             break
 
         held = effective_qty(acct, symbol, position_deltas)
+        if symbol in acct.redemption_limits:
+            if held > 0:
+                restricted.append((acct.number, held))
+            continue
         shares_to_sell = min(remaining, held)
 
         if shares_to_sell > 0:
@@ -1276,11 +1308,18 @@ def allocate_sell(
             )
             remaining -= shares_to_sell
 
+    if blocked_sales is not None:
+        for account_number, held in restricted:
+            if remaining <= 0:
+                break
+            blocked_sales.add((account_number, symbol, None))
+            remaining -= held
+
     return trades
 
 
 def redemption_suggestions(
-    portfolio, report, usd_to_cad_rate, threshold, hidden_symbols
+    portfolio, report, usd_to_cad_rate, threshold, hidden_symbols, *, blocked_sales=()
 ):
     """Size deferred requests separately so they never create projected cash or FX."""
     remaining = {}
@@ -1311,4 +1350,19 @@ def redemption_suggestions(
             units = min(remaining[symbol], limit.units)
             remaining[symbol] -= units
             reviews.append((acct, symbol, limit, units))
-    return reviews
+    # Later planner rounds can fill the deficit from another source.
+    still_blocked = {
+        (account_number, symbol)
+        for account_number, symbol, funding_target in blocked_sales
+        if (
+            remaining.get(symbol, 0) > 0
+            if funding_target is None
+            else projected.drifts.get(symbol, 0) > 0
+            and projected.drifts.get(funding_target, 0) < 0
+        )
+    }
+    return [
+        (acct, symbol, limit, units)
+        for acct, symbol, limit, units in reviews
+        if units > 0 or (acct.number, symbol) in still_blocked
+    ]

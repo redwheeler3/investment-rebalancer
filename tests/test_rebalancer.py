@@ -1612,3 +1612,60 @@ def test_restricted_overweight_cannot_fund_buys_and_redemption_is_capped_per_acc
     report = SimpleNamespace(current=build_allocation_snapshot(portfolio, targets, 1), projected=None)
     reviews = redemption_suggestions(portfolio, report, 1, 0.1, set())
     assert [units for _, _, _, units in reviews] == [2, 8]
+
+
+@pytest.mark.parametrize(
+    "fund_target, threshold, expect_block",
+    [
+        (15.5, 0.1, True),  # Overweight sell and funding sale.
+        (15.5, 2.0, True),  # Below starter threshold, but could fund an equity buy.
+        (16.5, 2.0, False),  # Overweight by less than a unit, so cannot fund a buy.
+        (18.0, 0.1, False),  # The fund is underweight.
+    ],
+)
+def test_redemption_review_shows_restricted_holding_only_when_it_blocks_a_sale(
+    fund_target, threshold, expect_block
+):
+    from types import SimpleNamespace
+    from src.portfolio import build_allocation_snapshot
+    from src.rebalancer import redemption_suggestions
+    from src.redemption import RedemptionLimit
+
+    portfolio = _build_test_portfolio(
+        [
+            {
+                "number": "111", "owner": "Example", "type": "TFSA",
+                "positions": [
+                    {"symbol": "FUND", "qty": 20, "price": 100, "currency": "CAD"},
+                    {"symbol": "EQ", "qty": 10, "price": 100, "currency": "CAD"},
+                ],
+            },
+            {
+                "number": "222", "owner": "Example", "type": "RRSP",
+                "positions": [
+                    {"symbol": "OTHER", "qty": 90, "price": 100, "currency": "CAD"},
+                ],
+            },
+        ]
+    )
+    account = portfolio.accounts[0]
+    account.redemption_limits["FUND"] = RedemptionLimit(0, "24-month hold")
+    targets = {"FUND": fund_target, "EQ": 28 - fund_target, "OTHER": 72}
+    blocked_sales = set()
+    trades = calculate_trades(
+        portfolio, targets, 1, 0, threshold, set(), None, blocked_sales=blocked_sales
+    )
+    assert trades == []
+    report = SimpleNamespace(
+        current=build_allocation_snapshot(portfolio, targets, 1), projected=None
+    )
+    reviews = redemption_suggestions(
+        portfolio, report, 1, threshold, set(), blocked_sales=blocked_sales
+    )
+    assert [symbol for _, symbol, _, _ in reviews] == (["FUND"] if expect_block else [])
+    if threshold == 2 and expect_block:
+        # A funding restriction is irrelevant once the final plan fills the buy.
+        report.projected = SimpleNamespace(drifts={**report.current.drifts, "EQ": 0})
+        assert not redemption_suggestions(
+            portfolio, report, 1, threshold, set(), blocked_sales=blocked_sales
+        )
