@@ -23,6 +23,7 @@ def test_refreshes_with_post_body_and_persists_encrypted_replacement(tmp_path):
             return_value={"refresh_token": "current-token"},
         ),
         patch("src.questrade_client.write_encrypted_json") as write_encrypted,
+        patch("src.questrade_client.sync_state") as publish,
         patch("src.questrade_client.requests.post", return_value=response) as post,
     ):
         client = QuestradeClient(str(token_path), "Alice", {})
@@ -40,6 +41,7 @@ def test_refreshes_with_post_body_and_persists_encrypted_replacement(tmp_path):
         token_path,
         {"refresh_token": "replacement-token"},
     )
+    publish.assert_called_once_with(token_path)
     assert client.access_token == "access-token"
     assert client.refresh_token == "replacement-token"
 

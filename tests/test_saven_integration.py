@@ -231,7 +231,7 @@ def test_missing_savings_stops_sync_before_token_rotation_and_history(tmp_path):
     config = ([], {}, [], 0, {}, 0.1, {}, None, CONFIGS)
     with (
         patch.object(main, "load_config", return_value=config),
-        patch.object(main, "validate_encrypted_state_files"),
+        patch.object(main, "prepare_state"),
         patch.object(external_accounts, "get_data_dir", return_value=tmp_path),
         patch.object(main, "QuestradeClient") as connect,
         patch.object(main, "record_value") as record,
@@ -268,7 +268,7 @@ def test_scheduled_history_and_accuracy_include_savings(tmp_path, capsys):
     )
     with (
         patch.object(main, "load_config", return_value=config),
-        patch.object(main, "validate_encrypted_state_files"),
+        patch.object(main, "prepare_state"),
         patch.object(
             main,
             "load_external_balances",

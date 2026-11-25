@@ -95,6 +95,7 @@ def build_deploy_cash_underweight(
             fee_cad,
             dlr_quotes=dlr_quotes,
         )
+        buying_power += min(0.0, acct_cash[buy_currency])
     else:
         buying_power = source_cash
 

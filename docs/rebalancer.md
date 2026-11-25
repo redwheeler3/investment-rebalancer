@@ -658,47 +658,11 @@ class TradePlan:
 
 The `TradePlan` needs to answer "if we executed all these trades, what would the portfolio look like?" This is how `simulate_rebalance` works:
 
-#### The Core Logic
+#### Valuation and cash funding
 
-```python
-def simulate_rebalance(portfolio, trades, targets, usd_to_cad_rate, hidden_symbols):
-    # Start with current portfolio values
-    projected_holdings_value_cad = {symbol: holding.value_cad for ...}
-    projected_cash_cad = portfolio.cash_cad_total
-    projected_cash_usd = portfolio.cash_usd_total
+Projection values the change in units at the opening mark for that position in its account. Cash changes at the order's bid or ask. Selling every unit removes its entire marked value, with the spread reflected in remaining cash.
 
-    for trade in trades:
-        trade_value_cad = price_in_cad × quantity
-
-        if trade.action == "BUY":
-            projected_holdings_value_cad[symbol] += trade_value_cad
-            # Deduct cash based on funding source
-            if trade.requires_fx:
-                # Deducted from the OTHER currency
-                ...
-            else:
-                # Deducted from same currency
-                ...
-        elif trade.action == "SELL":
-            projected_holdings_value_cad[symbol] -= trade_value_cad
-            # Credit cash in native currency
-            ...
-```
-
-#### The Negative Cash Correction
-
-A subtle but important detail — after applying all trades, cash can go negative due to rounding and estimation differences:
-
-```python
-if projected_cash_cad < 0:
-    projected_cash_usd += projected_cash_cad / usd_to_cad_rate
-    projected_cash_cad = 0
-if projected_cash_usd < 0:
-    projected_cash_cad += projected_cash_usd * usd_to_cad_rate
-    projected_cash_usd = 0
-```
-
-This accounts for the implicit cross-currency flows that happen during FX-funded buys. The projection treats negative cash as "will be covered by the other currency," which matches what actually happens during Norbert's Gambit.
+Each account first nets its own native trade and transfer cash flows. Intermediate projections size the conversion required for that account's shortfall with the available quotes and fee. The final report applies the actual conversion instructions, including whole-share sweeps, before totaling CAD and USD across accounts. An in-flight transfer moves from transit to the destination exactly once.
 
 #### Why This Matters for the Planner
 

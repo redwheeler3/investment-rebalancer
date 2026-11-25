@@ -81,7 +81,7 @@ CAD/USD planning, and Questrade-specific workflow details.
 - **Tolerance-Aware Status Display** — Marks symbols as `OK`, `OVER`, or `UNDER`
 - **Conservative FX Funding** — Uses conservative DLR bid/ask math for Norbert's Gambit sizing
 - **Tactical Defensive Deployment** — Drawdown-based regime system that deploys fixed-income assets into equities during market drops and rebuilds on recovery
-- **Drift & Token Alerting** — GitHub Issues created automatically when accuracy drops below 95% or tokens fail for >48h, auto-closed on recovery (the app emits the accuracy score; the thresholds and issue logic live in the `portfolio_sync.yml` workflow template, where you can tune them)
+- **Drift & Token Alerting** — GitHub Issues created automatically when displayed accuracy is ≤95% or sync fails for more than 48 hours, auto-closed on recovery (the app emits the accuracy score; the thresholds and issue logic live in the `portfolio_sync.yml` workflow template, where you can tune them)
 - **Automatic Portfolio Sync** — Designed to run with GitHub Actions from a private state repo
 
 ---
@@ -632,8 +632,7 @@ python main.py
 ## Private repo GitHub Actions setup
 
 For automation, the app supports a `--sync` mode that refreshes all token files,
-snapshots the current portfolio value, and exits — expecting the surrounding
-workflow to commit and push the updated state.
+publishes each replacement token immediately, and snapshots portfolio value. The workflow publishes remaining encrypted state at the end.
 
 This repo includes **workflow template files** you can copy into your private
 state repo:
@@ -656,7 +655,7 @@ investment-rebalancer-state/
 
 Copy `sops.example.yaml` to `.sops.yaml`, replace its placeholder with your age
 recipient, and add the complete age private identity as a private-repository
-Actions secret named `SOPS_AGE_KEY`. The secret is exposed only to the sync step.
+Actions secret named `SOPS_AGE_KEY`. Only the steps that read and publish encrypted state receive this secret.
 
 Before using `portfolio_sync.yml`, open the copied file and replace:
 
@@ -685,12 +684,10 @@ What each workflow is for:
 1. Checks out the private state repo
 2. Checks out this public code repo into a sibling folder
 3. Installs a checksum-verified, pinned SOPS binary
-4. Sets `REBALANCER_STATE_DIR` and injects the age identity only for the sync step
-5. Validates all existing encrypted state before any token is rotated
-6. Runs `python main.py --sync`, decrypting sensitive state only through process streams
-7. Validates every file under `tokens/` and `data/` again after the sync
-8. Commits verified ciphertext updates even if later sync processing failed, so
-   a successfully rotated token is never stranded in the temporary runner
+4. Configures Git identity and sets `REBALANCER_STATE_DIR` for the sync.
+5. Validates managed paths and SOPS ciphertext and tests each token's encryption recipient before rotation.
+6. After each exchange (including a 401 refresh), saves, commits and pushes just that encrypted token before continuing.
+7. Runs a final encrypted-state sync even after a processing failure. Each outgoing commit is checked before a fast-forward push. Unrelated staged settings stay staged.
 
 The job still reports failure after preserving any valid rotated token, allowing
 the existing alerting to run. The workflow also serializes overlapping scheduled or manually dispatched runs so
@@ -863,6 +860,7 @@ point.
 
 Key fields:
 
+- Brokerage CAD and USD cash always target zero. Omit both keys from settings. External savings accounts have their own targets.
 - `targets` — static target allocations (should sum to ~100% with FX and tactical rules)
 - `accounts` — token filenames, display labels, and optional account-type overrides
 - `fx_target_rules` — exchange-rate-driven target logic (see [FX-derived target allocations](#fx-derived-target-allocations))

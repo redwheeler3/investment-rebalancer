@@ -29,101 +29,6 @@ class CurrencyConversion:
     fee: float  # Trading fee in CAD
 
 
-def _build_account_map(accounts: list) -> dict:
-    """Return accounts keyed by account number."""
-    return {acct.number: acct for acct in accounts}
-
-
-def _build_cad_to_usd_conversion(
-    acct_num: str,
-    acct,
-    net_cash,
-    usd_to_cad_rate: float,
-    cad_buy_price: float,
-    usd_sell_price: float,
-    fee_cad: float,
-) -> CurrencyConversion | None:
-    """Build a CAD->USD conversion instruction when USD is short."""
-    if net_cash.usd >= -0.01 or net_cash.cad <= 0.01:
-        return None
-
-    usd_shortfall = abs(net_cash.usd)
-    if cad_buy_price > 0 and usd_sell_price > 0:
-        shares_needed = math.ceil(usd_shortfall / usd_sell_price)
-        shares_affordable = math.floor(max(0.0, net_cash.cad - fee_cad) / cad_buy_price)
-        dlr_shares = min(shares_needed, shares_affordable)
-    else:
-        dlr_shares = 0
-
-    if dlr_shares <= 0:
-        return None
-
-    actual_usd = (
-        dlr_shares * usd_sell_price
-        if usd_sell_price > 0
-        else (dlr_shares * cad_buy_price) / usd_to_cad_rate
-        if usd_to_cad_rate > 0
-        else 0.0
-    )
-
-    return CurrencyConversion(
-        account_number=acct_num,
-        account_type=acct.account_type,
-        owner=acct.owner,
-        direction="CAD_TO_USD",
-        source_amount=dlr_shares * cad_buy_price,
-        target_amount=actual_usd,
-        dlr_symbol="DLR.TO",
-        dlr_shares=dlr_shares,
-        dlr_price=cad_buy_price,
-        fee=fee_cad,
-    )
-
-
-def _build_usd_to_cad_conversion(
-    acct_num: str,
-    acct,
-    net_cash,
-    usd_to_cad_rate: float,
-    usd_buy_price: float,
-    cad_sell_price: float,
-    fee_cad: float,
-) -> CurrencyConversion | None:
-    """Build a USD->CAD conversion instruction when CAD is short."""
-    if net_cash.cad >= -0.01 or net_cash.usd <= 0.01:
-        return None
-
-    cad_shortfall = abs(net_cash.cad)
-    if usd_buy_price > 0 and cad_sell_price > 0:
-        shares_needed = math.ceil((cad_shortfall + fee_cad) / cad_sell_price)
-        shares_affordable = math.floor(net_cash.usd / usd_buy_price)
-        dlr_shares = min(shares_needed, shares_affordable)
-    else:
-        dlr_shares = 0
-
-    if dlr_shares <= 0:
-        return None
-
-    actual_cad = (
-        dlr_shares * cad_sell_price
-        if cad_sell_price > 0
-        else (dlr_shares * usd_buy_price * usd_to_cad_rate)
-    )
-
-    return CurrencyConversion(
-        account_number=acct_num,
-        account_type=acct.account_type,
-        owner=acct.owner,
-        direction="USD_TO_CAD",
-        source_amount=dlr_shares * usd_buy_price,
-        target_amount=actual_cad,
-        dlr_symbol="DLR.U.TO",
-        dlr_shares=dlr_shares,
-        dlr_price=usd_buy_price,
-        fee=fee_cad,
-    )
-
-
 def _positive_target_currency_homes(acct, trades: list, targets: dict) -> set:
     """Return the currencies in which an account has a deployable home.
 
@@ -188,170 +93,48 @@ def calculate_currency_needs(
     if dlr_quotes is None:
         raise RuntimeError("DLR quotes are required for currency conversion planning.")
 
-    cad_buy_price = dlr_quotes.cad_buy_price
-    cad_sell_price = dlr_quotes.cad_sell_price
-    usd_buy_price = dlr_quotes.usd_buy_price
-    usd_sell_price = dlr_quotes.usd_sell_price
-
-    acct_map = _build_account_map(accounts)
-    account_impact = build_account_trade_impacts(trades)
-
+    impacts = build_account_trade_impacts(trades)
     conversions = []
-
-    for acct_num, impact in account_impact.items():
-        acct = acct_map.get(acct_num)
-        if not acct:
-            continue
-
-        net_cash = net_account_cash(acct, impact)
-
-        required_conversion = _build_cad_to_usd_conversion(
-            acct_num,
-            acct,
-            net_cash,
-            usd_to_cad_rate,
-            cad_buy_price,
-            usd_sell_price,
-            norberts_gambit_fee_cad,
-        )
-        if required_conversion is None:
-            required_conversion = _build_usd_to_cad_conversion(
-                acct_num,
-                acct,
-                net_cash,
-                usd_to_cad_rate,
-                usd_buy_price,
-                cad_sell_price,
-                norberts_gambit_fee_cad,
-            )
-
-        if required_conversion is not None:
-            conversions.append(required_conversion)
-
-    # ── Sweep: convert stranded foreign cash into the account's home currency ──
-    # Cash is "stranded" when it sits in a currency the rebalancer cannot
-    # deploy — i.e. the account holds no post-trade position in that currency
-    # with a positive target. The sweep converts it into the account's *home*
-    # currency: the one currency in which the account does have such a position.
-    #
-    # Only accounts with exactly one home currency are swept:
-    #   - Two homes (a genuinely mixed account with real targets on both sides):
-    #     foreign cash is deployable same-currency by the rebalancer, so
-    #     converting it here would cause an unnecessary round-trip.
-    #   - Zero homes (only cash and/or target-0 wind-down positions): neither
-    #     currency has a deployable home, so a conversion would strand the cash
-    #     just as thoroughly in the other currency.
-    # This subsumes the old single-currency-account rule while also rescuing
-    # foreign cash — including the proceeds of a target-0 wind-down — in mixed
-    # accounts whose stranded side has no positive-target position.
     for acct in accounts:
+        funds = net_account_cash(acct, impacts.get(acct.number))
         homes = _positive_target_currency_homes(acct, trades, targets)
-        if len(homes) != 1:
-            continue  # See note above: only an unambiguous single home is swept.
-
-        position_currency = next(iter(homes))
-
-        # Remaining cash after trades
-        impact = account_impact.get(acct.number)
-        remaining_cash = net_account_cash(acct, impact)
-        remaining_cad = remaining_cash.cad
-        remaining_usd = remaining_cash.usd
-
-        # Subtract cash already allocated to first-pass conversions
-        existing_conv = None
-        for conv in conversions:
-            if conv.account_number != acct.number:
-                continue
-            if conv.direction == "CAD_TO_USD":
-                remaining_cad -= conv.source_amount + conv.fee
-                if position_currency == "USD":
-                    existing_conv = conv
-            elif conv.direction == "USD_TO_CAD":
-                remaining_usd -= conv.source_amount
-                if position_currency == "CAD":
-                    existing_conv = conv
-
-        if (
-            position_currency == "USD"
-            and remaining_cad > norberts_gambit_fee_cad
-            and cad_buy_price > 0
+        # A deficit takes precedence. Sweep the entire available source when
+        # the destination is the only currency this account can deploy.
+        if funds.cad > 0 and (funds.usd < -0.005 or homes == {"USD"}):
+            direction, symbol = "CAD_TO_USD", "DLR.TO"
+            ask, bid = dlr_quotes.cad_buy_price, dlr_quotes.usd_sell_price
+            source = max(0.0, funds.cad - norberts_gambit_fee_cad)
+            needed = max(0.0, -funds.usd)
+            sweep = homes == {"USD"}
+        elif funds.usd > 0 and (funds.cad < -0.005 or homes == {"CAD"}):
+            direction, symbol = "USD_TO_CAD", "DLR.U.TO"
+            ask, bid = dlr_quotes.usd_buy_price, dlr_quotes.cad_sell_price
+            source = funds.usd
+            needed = max(0.0, -funds.cad) + norberts_gambit_fee_cad
+            sweep = homes == {"CAD"}
+        else:
+            continue
+        if ask <= 0 or bid <= 0:
+            continue
+        shares = math.floor(source / ask + 1e-10)
+        if not sweep:
+            shares = min(shares, math.ceil(needed / bid))
+        if shares <= 0 or (
+            direction == "USD_TO_CAD" and shares * bid <= norberts_gambit_fee_cad
         ):
-            # Sweep remaining CAD → USD, keep fee in account for journal
-            cad_for_shares = remaining_cad - norberts_gambit_fee_cad
-            sweep_shares = math.floor(cad_for_shares / cad_buy_price)
-            if sweep_shares > 0:
-                if existing_conv:
-                    # Augment existing conversion (same journal, no extra fee)
-                    existing_conv.dlr_shares += sweep_shares
-                    existing_conv.source_amount = (
-                        existing_conv.dlr_shares * existing_conv.dlr_price
-                    )
-                    if existing_conv.direction == "CAD_TO_USD":
-                        existing_conv.target_amount = (
-                            existing_conv.dlr_shares * usd_sell_price
-                            if usd_sell_price > 0
-                            else existing_conv.source_amount / usd_to_cad_rate
-                            if usd_to_cad_rate > 0
-                            else 0.0
-                        )
-                else:
-                    conversions.append(
-                        CurrencyConversion(
-                            account_number=acct.number,
-                            account_type=acct.account_type,
-                            owner=acct.owner,
-                            direction="CAD_TO_USD",
-                            source_amount=sweep_shares * cad_buy_price,
-                            target_amount=(
-                                sweep_shares * usd_sell_price
-                                if usd_sell_price > 0
-                                else (sweep_shares * cad_buy_price) / usd_to_cad_rate
-                                if usd_to_cad_rate > 0
-                                else 0.0
-                            ),
-                            dlr_symbol="DLR.TO",
-                            dlr_shares=sweep_shares,
-                            dlr_price=cad_buy_price,
-                            fee=norberts_gambit_fee_cad,
-                        )
-                    )
-
-        elif position_currency == "CAD" and usd_buy_price > 0 and cad_sell_price > 0:
-            fee_in_usd = norberts_gambit_fee_cad / usd_to_cad_rate
-            if remaining_usd > fee_in_usd:
-                # Sweep remaining USD → CAD, keep fee-equivalent in account
-                usd_for_shares = remaining_usd - fee_in_usd
-                sweep_shares = math.floor(usd_for_shares / usd_buy_price)
-                if sweep_shares > 0:
-                    if existing_conv:
-                        existing_conv.dlr_shares += sweep_shares
-                        existing_conv.source_amount = (
-                            existing_conv.dlr_shares * existing_conv.dlr_price
-                        )
-                        if existing_conv.direction == "USD_TO_CAD":
-                            existing_conv.target_amount = (
-                                existing_conv.dlr_shares * cad_sell_price
-                                if cad_sell_price > 0
-                                else existing_conv.source_amount * usd_to_cad_rate
-                            )
-                    else:
-                        conversions.append(
-                            CurrencyConversion(
-                                account_number=acct.number,
-                                account_type=acct.account_type,
-                                owner=acct.owner,
-                                direction="USD_TO_CAD",
-                                source_amount=sweep_shares * usd_buy_price,
-                                target_amount=(
-                                    sweep_shares * cad_sell_price
-                                    if cad_sell_price > 0
-                                    else sweep_shares * usd_buy_price * usd_to_cad_rate
-                                ),
-                                dlr_symbol="DLR.U.TO",
-                                dlr_shares=sweep_shares,
-                                dlr_price=usd_buy_price,
-                                fee=norberts_gambit_fee_cad,
-                            )
-                        )
-
+            continue
+        conversions.append(
+            CurrencyConversion(
+                account_number=acct.number,
+                account_type=acct.account_type,
+                owner=acct.owner,
+                direction=direction,
+                source_amount=shares * ask,
+                target_amount=shares * bid,
+                dlr_symbol=symbol,
+                dlr_shares=shares,
+                dlr_price=ask,
+                fee=norberts_gambit_fee_cad,
+            )
+        )
     return conversions

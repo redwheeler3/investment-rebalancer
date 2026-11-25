@@ -1,7 +1,7 @@
 """Shared data types and constants used across the rebalancer."""
 
 from dataclasses import dataclass
-from datetime import date, datetime
+from datetime import date, datetime, tzinfo
 from decimal import Decimal
 
 
@@ -34,6 +34,7 @@ class ExternalExport:
     source_sha256: str
     source_modified_at: datetime
     transactions: tuple[ExternalTransaction, ...]
+    statement_timezone: tzinfo  # Civil timezone used for date-only ledger rows.
 
     def as_snapshot(self) -> dict:
         return {

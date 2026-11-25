@@ -178,34 +178,22 @@ def consume_cross_currency_cash(
     dlr_quotes=None,
 ) -> None:
     """Apply a cross-currency buy to a cash map conservatively."""
-    if source_currency == "CAD" and target_currency == "USD":
-        spent_cad, received_usd = cad_to_usd_conversion_for_target(
-            cash_by_currency.get("CAD", 0.0),
-            cost_native,
-            usd_to_cad_rate,
-            fee_cad,
-            dlr_quotes=dlr_quotes,
+    if (source_currency, target_currency) == ("CAD", "USD"):
+        convert = cad_to_usd_conversion_for_target
+    elif (source_currency, target_currency) == ("USD", "CAD"):
+        convert = usd_to_cad_conversion_for_target
+    else:
+        raise ValueError(
+            f"Unsupported conversion path: {source_currency} -> {target_currency}"
         )
-        cash_by_currency["CAD"] = max(0.0, cash_by_currency.get("CAD", 0.0) - spent_cad)
-        cash_by_currency["USD"] = max(
-            0.0, cash_by_currency.get("USD", 0.0) + received_usd - cost_native
-        )
-        return
 
-    if source_currency == "USD" and target_currency == "CAD":
-        spent_usd, received_cad = usd_to_cad_conversion_for_target(
-            cash_by_currency.get("USD", 0.0),
-            cost_native,
-            usd_to_cad_rate,
-            fee_cad,
-            dlr_quotes=dlr_quotes,
-        )
-        cash_by_currency["USD"] = max(0.0, cash_by_currency.get("USD", 0.0) - spent_usd)
-        cash_by_currency["CAD"] = max(
-            0.0, cash_by_currency.get("CAD", 0.0) + received_cad - cost_native
-        )
-        return
-
-    raise ValueError(
-        f"Unsupported conversion path: {source_currency} -> {target_currency}"
+    debit = max(0.0, -cash_by_currency[target_currency])
+    spent, received = convert(
+        cash_by_currency[source_currency],
+        cost_native + debit,
+        usd_to_cad_rate,
+        fee_cad,
+        dlr_quotes,
     )
+    cash_by_currency[source_currency] -= spent
+    cash_by_currency[target_currency] += received - cost_native

@@ -9,7 +9,12 @@ from pathlib import Path
 
 import requests
 
-from src.encrypted_state import read_encrypted_json, write_encrypted_json
+from src.encrypted_state import (
+    EncryptedStateError,
+    read_encrypted_json,
+    write_encrypted_json,
+)
+from src.state_sync import StateSyncError, sync_state
 
 QUESTRADE_AUTH_URL = "https://login.questrade.com/oauth2/token"
 GET_RETRY_DELAYS_SECONDS = (0.5, 1.0)
@@ -61,16 +66,20 @@ class QuestradeClient:
         resp.raise_for_status()
         token_data = resp.json()
 
+        replacement = token_data.get("refresh_token")
+        if not isinstance(replacement, str) or not replacement.strip():
+            raise StateSyncError("Questrade did not return a usable replacement token.")
+        self.refresh_token = replacement
+        try:
+            write_encrypted_json(self.token_path, {"refresh_token": replacement})
+            sync_state(self.token_path)
+        except (EncryptedStateError, OSError) as exc:
+            raise StateSyncError(
+                "Token rotated but its persistence or publication failed. "
+                "Verify private state before any further refresh."
+            ) from exc
         self.access_token = token_data["access_token"]
         self.api_server = token_data["api_server"]
-        self.refresh_token = token_data["refresh_token"]
-
-        # Save the new refresh token back to file
-        self._save_refresh_token()
-
-    def _save_refresh_token(self):
-        """Persist the new refresh token atomically as SOPS ciphertext."""
-        write_encrypted_json(self.token_path, {"refresh_token": self.refresh_token})
 
     def _headers(self) -> dict:
         """Return authorization headers for API requests."""
@@ -149,7 +158,10 @@ class QuestradeClient:
             List of account dictionaries with keys like 'number', 'type', 'status'.
         """
         data = self._get("v1/accounts")
-        return data.get("accounts", [])
+        rows = data["accounts"]
+        if not isinstance(rows, list) or not rows:
+            raise ValueError("Invalid accounts response from Questrade.")
+        return rows
 
     def get_positions(self, account_id: str) -> list:
         """
@@ -162,7 +174,10 @@ class QuestradeClient:
             List of position dictionaries.
         """
         data = self._get(f"v1/accounts/{account_id}/positions")
-        return data.get("positions", [])
+        rows = data["positions"]
+        if not isinstance(rows, list):
+            raise ValueError("Invalid positions response from Questrade.")
+        return rows
 
     def get_balances(self, account_id: str) -> dict:
         """

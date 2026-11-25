@@ -122,7 +122,7 @@ reliably distinguish those possibilities.
 
 ## Lifecycle and saved state
 
-The original cap survives repeated reports and partial movements. Unused intent
+The original cap survives repeated reports and partial movements. A receipt awaiting its source statement consumes that much of the cap when sizing new instructions. Late statement rows dated before intent advance the bank balance and observation counters without becoming principal for that recommendation. The adapter supplies the statement timezone for this comparison. Unused intent
 is dropped if the local plan drops it, or replaced if its direction changes. A
 partly settled cycle retains its remaining cap even when residual drift falls
 below tolerance. That allowance is internal bookkeeping, not an asset/display row.

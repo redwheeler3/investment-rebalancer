@@ -72,6 +72,7 @@ def read_example(path, identifier=None):
         hashlib.sha256(raw).hexdigest(),
         datetime.fromtimestamp(path.stat().st_mtime, UTC),
         tuple(rows),
+        UTC,
     )
 
 

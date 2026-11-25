@@ -6,6 +6,7 @@ builds a unified portfolio view, calculates allocation percentages and drift,
 and projects what the portfolio would look like after a set of trades.
 """
 
+import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -13,6 +14,13 @@ import requests
 
 from src.encrypted_state import read_encrypted_json, write_encrypted_json
 from src.paths import get_data_dir
+from src.fx_math import (
+    build_account_trade_impacts,
+    net_account_cash,
+    cad_to_usd_conversion_for_target,
+    usd_to_cad_conversion_for_target,
+    to_cad,
+)
 from src.models import TransferProgress
 from src.redemption import RedemptionLimit, account_redemption_limits
 
@@ -20,6 +28,13 @@ from src.redemption import RedemptionLimit, account_redemption_limits
 def _coerce_numeric(value, default: float = 0.0) -> float:
     """Convert an API field to float, defaulting to 0.0 for None."""
     return float(value) if value is not None else default
+
+
+def _required_amount(row, key):
+    value = row.get(key)
+    if isinstance(value, bool) or value is None or not math.isfinite(float(value)):
+        raise ValueError(f"Missing or invalid broker amount: {key}.")
+    return float(value)
 
 
 def _normalize_currency(value) -> str | None:
@@ -135,7 +150,9 @@ class AllocationSnapshot:
     accuracy: float
 
 
-def build_portfolio(clients: list, usd_to_cad_rate: float, redemption_rules=None) -> PortfolioSummary:
+def build_portfolio(
+    clients: list, usd_to_cad_rate: float, redemption_rules=None
+) -> PortfolioSummary:
     """
     Build a unified portfolio from multiple Questrade client connections.
 
@@ -158,12 +175,15 @@ def build_portfolio(clients: list, usd_to_cad_rate: float, redemption_rules=None
 
     lot_path = None
     saved_lots = {}
-    if redemption_rules and any(rule.minimum_months for rule in redemption_rules.values()):
+    if redemption_rules and any(
+        rule.minimum_months for rule in redemption_rules.values()
+    ):
         lot_path = get_data_dir() / "redemption_lots.json"
         if lot_path.exists():
             saved_lots = read_encrypted_json(lot_path)
     updated_lots = dict(saved_lots)
 
+    account_numbers = set()
     for client in clients:
         accounts = client.get_accounts()
 
@@ -171,6 +191,9 @@ def build_portfolio(clients: list, usd_to_cad_rate: float, redemption_rules=None
         symbol_ids = set()
         for acct in accounts:
             acct_number = acct["number"]
+            if acct_number in account_numbers:
+                raise ValueError("A brokerage account appears more than once.")
+            account_numbers.add(acct_number)
             raw_positions = client.get_positions(acct_number)
             raw_positions_by_account[acct_number] = raw_positions
             for pos in raw_positions:
@@ -203,15 +226,17 @@ def build_portfolio(clients: list, usd_to_cad_rate: float, redemption_rules=None
 
             # Get balances
             balances_data = client.get_balances(acct_number)
-            cash_cad = 0.0
-            cash_usd = 0.0
-
-            # Questrade returns combinedBalances with per-currency entries
-            for bal in balances_data.get("perCurrencyBalances", []):
-                if bal["currency"] == "CAD":
-                    cash_cad = _coerce_numeric(bal.get("cash", 0.0))
-                elif bal["currency"] == "USD":
-                    cash_usd = _coerce_numeric(bal.get("cash", 0.0))
+            balances = balances_data["perCurrencyBalances"]
+            if not isinstance(balances, list) or not balances:
+                raise ValueError("Missing per-currency balances.")
+            cash = {}
+            for bal in balances:
+                currency = bal["currency"]
+                amount = _required_amount(bal, "cash")
+                if currency in cash or (currency not in {"CAD", "USD"} and amount):
+                    raise ValueError("Duplicate or unsupported broker cash currency.")
+                cash[currency] = amount
+            cash_cad, cash_usd = cash.get("CAD", 0.0), cash.get("USD", 0.0)
 
             # Get positions
             raw_positions = raw_positions_by_account.get(acct_number, [])
@@ -219,14 +244,15 @@ def build_portfolio(clients: list, usd_to_cad_rate: float, redemption_rules=None
 
             for pos in raw_positions:
                 symbol = pos.get("symbol") or ""
-                quantity = _coerce_numeric(pos.get("openQuantity", 0))
-                market_value = _coerce_numeric(pos.get("currentMarketValue", 0.0))
-                current_price = _coerce_numeric(pos.get("currentPrice", 0.0))
+                quantity = _required_amount(pos, "openQuantity")
+                if quantity == 0 and pos.get("currentMarketValue") in (0, None):
+                    continue
+                market_value = _required_amount(pos, "currentMarketValue")
+                current_price = _required_amount(pos, "currentPrice")
+                if not symbol:
+                    raise ValueError("Missing symbol for a broker position.")
                 symbol_id = int(_coerce_numeric(pos.get("symbolId", 0), default=0.0))
                 avg_cost = _coerce_numeric(pos.get("averageEntryPrice", 0.0))
-
-                if quantity == 0 and market_value == 0:
-                    continue
 
                 currency = _resolve_position_currency(
                     pos,
@@ -605,73 +631,75 @@ def simulate_rebalance(
     targets: dict,
     usd_to_cad_rate: float,
     hidden_symbols: set | None = None,
+    *,
+    conversions=None,
+    dlr_quotes=None,
+    fee_cad: float = 0.0,
 ) -> AllocationSnapshot:
     """Project what the portfolio allocation would look like after applying trades."""
     projected_holdings_value_cad = {
         symbol: holding.value_cad for symbol, holding in portfolio.holdings.items()
     }
-    projected_cash_cad = portfolio.cash_cad_total
-    projected_cash_usd = portfolio.cash_usd_total
+    impacts = build_account_trade_impacts(trades)
+    cash = {
+        acct.number: net_account_cash(acct, impacts.get(acct.number))
+        for acct in portfolio.accounts
+    }
+    if conversions is None:
+        # Intermediate rounds fund only the shortfall in the account placing the order.
+        for number in impacts:
+            funds = cash[number]
+            if funds.usd < 0 and funds.cad > 0:
+                spent, received = cad_to_usd_conversion_for_target(
+                    funds.cad, -funds.usd, usd_to_cad_rate, fee_cad, dlr_quotes
+                )
+                funds.cad -= spent
+                funds.usd += received
+            elif funds.cad < 0 and funds.usd > 0:
+                spent, received = usd_to_cad_conversion_for_target(
+                    funds.usd, -funds.cad, usd_to_cad_rate, fee_cad, dlr_quotes
+                )
+                funds.usd -= spent
+                funds.cad += received
+    else:
+        # The final report also includes whole-share sweeps of stranded currency.
+        for conversion in conversions:
+            funds = cash[conversion.account_number]
+            if conversion.direction == "CAD_TO_USD":
+                funds.cad -= conversion.source_amount + conversion.fee
+                funds.usd += conversion.target_amount
+            else:
+                funds.usd -= conversion.source_amount
+                funds.cad += conversion.target_amount - conversion.fee
+    projected_cash_cad = sum(f.cad for f in cash.values())
+    projected_cash_usd = sum(f.usd for f in cash.values())
 
-    if hidden_symbols is None:
-        hidden_symbols = set()
-
+    marks = {
+        (acct.number, p.symbol): p.market_value / p.quantity
+        for acct in portfolio.accounts
+        for p in acct.positions
+        if p.quantity
+    }
     for trade in trades:
         if trade.action in {"DEPOSIT", "WITHDRAW"}:
             if trade.in_progress:
-                # The source has already lost this money. Move the transit asset
-                # to its destination without debiting the source a second time.
-                transit_symbol = f"TRANSIT:{trade.symbol}"
-                projected_holdings_value_cad[transit_symbol] -= trade.amount_cad
+                projected_holdings_value_cad[f"TRANSIT:{trade.symbol}"] -= (
+                    trade.amount_cad
+                )
                 if trade.action == "DEPOSIT":
                     projected_holdings_value_cad[trade.symbol] += trade.amount_cad
-                else:
-                    projected_cash_cad += trade.amount_cad
-                continue
-            movement = (
-                trade.amount_cad if trade.action == "DEPOSIT" else -trade.amount_cad
-            )
-            projected_holdings_value_cad[trade.symbol] += movement
-            if trade.requires_fx:
-                projected_cash_usd -= movement / usd_to_cad_rate
             else:
-                projected_cash_cad -= movement
+                movement = (
+                    trade.amount_cad if trade.action == "DEPOSIT" else -trade.amount_cad
+                )
+                projected_holdings_value_cad[trade.symbol] += movement
             continue
-        trade_price_cad = (
-            trade.price * usd_to_cad_rate if trade.currency == "USD" else trade.price
-        )
-        trade_value_cad = trade_price_cad * trade.quantity
-
-        if trade.action == "BUY":
-            projected_holdings_value_cad[trade.symbol] = (
-                projected_holdings_value_cad.get(trade.symbol, 0.0) + trade_value_cad
-            )
-            if trade.requires_fx:
-                # Funded by converting the other currency
-                if trade.currency == "USD":
-                    projected_cash_cad -= trade.estimated_value * usd_to_cad_rate
-                else:
-                    projected_cash_usd -= trade.estimated_value / usd_to_cad_rate
-            else:
-                if trade.currency == "CAD":
-                    projected_cash_cad -= trade.estimated_value
-                else:
-                    projected_cash_usd -= trade.estimated_value
-        elif trade.action == "SELL":
-            projected_holdings_value_cad[trade.symbol] = (
-                projected_holdings_value_cad.get(trade.symbol, 0.0) - trade_value_cad
-            )
-            if trade.currency == "CAD":
-                projected_cash_cad += trade.estimated_value
-            else:
-                projected_cash_usd += trade.estimated_value
-
-    if projected_cash_cad < 0:
-        projected_cash_usd += projected_cash_cad / usd_to_cad_rate
-        projected_cash_cad = 0
-    if projected_cash_usd < 0:
-        projected_cash_cad += projected_cash_usd * usd_to_cad_rate
-        projected_cash_usd = 0
+        # Units change at their opening valuation; cash changes at bid or ask.
+        mark = marks.get((trade.account_number, trade.symbol), trade.price)
+        units = trade.quantity if trade.action == "BUY" else -trade.quantity
+        projected_holdings_value_cad[trade.symbol] = projected_holdings_value_cad.get(
+            trade.symbol, 0.0
+        ) + to_cad(units * mark, trade.currency, usd_to_cad_rate)
 
     projected_total_value_cad = projected_cash_cad + (
         projected_cash_usd * usd_to_cad_rate

@@ -282,6 +282,15 @@ class TransferLedger:
             )
         running = prior["balance"]
         incoming = outgoing = 0
+        prior_in = prior_out = 0
+        cycle = record["cycle"]
+        started = (
+            datetime.fromisoformat(cycle["started_at"])
+            .astimezone(exported.statement_timezone)
+            .date()
+            if cycle
+            else None
+        )
         # Walk chronologically. Balance differences establish the sign even when
         # an adapter's amount is unsigned. Validate the whole chain before saving.
         for row in reversed(new_rows):
@@ -292,6 +301,9 @@ class TransferLedger:
                     "External statements must include continuous activity since the tracked balance."
                 )
             if row.is_transfer:
+                if started and row.date < started:
+                    prior_in += max(0, change)
+                    prior_out += max(0, -change)
                 if change > 0:
                     incoming += change
                 else:
@@ -302,6 +314,12 @@ class TransferLedger:
                 "External statement does not reconcile the tracked balance."
             )
         record["bank"] = current
+        # Historical movements advance lifetime totals and the cycle baseline equally.
+        if cycle:
+            if cycle["action"] == "WITHDRAW":
+                cycle["source_start"] += prior_out
+            else:
+                cycle["received_start"] += prior_in
         record["bank_in"] += incoming
         record["bank_out"] += outgoing
 

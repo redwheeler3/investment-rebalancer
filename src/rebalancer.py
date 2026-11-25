@@ -188,6 +188,8 @@ class TradePlan:
     targets: dict[str, float]
     usd_to_cad_rate: float
     hidden_symbols: set[str]
+    fee_cad: float
+    dlr_quotes: object | None
     trades: list[TradeRecommendation | TransferRecommendation] = field(
         default_factory=list
     )
@@ -213,6 +215,8 @@ class TradePlan:
                 self.targets,
                 self.usd_to_cad_rate,
                 hidden_symbols=self.hidden_symbols,
+                fee_cad=self.fee_cad,
+                dlr_quotes=self.dlr_quotes,
             )
         return self._snapshot_cache
 
@@ -262,7 +266,7 @@ class CashLedger:
     def total_buying_power(
         self, account_number: str, buy_currency: str, dlr_quotes=None
     ) -> float:
-        native = self.cash(account_number, buy_currency)
+        native = self.balances[account_number][buy_currency]
         source_currency = "CAD" if buy_currency == "USD" else "USD"
         convertible = cross_currency_buying_power(
             self.cash(account_number, source_currency),
@@ -271,7 +275,7 @@ class CashLedger:
             self.fee_cad,
             dlr_quotes=dlr_quotes,
         )
-        return native + convertible
+        return max(0.0, native + convertible)
 
     def credit_sale(
         self, account_number: str, currency: str, proceeds_native: float
@@ -290,7 +294,7 @@ class CashLedger:
             return False
 
         remainder_native = cost_native - native_cash
-        self.balances[account_number][currency] = 0.0
+        self.balances[account_number][currency] -= native_cash
         source_currency = "CAD" if currency == "USD" else "USD"
         consume_cross_currency_cash(
             self.balances[account_number],
@@ -350,6 +354,8 @@ class RebalancePlanner:
             targets=self.targets,
             usd_to_cad_rate=self.usd_to_cad_rate,
             hidden_symbols=self.hidden_symbols,
+            fee_cad=self.fee_cad,
+            dlr_quotes=self.dlr_quotes,
         )
         self.ledger = CashLedger.from_portfolio(
             self.portfolio,
@@ -410,7 +416,9 @@ class RebalancePlanner:
                 None,
             )
             if progress is not None:
-                unsettled = progress.in_transit_cad > 0 or progress.source_offset_cad > 0
+                unsettled = (
+                    progress.in_transit_cad > 0 or progress.source_offset_cad > 0
+                )
                 if unsettled and action != progress.action:
                     # Finish the observed movement before recommending a reversal.
                     continue
@@ -437,7 +445,7 @@ class RebalancePlanner:
                             max(
                                 0.0,
                                 progress.recommended_cad
-                                - progress.source_cad
+                                - (progress.source_cad + progress.source_offset_cad)
                                 - planned,
                             ),
                             2,
@@ -801,7 +809,10 @@ class RebalancePlanner:
         """
         score = 0.0
         for acct in self.portfolio.accounts:
-            if acct.number == current_account_number or symbol in acct.redemption_limits:
+            if (
+                acct.number == current_account_number
+                or symbol in acct.redemption_limits
+            ):
                 continue
             if not any(p.symbol == symbol and p.quantity > 0 for p in acct.positions):
                 continue
@@ -883,15 +894,8 @@ class RebalancePlanner:
         acct,
         currency: str,
         drifts: dict[str, float],
-        *,
-        underweight_only: bool,
     ) -> list[tuple[float, str, float]]:
-        """Return account-local buyable symbols sorted by lowest drift first.
-
-        When ``underweight_only`` is false, this becomes the cash-minimizing
-        fallback that prefers the symbol most likely to trigger useful downstream
-        rebalancing (highest cascade score), breaking ties by lowest drift.
-        """
+        """Rank residual buys by cascade potential, then by household drift."""
         candidates = []
         seen = set()
 
@@ -904,7 +908,7 @@ class RebalancePlanner:
                 continue
 
             drift_pct = drifts.get(pos.symbol, 0.0)
-            if (underweight_only or pos.symbol in acct.redemption_limits) and drift_pct >= 0:
+            if pos.symbol in acct.redemption_limits and drift_pct >= 0:
                 continue
 
             holding = self.holdings_view.get(pos.symbol)
@@ -918,15 +922,12 @@ class RebalancePlanner:
             seen.add(pos.symbol)
             candidates.append((drift_pct, pos.symbol, ask_price_native))
 
-        if underweight_only:
-            candidates.sort(key=lambda item: item[0])
-        else:
-            candidates.sort(
-                key=lambda item: (
-                    -self._cascade_score(item[1], acct.number, drifts),
-                    item[0],
-                )
+        candidates.sort(
+            key=lambda item: (
+                -self._cascade_score(item[1], acct.number, drifts),
+                item[0],
             )
+        )
         return candidates
 
     def _build_deploy_cash_any(
@@ -970,6 +971,7 @@ class RebalancePlanner:
             self.fee_cad,
             dlr_quotes=self.dlr_quotes,
         )
+        cross_cash += min(0.0, self.ledger.balances[acct.number][other_currency])
         same = self._top_buyable_candidate(acct, source_currency, drifts, source_cash)
         cross = self._top_buyable_candidate(acct, other_currency, drifts, cross_cash)
 
@@ -1031,9 +1033,7 @@ class RebalancePlanner:
         The budget is in the buy currency. Skip unaffordable holdings without
         changing the cascade/drift ranking of the remaining candidates.
         """
-        candidates = self._account_buyable_candidates(
-            acct, currency, drifts, underweight_only=False
-        )
+        candidates = self._account_buyable_candidates(acct, currency, drifts)
         for _drift_pct, symbol, ask_price_native in candidates:
             if math.floor(available_cash / ask_price_native) <= 0:
                 continue

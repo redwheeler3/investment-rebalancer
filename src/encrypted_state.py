@@ -21,9 +21,10 @@ class EncryptedStateError(RuntimeError):
     """Raised when sensitive state cannot be decrypted or encrypted safely."""
 
 
-def read_encrypted_json(path: Path) -> dict:
+def read_encrypted_json(path: Path, *, ciphertext: bytes | None = None) -> dict:
     """Decrypt and parse a SOPS-encrypted JSON object without plaintext files."""
-    plaintext = _run_sops("decrypt", path, path.read_bytes(), "json")
+    content = path.read_bytes() if ciphertext is None else ciphertext
+    plaintext = _run_sops("decrypt", path, content, "json")
     try:
         value = json.loads(plaintext.decode("utf-8"))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -41,9 +42,10 @@ def write_encrypted_json(path: Path, value: dict) -> None:
     _write_encrypted(path, plaintext, "json")
 
 
-def read_encrypted_text(path: Path) -> str:
+def read_encrypted_text(path: Path, *, ciphertext: bytes | None = None) -> str:
     """Decrypt a SOPS binary document into UTF-8 text in memory."""
-    plaintext = _run_sops("decrypt", path, path.read_bytes(), "binary")
+    content = path.read_bytes() if ciphertext is None else ciphertext
+    plaintext = _run_sops("decrypt", path, content, "binary")
     try:
         return plaintext.decode("utf-8")
     except UnicodeDecodeError as exc:
@@ -57,18 +59,42 @@ def write_encrypted_text(path: Path, value: str) -> None:
     _write_encrypted(path, value.encode("utf-8"), "binary")
 
 
-def validate_encrypted_state_files() -> list[Path]:
+def validate_encrypted_state_files(token_names=()) -> list[Path]:
     """Decrypt every managed state file in memory, failing on plaintext or corruption."""
     state_root = get_state_root()
-    json_paths = sorted((state_root / "tokens").glob("*.json"))
-    json_paths.extend(sorted((state_root / "data").glob("*.json")))
-    text_paths = sorted((state_root / "data").glob("*.jsonl"))
+    json_paths, text_paths = [], []
+    for directory in ("tokens", "data"):
+        folder = state_root / directory
+        if folder.is_symlink():
+            raise EncryptedStateError(f"Unexpected symlink at '{folder}'.")
+        if not folder.exists():
+            continue
+        for path in sorted(folder.iterdir()):
+            if path.is_symlink() or not path.is_file():
+                raise EncryptedStateError(f"Unexpected managed path '{path}'.")
+            if path.suffix == ".json":
+                json_paths.append(path)
+            elif directory == "data" and path.suffix == ".jsonl":
+                text_paths.append(path)
+            else:
+                raise EncryptedStateError(f"Unexpected managed file '{path}'.")
 
     for path in json_paths:
         read_encrypted_json(path)
     for path in text_paths:
         read_encrypted_text(path)
 
+    # Check the replacement recipient before consuming a single-use token.
+    for name in token_names:
+        path = state_root / "tokens" / name
+        if path not in json_paths:
+            raise EncryptedStateError(f"Missing configured token '{name}'.")
+        probe = b'{"probe":"replacement"}'
+        encrypted = _run_sops("encrypt", path, probe, "json")
+        if json.loads(_run_sops("decrypt", path, encrypted, "json")) != json.loads(
+            probe
+        ):
+            raise EncryptedStateError(f"Cannot round-trip replacement for '{name}'.")
     return json_paths + text_paths
 
 

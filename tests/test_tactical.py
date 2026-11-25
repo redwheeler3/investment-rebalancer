@@ -360,6 +360,8 @@ class TestEvaluatePosture:
         assert posture.regime == "baseline"
         assert posture.transition_occurred is True
         assert posture.previous_regime == "level_1"
+        assert posture.next_deploy_trigger["dollar_value"] == pytest.approx(945000)
+        assert posture.drawdown_from_reference_pct == 0
 
     def test_trigger_info_at_level_1(self, sample_config, tmp_path):
         state_file = tmp_path / "data" / "tactical_state.json"
@@ -399,8 +401,6 @@ class TestEvaluatePosture:
 class TestResolveTargets:
     def test_baseline_preserves_equity(self, sample_config):
         targets = {
-            "CAD": 0.0,
-            "USD": 0.0,
             "VSP.TO": 53.0,
             "IVV": 21.0,
             "XEF.TO": 6.0,
@@ -429,8 +429,6 @@ class TestResolveTargets:
 
     def test_level_1_scales_equity_up(self, sample_config):
         targets = {
-            "CAD": 0.0,
-            "USD": 0.0,
             "VSP.TO": 53.0,
             "IVV": 21.0,
             "XEF.TO": 6.0,
@@ -461,8 +459,6 @@ class TestResolveTargets:
 
     def test_level_3_max_deployment(self, sample_config):
         targets = {
-            "CAD": 0.0,
-            "USD": 0.0,
             "VSP.TO": 53.0,
             "IVV": 21.0,
             "XEF.TO": 6.0,
@@ -486,7 +482,7 @@ class TestResolveTargets:
         total = sum(result.values())
         assert abs(total - 100.0) < 0.01
 
-    def test_preserves_cash_targets(self, sample_config):
+    def test_rejects_cash_targets(self, sample_config):
         targets = {
             "CAD": 1.0,
             "USD": 0.5,
@@ -502,8 +498,23 @@ class TestResolveTargets:
             reference_high_date="2026-01-15",
             drawdown_from_reference_pct=-12.0,
         )
-        result = resolve_tactical_targets(targets, posture, sample_config)
+        with pytest.raises(ValueError, match="Remove brokerage cash"):
+            resolve_tactical_targets(targets, posture, sample_config)
 
-        # Cash targets preserved
-        assert result["CAD"] == 1.0
-        assert result["USD"] == 0.5
+
+def test_configured_fourth_regime_and_recovery():
+    settings = dict(
+        baseline_fixed_pct=20,
+        fixed_composition={"B": 100},
+        deploy_thresholds=[
+            dict(drawdown_pct=-8 * i, fixed_pct=20 - 5 * i) for i in range(1, 5)
+        ],
+        recovery_thresholds=[dict(drawdown_pct=-22, fixed_pct=5)],
+    )
+    cfg = parse_tactical_config(settings)
+    assert _determine_regime("baseline", -32, cfg) == "level_4"
+    assert _fixed_pct_for_regime("level_4", cfg) == 0
+    assert _determine_regime("level_4", -22, cfg) == "level_3"
+    settings["recovery_thresholds"][0]["fixed_pct"] = 7
+    with pytest.raises(ValueError, match="Recovery"):
+        parse_tactical_config(settings)

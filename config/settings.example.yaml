@@ -2,7 +2,7 @@
 # When tactical deployment is active, static + FX-derived equity targets
 # should sum to (100% - baseline_fixed_pct) (the fixed portion is managed by
 # tactical). Without tactical, they should sum to 100%.
-# Cash targets use currency codes (CAD, USD).
+# Brokerage CAD and USD cash always target zero.
 #
 # This file is intentionally public-safe sample data. Replace it with your own
 # real settings in the private state repo's config/settings.yaml.
@@ -36,8 +36,6 @@ external_accounts: {}
 #       account_type: Margin
 
 targets:
-  CAD: 0.0
-  USD: 0.0
   VCN.TO: 20.0
   VUN.TO: 25.0
   XEF.TO: 15.0

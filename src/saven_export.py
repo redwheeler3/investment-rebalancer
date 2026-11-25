@@ -6,6 +6,7 @@ import re
 from datetime import UTC, datetime
 from decimal import Decimal
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from src.models import ExternalExport, ExternalExportNotFound, ExternalTransaction
 
@@ -115,6 +116,7 @@ def read_saven_export(
         last_transaction_date=transactions[0][0],
         source_sha256=hashlib.sha256(raw).hexdigest(),
         source_modified_at=datetime.fromtimestamp(path.stat().st_mtime, UTC),
+        statement_timezone=ZoneInfo("America/Toronto"),
         transactions=tuple(
             ExternalTransaction(
                 transaction_date,

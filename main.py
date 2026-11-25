@@ -9,6 +9,8 @@ Usage:
     python main.py --sync   # Scheduled sync mode: refresh tokens + snapshot portfolio (used by GitHub Actions)
 """
 
+import argparse
+import math
 import os
 import subprocess
 import sys
@@ -24,7 +26,7 @@ if sys.platform == "win32":
         sys.stderr.reconfigure(encoding="utf-8")
 
 from src.display import console, display_full_report
-from src.encrypted_state import EncryptedStateError, validate_encrypted_state_files
+from src.encrypted_state import EncryptedStateError
 from src.external_accounts import (
     ExternalAccountConfig,
     attach_external_balances,
@@ -52,6 +54,7 @@ from src.tactical import (
     parse_tactical_config,
     resolve_tactical_targets,
 )
+from src.state_sync import StateSyncError, prepare_state, sync_state
 from src.transfer_tracking import reconcile_transfer_activity
 
 
@@ -105,6 +108,10 @@ def load_config() -> tuple:
                 f"Account #{index} must define both owner_name and token_file in config/settings.yaml."
             )
 
+        if Path(token_file).name != token_file or not token_file.endswith(".json"):
+            raise ValueError("token_file must be a JSON filename inside tokens/.")
+        if any(a["token_file"].casefold() == token_file.casefold() for a in accounts):
+            raise ValueError("Each login requires a distinct token file.")
         accounts.append(
             {
                 "owner_name": owner_name,
@@ -116,12 +123,39 @@ def load_config() -> tuple:
         )
 
     targets = data.get("targets", {})
+    for symbol, weight in targets.items():
+        if symbol in {"CAD", "USD"}:
+            raise ValueError(
+                f"Remove {symbol} from targets. Brokerage cash always targets zero."
+            )
+        if type(weight) not in (int, float) or not math.isfinite(weight) or weight < 0:
+            raise ValueError(f"Invalid target weight for {symbol}.")
     transient_symbols = data.get("transient_symbols", [])
     norberts_gambit_fee_cad = data.get("norberts_gambit_fee_cad", 0.0)
     fx_target_rules = data.get("fx_target_rules", {})
     drift_trade_threshold_pct = float(data.get("drift_trade_threshold_pct", 0.1))
     tactical_config = parse_tactical_config(data.get("tactical_deployment", {}))
     external_accounts = parse_external_accounts(data)
+    equity_symbols = set(targets)
+    for rule in fx_target_rules.values():
+        pair = {rule.get("usd_symbol"), rule.get("cad_symbol")}
+        if pair & {"CAD", "USD"}:
+            raise ValueError("Brokerage cash cannot be an FX target instrument.")
+        equity_symbols.update(pair)
+    if tactical_config and equity_symbols.intersection(
+        tactical_config.fixed_composition
+    ):
+        raise ValueError(
+            "Tactical fixed holdings must appear only in fixed_composition."
+        )
+    # Tactical scaling must not hide a misconfigured baseline allocation.
+    baseline_total = sum(targets.values()) + sum(
+        float(rule["total_target_pct"]) for rule in fx_target_rules.values()
+    )
+    if tactical_config:
+        baseline_total += tactical_config.baseline_fixed_pct
+    if not math.isfinite(baseline_total) or abs(baseline_total - 100) > 0.5:
+        raise ValueError("Configured baseline allocations must sum to 100%.")
 
     return (
         accounts,
@@ -138,6 +172,8 @@ def load_config() -> tuple:
 
 def _validate_resolved_targets(targets: dict):
     """Fail fast if the final resolved target map is materially off 100%."""
+    if any(not math.isfinite(v) or v < 0 for v in targets.values()):
+        raise ValueError("Resolved target weights must be finite and nonnegative.")
     total = sum(targets.values())
     if abs(total - 100.0) > 0.5:
         raise ValueError(
@@ -153,7 +189,7 @@ def run_scheduled_sync():
     and snapshots the current portfolio value for ATH tracking.
     Also evaluates tactical regime transitions when tactical deployment is configured.
     Computes and outputs portfolio accuracy for drift alerting.
-    GitHub Actions handles committing and pushing the updated files.
+    Each token is published immediately. GitHub Actions publishes remaining state.
     """
     (
         accounts,
@@ -166,7 +202,7 @@ def run_scheduled_sync():
         tactical_config,
         external_accounts,
     ) = load_config()
-    validate_encrypted_state_files()
+    prepare_state(a["token_file"] for a in accounts)
     # Missing/corrupt external balances must fail before history or tactical state.
     external_balances = load_external_balances(external_accounts)
 
@@ -188,6 +224,8 @@ def run_scheduled_sync():
             )
             clients.append(client)
             print(f"  ✓ {name} token refreshed successfully")
+        except StateSyncError:
+            raise
         except Exception as e:  # noqa: BLE001 - refresh every account before reporting failures
             print(f"  ✗ {name} token refresh FAILED: {e}")
             all_ok = False
@@ -236,6 +274,7 @@ def run_scheduled_sync():
                 resolved_targets = resolve_tactical_targets(
                     resolved_targets, posture, tactical_config
                 )
+            _validate_resolved_targets(resolved_targets)
             hidden_symbols = {
                 symbol for symbol in transient_symbols if symbol in portfolio.holdings
             }
@@ -289,6 +328,8 @@ def _connect_clients(accounts: list[dict]) -> list:
                 )
             )
             console.print(f"  [green]✓[/green] {name} connected")
+        except StateSyncError:
+            raise
         except Exception as e:  # noqa: BLE001 - attempt every configured account before failing
             console.print(f"  [red]✗ {name} connection failed: {e}[/red]")
             failed_accounts.append(name)
@@ -301,14 +342,6 @@ def _connect_clients(accounts: list[dict]) -> list:
         sys.exit(1)
 
     return clients
-
-
-def _fetch_exchange_rate(client) -> float:
-    """Fetch and display the live USD/CAD exchange rate."""
-    console.print("  [dim]Fetching USD/CAD exchange rate...[/dim]")
-    usd_to_cad_rate = get_usd_to_cad_rate(client=client)
-    console.print(f"  [dim]USD/CAD rate: {usd_to_cad_rate:.4f}[/dim]")
-    return usd_to_cad_rate
 
 
 def _build_priced_portfolio(clients: list, usd_to_cad_rate: float, redemption_rules):
@@ -412,6 +445,7 @@ def run_rebalancer():
         external_accounts,
     ) = load_config()
 
+    prepare_state(a["token_file"] for a in accounts)
     external_balances = load_external_balances(
         external_accounts,
         Path.home() / "Downloads",
@@ -420,7 +454,13 @@ def run_rebalancer():
         ),
     )
     clients = _connect_clients(accounts)
-    usd_to_cad_rate = _fetch_exchange_rate(clients[0])
+    dlr_quotes = _fetch_dlr_quotes(clients[0])
+    usd_to_cad_rate = dlr_quotes.exchange_rate
+    if usd_to_cad_rate is None:
+        raise RuntimeError(
+            "Could not derive a live USD/CAD exchange rate from Questrade DLR quotes."
+        )
+    console.print(f"  [dim]USD/CAD rate: {usd_to_cad_rate:.4f}[/dim]")
     resolved_targets = resolve_targets(targets, fx_target_rules, usd_to_cad_rate)
     portfolio = _build_priced_portfolio(clients, usd_to_cad_rate, redemption_rules)
     attach_external_balances(portfolio, external_balances, external_accounts)
@@ -428,8 +468,6 @@ def run_rebalancer():
     transfer_ledger = reconcile_transfer_activity(
         portfolio, external_balances, clients, transfer_accounts
     )
-    dlr_quotes = _fetch_dlr_quotes(clients[0])
-
     # Evaluate tactical posture and adjust targets if configured
     tactical_posture = None
     if tactical_config:
@@ -531,77 +569,18 @@ def _pull_latest():
         sys.exit(1)
 
 
-def _push_synced_files():
-    """Commit and push encrypted app state so local runs and automation stay in sync.
-    Questrade uses single-use refresh tokens (token rotation), so every run
-    invalidates the old token. App-managed data is also pushed so state remains
-    shared between local runs and GitHub Actions."""
-    state_root = get_state_root()
-    validate_encrypted_state_files()
-    try:
-        # Check if there are changes to push (tokens or data)
-        result = subprocess.run(
-            ["git", "diff", "--quiet", "tokens/", "data/"],
-            cwd=str(state_root),
-            capture_output=True,
-            check=False,
-        )
-        # Also check for newly created token or data files.
-        untracked = subprocess.run(
-            ["git", "ls-files", "--others", "--exclude-standard", "tokens/", "data/"],
-            cwd=str(state_root),
-            capture_output=True,
-            text=True,
-            check=False,
-        )
-        if result.returncode == 0 and not untracked.stdout.strip():
-            console.print("\n  [dim]No local changes to push[/dim]")
-            return
-
-        subprocess.run(
-            ["git", "add", "tokens/", "data/"],
-            cwd=str(state_root),
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "commit", "-m", "🔄 Auto-sync encrypted application state"],
-            cwd=str(state_root),
-            check=True,
-            capture_output=True,
-        )
-        subprocess.run(
-            ["git", "push"],
-            cwd=str(state_root),
-            check=True,
-            capture_output=True,
-        )
-        console.print(
-            "\n  [green]✓[/green] [dim]Pushed updated private state to remote[/dim]"
-        )
-    except FileNotFoundError:
-        console.print(
-            "\n  [yellow]⚠ git not found — remember to push your private state repo manually[/yellow]"
-        )
-    except subprocess.CalledProcessError:
-        console.print(
-            "\n  [yellow]⚠ Could not auto-push — remember to push your private state repo manually[/yellow]"
-        )
-
-
 def main():
-    """Entry point."""
-    if "--sync" in sys.argv:
-        # Scheduled sync mode (private repo GitHub Actions):
-        # refresh tokens + snapshot portfolio. The private repo workflow
-        # handles its own git commit/push,
-        # so we don't call _push_synced_files() here.
+    """Refresh state on schedule or display the interactive report."""
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    parser.add_argument(
+        "--sync", action="store_true", help="Refresh tokens and record a snapshot"
+    )
+    if parser.parse_args().sync:
         run_scheduled_sync()
     else:
         _pull_latest()
-        validate_encrypted_state_files()
         run_rebalancer()
-        _push_synced_files()
+        sync_state()
 
 
 if __name__ == "__main__":

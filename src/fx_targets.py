@@ -9,6 +9,8 @@ the current value. This prevents oscillation when the rate hovers near a
 rounding boundary.
 """
 
+import math
+
 from src.encrypted_state import read_encrypted_json, write_encrypted_json
 from src.paths import get_fx_targets_state_file
 
@@ -21,7 +23,10 @@ def _clamp(value: float, minimum: float, maximum: float) -> float:
 def _parse_float(rule_name: str, field_name: str, value) -> float:
     """Parse a config value as float, raising a clear error on failure."""
     try:
-        return float(value)
+        parsed = float(value)
+        if not math.isfinite(parsed):
+            raise ValueError("Non-finite number")
+        return parsed
     except (TypeError, ValueError) as exc:
         raise ValueError(
             f"fx_target_rules.{rule_name}.{field_name} must be a number"
@@ -91,6 +96,8 @@ def _resolve_fx_split_rule(
         raise ValueError(
             f"fx_target_rules.{rule_name} must define both usd_symbol and cad_symbol"
         )
+    if {usd_symbol, cad_symbol} & {"CAD", "USD"}:
+        raise ValueError("Brokerage cash cannot be an FX target instrument.")
     if usd_symbol == cad_symbol:
         raise ValueError(
             f"fx_target_rules.{rule_name} must use different symbols for usd_symbol and cad_symbol"
@@ -129,10 +136,12 @@ def _resolve_fx_split_rule(
     cad_fraction = (clamped_rate - min_rate) / (max_rate - min_rate)
     raw_cad_pct = total_target_pct * cad_fraction
 
-    cad_target_pct = _sticky_round(raw_cad_pct, rounding_step, prior_cad_target)
-    usd_target_pct = (
-        round((total_target_pct - cad_target_pct) / rounding_step) * rounding_step
+    cad_target_pct = _clamp(
+        _sticky_round(raw_cad_pct, rounding_step, prior_cad_target),
+        0.0,
+        total_target_pct,
     )
+    usd_target_pct = total_target_pct - cad_target_pct
 
     targets[usd_symbol] = usd_target_pct
     targets[cad_symbol] = cad_target_pct
@@ -162,5 +171,6 @@ def resolve_targets(
         )
         new_state[rule_name] = {"cad_target_pct": cad_target_pct}
 
-    _save_fx_state(new_state)
+    if new_state != state:
+        _save_fx_state(new_state)
     return targets

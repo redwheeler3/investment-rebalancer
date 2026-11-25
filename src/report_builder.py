@@ -55,13 +55,14 @@ def build_report_data(
     )
 
     projected_snapshot = None
-    if trades:
+    if trades or currency_conversions:
         projected_snapshot = simulate_rebalance(
             portfolio,
             trades,
             targets,
             usd_to_cad_rate,
             hidden_symbols=hidden_symbols,
+            conversions=currency_conversions,
         )
 
     all_time_high = get_all_time_high(current_value=portfolio.total_value_cad)

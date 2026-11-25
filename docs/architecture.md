@@ -26,18 +26,18 @@ The `run_rebalancer()` function is the spine of the app. Every other module is c
 ```python
 def run_rebalancer():
     (accounts, targets, transient_symbols, norberts_gambit_fee_cad,
-     fx_target_rules, drift_trade_threshold_pct, tactical_config,
+     fx_target_rules, drift_trade_threshold_pct, redemption_rules, tactical_config,
      external_accounts) = load_config()
 
     balances = load_external_balances(external_accounts, Path.home() / "Downloads")
     clients = _connect_clients(accounts)
-    usd_to_cad_rate = _fetch_exchange_rate(clients[0])
+    dlr_quotes = _fetch_dlr_quotes(clients[0])
+    usd_to_cad_rate = dlr_quotes.exchange_rate  # required for valuation
     resolved_targets = resolve_targets(targets, fx_target_rules, usd_to_cad_rate)
-    portfolio = _build_priced_portfolio(clients, usd_to_cad_rate)
+    portfolio = _build_priced_portfolio(clients, usd_to_cad_rate, redemption_rules)
     attach_external_balances(portfolio, balances, external_accounts)
     transfer_accounts = resolve_external_transfer_accounts(portfolio, external_accounts)
     transfer_ledger = reconcile_transfer_activity(portfolio, balances, clients, transfer_accounts)
-    dlr_quotes = _fetch_dlr_quotes(clients[0])
 
     # Tactical posture (if configured) shifts the resolved targets before sizing.
     tactical_posture = evaluate_tactical_posture(...) if tactical_config else None
@@ -55,17 +55,7 @@ def run_rebalancer():
         transfer_ledger.save()
 ```
 
-`load_config()` returns an 8-tuple (accounts, targets, transient symbols, gambit
-fee, FX rules, drift threshold, tactical config, and external account settings); the snippet above keeps the
-interesting names and elides the rest.
-
-This is the **interactive** path. Before any of it, `_pull_latest()` does a
-`git pull --ff-only` on the private state repo to get fresh encrypted tokens and
-app-managed data. SOPS decrypts them through process streams when the app reads them and
-atomically replaces them with ciphertext after updates. After everything,
-`_push_synced_files()` commits and pushes the rotated tokens + updated state
-back. (The `--sync` path is different — see [The `--sync` Mode](#the---sync-mode)
-below — it does **not** push; the GitHub Actions workflow handles its own commit.)
+The local command fast-forwards the private state repository, validates the configured inputs and checks that replacements can be encrypted and decrypted before authentication. Every OAuth rotation saves and publishes the validated token before the next request. At the end, `sync_state()` publishes remaining encrypted changes and preserves unrelated staged files.
 
 ---
 
@@ -161,7 +151,7 @@ The solution: a **tiered deployment** with **separate deploy/recovery thresholds
 
 #### Regime State Machine
 
-Four possible regimes, each with a different fixed-income percentage:
+Each configured deployment threshold adds a level. For example:
 
 ```
 baseline (20% fixed) → level_1 (15%) → level_2 (10%) → level_3 (5%)
@@ -279,7 +269,7 @@ Once the posture is known, targets are adjusted:
    XEF.TO:  6.0% × 1.0625 = 6.38%
    ```
 
-3. **Cash targets** (CAD, USD) pass through unchanged.
+3. Brokerage CAD and USD cash have an implicit target of zero.
 
 The result always sums to 100%.
 
@@ -321,7 +311,8 @@ clamped_rate = _clamp(usd_to_cad_rate, min_rate, max_rate)
 cad_fraction = (clamped_rate - min_rate) / (max_rate - min_rate)
 raw_cad_pct = total_target_pct * cad_fraction
 cad_target_pct = _sticky_round(raw_cad_pct, rounding_step, prior_cad_target)
-usd_target_pct = round((total_target_pct - cad_target_pct) / rounding_step) * rounding_step
+cad_target_pct = min(total_target_pct, max(0, cad_target_pct))
+usd_target_pct = total_target_pct - cad_target_pct
 ```
 
 The `_sticky_round` function keeps the current target unless the raw value has moved a full step away, preventing oscillation when the rate hovers near a rounding boundary. To make stickiness work across runs, the resolver persists the last resolved CAD target per rule as SOPS ciphertext in `data/fx_targets_state.json` (`_load_fx_state` / `_save_fx_state`) and reads it back as the `prior_cad_target` on the next run.
@@ -410,7 +401,8 @@ def _authenticate(self):
     self.access_token = token_data["access_token"]
     self.api_server = token_data["api_server"]      # Dynamic! Changes each auth
     self.refresh_token = token_data["refresh_token"]  # New single-use token
-    self._save_refresh_token()  # Atomically write SOPS ciphertext immediately
+    write_encrypted_json(self.token_path, {"refresh_token": self.refresh_token})
+    sync_state(self.token_path)  # Publish the replacement before the next request.
 ```
 
 The refresh credential is sent in the POST body rather than the URL query string,
@@ -686,18 +678,7 @@ GitHub Actions runs `python main.py --sync` on a schedule. This mode:
    for the workflow's **drift alerting** (the workflow opens/closes a GitHub Issue
    based on this number — the 95% threshold lives in the workflow template, not here)
 
-It calculates **no trades** and renders **no display**. It also does **not** commit
-or push: the private-repo GitHub Actions workflow handles its own commit/push, so
-`--sync` deliberately skips `_push_synced_files()`. A token-refresh failure exits
-non-zero so the workflow can alert on stale credentials.
-
-The private workflow injects `SOPS_AGE_KEY` only into the sync and validation
-steps. The commit step sees only ciphertext. State is decrypt-validated before
-token rotation and again before commit without writing plaintext to disk. The
-post-sync commit steps run even when sync processing fails, preserving any valid
-replacement token already issued while leaving the job failed for alerting. A
-workflow concurrency group also serializes runs so two jobs cannot race a
-single-use refresh token.
+Scheduled sync publishes each replacement token immediately. After sync, the workflow invokes `python -m src.state_sync` to validate and publish remaining encrypted state, including recovery after a failed run. The concurrency group serializes scheduled and manually dispatched jobs. The drift alert uses the displayed one-decimal accuracy. A separate workflow failure alert measures elapsed time since the first consecutive failure.
 
 ---
 
@@ -725,6 +706,7 @@ single-use refresh token.
 | `saven_export.py` | Saven adapter — CSV normalization and transfer-row classification |
 | `transfer_tracking.py` | Observations and recommendation cycles — transit/source valuation adjustments |
 | `tactical.py` | Tactical deployment — drawdown-based dynamic target adjustment |
+| `state_sync.py` | Scoped commits, verification of outgoing ciphertext and fast-forward publication |
 | `paths.py` | File locations — private state repo discovery |
 | `encrypted_state.py` | SOPS/age stream encryption and atomic ciphertext writes |
 

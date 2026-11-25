@@ -1036,13 +1036,7 @@ def display_tactical_posture(tactical_posture) -> None:
     if tactical_posture.regime == "baseline":
         return
 
-    # Format regime label
-    regime_labels = {
-        "level_1": "Level 1",
-        "level_2": "Level 2",
-        "level_3": "Level 3",
-    }
-    regime_label = regime_labels.get(tactical_posture.regime, tactical_posture.regime)
+    regime_label = tactical_posture.regime.replace("_", " ").title()
 
     lines = []
     lines.append(
@@ -1064,11 +1058,7 @@ def display_tactical_posture(tactical_posture) -> None:
         lines.append("")
         lines.append("  [dim]Recovery triggers:[/dim]")
         for trigger in tactical_posture.next_recovery_triggers:
-            target_label = regime_labels.get(
-                trigger["target_regime"], trigger["target_regime"]
-            )
-            if trigger["target_regime"] == "baseline":
-                target_label = "Baseline"
+            target_label = trigger["target_regime"].replace("_", " ").title()
             lines.append(
                 f"    [green]→[/green] {trigger['drawdown_pct']:+.1f}% "
                 f"(${trigger['dollar_value']:,.0f}) → "
@@ -1078,9 +1068,7 @@ def display_tactical_posture(tactical_posture) -> None:
     # Deploy trigger
     if tactical_posture.next_deploy_trigger:
         trigger = tactical_posture.next_deploy_trigger
-        target_label = regime_labels.get(
-            trigger["target_regime"], trigger["target_regime"]
-        )
+        target_label = trigger["target_regime"].replace("_", " ").title()
         lines.append("  [dim]Deploy trigger:[/dim]")
         lines.append(
             f"    [red]→[/red] {trigger['drawdown_pct']:+.1f}% "

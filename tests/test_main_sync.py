@@ -56,7 +56,7 @@ def test_scheduled_sync_fails_on_encrypted_state_error():
     portfolio = SimpleNamespace(total_value_cad=100.0)
     with (
         patch("main.load_config", return_value=_config()),
-        patch("main.validate_encrypted_state_files"),
+        patch("main.prepare_state"),
         patch("main.get_tokens_dir"),
         patch("main.QuestradeClient", return_value=object()),
         patch("main.get_usd_to_cad_rate", return_value=1.35),
@@ -73,7 +73,7 @@ def test_scheduled_sync_fails_on_encrypted_state_error():
 def test_scheduled_sync_keeps_market_snapshot_best_effort(capsys):
     with (
         patch("main.load_config", return_value=_config()),
-        patch("main.validate_encrypted_state_files"),
+        patch("main.prepare_state"),
         patch("main.get_tokens_dir"),
         patch("main.QuestradeClient", return_value=object()),
         patch(
@@ -91,7 +91,7 @@ def test_scheduled_sync_validates_before_rotating_tokens():
     with (
         patch("main.load_config", return_value=_config()),
         patch(
-            "main.validate_encrypted_state_files",
+            "main.prepare_state",
             side_effect=EncryptedStateError("plaintext state rejected"),
         ),
         patch("main.QuestradeClient") as client,
@@ -161,7 +161,8 @@ def test_partial_connection_stops_before_portfolio_or_tactical_evaluation(tmp_pa
             "main.QuestradeClient",
             side_effect=[object(), RuntimeError("temporary failure")],
         ),
-        patch("main._fetch_exchange_rate") as fetch_rate,
+        patch("main.prepare_state"),
+        patch("main._fetch_dlr_quotes") as fetch_rate,
         patch("main._build_priced_portfolio") as build_portfolio,
         patch("main.evaluate_tactical_posture") as evaluate_tactical,
         pytest.raises(SystemExit),

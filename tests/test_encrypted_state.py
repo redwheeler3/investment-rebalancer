@@ -3,7 +3,6 @@
 import json
 import os
 import subprocess
-from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -148,8 +147,13 @@ def test_validates_every_managed_state_file(state_root):
 )
 def test_real_sops_round_trip_keeps_plaintext_off_disk(tmp_path, monkeypatch):
     sops_executable = os.environ["SOPS_EXECUTABLE"]
-    age_key_file = Path(os.environ["SOPS_AGE_KEY_FILE"])
     age_keygen = os.environ["AGE_KEYGEN_EXECUTABLE"]
+    age_key_file = tmp_path / "disposable-age-key"
+    subprocess.run(
+        [age_keygen, "-o", str(age_key_file)], check=True, capture_output=True
+    )
+    monkeypatch.setenv("SOPS_AGE_KEY_FILE", str(age_key_file))
+    monkeypatch.delenv("SOPS_AGE_KEY", raising=False)
     recipient = subprocess.run(
         [age_keygen, "-y", str(age_key_file)],
         check=True,
@@ -163,18 +167,7 @@ def test_real_sops_round_trip_keeps_plaintext_off_disk(tmp_path, monkeypatch):
         f"    age: {recipient}\n",
         encoding="utf-8",
     )
-    real_run = subprocess.run
-
-    def run_sops_with_test_diagnostics(*args, **kwargs):
-        result = real_run(*args, **kwargs)
-        if result.returncode != 0:
-            pytest.fail(result.stderr.decode("utf-8", errors="replace"))
-        return result
-
     monkeypatch.setattr("src.encrypted_state.get_state_root", lambda: tmp_path)
-    monkeypatch.setattr(
-        "src.encrypted_state.subprocess.run", run_sops_with_test_diagnostics
-    )
     monkeypatch.setenv("SOPS_EXECUTABLE", sops_executable)
 
     token_path = tmp_path / "tokens" / "account.json"
@@ -194,10 +187,30 @@ def test_real_sops_round_trip_keeps_plaintext_off_disk(tmp_path, monkeypatch):
     assert read_encrypted_text(history_path) == '{"date":"2026-08-14","value":1}\n'
     assert read_encrypted_json(tactical_path) == {"regime": "baseline"}
     assert read_encrypted_json(fx_path) == {"split": {"cad_target_pct": 56.0}}
-    assert validate_encrypted_state_files() == [
+    assert validate_encrypted_state_files([token_path.name]) == [
         token_path,
         fx_path,
         tactical_path,
         history_path,
     ]
     assert not list(tmp_path.rglob("*.tmp"))
+
+    # Existing files still decrypt in all three cases. Preflight must also
+    # prove the recipient chosen for the next replacement is usable.
+    config = tmp_path / ".sops.yaml"
+    config.unlink()
+    with pytest.raises(EncryptedStateError, match="Missing SOPS configuration"):
+        validate_encrypted_state_files([token_path.name])
+    config.write_text(
+        f"creation_rules:\n  - path_regex: '^other/'\n    age: {recipient}\n"
+    )
+    with pytest.raises(EncryptedStateError, match="could not encrypt"):
+        validate_encrypted_state_files([token_path.name])
+    other = tmp_path / "other-key"
+    subprocess.run([age_keygen, "-o", str(other)], check=True, capture_output=True)
+    other_recipient = subprocess.check_output(
+        [age_keygen, "-y", str(other)], text=True
+    ).strip()
+    config.write_text(f"creation_rules:\n  - age: {other_recipient}\n")
+    with pytest.raises(EncryptedStateError, match="could not decrypt"):
+        validate_encrypted_state_files([token_path.name])

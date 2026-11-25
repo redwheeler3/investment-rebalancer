@@ -811,7 +811,7 @@ def test_scheduled_sync_reconciles_before_recording_history_or_tactical_evaluati
     )
     with (
         patch.object(main, "load_config", return_value=raw),
-        patch.object(main, "validate_encrypted_state_files"),
+        patch.object(main, "prepare_state"),
         patch.object(main, "load_external_balances", return_value={SAVEN: bank}),
         patch.object(main, "get_tokens_dir", return_value=tmp_path),
         patch.object(main, "QuestradeClient", return_value=Client()),
@@ -835,3 +835,45 @@ def test_scheduled_sync_reconciles_before_recording_history_or_tactical_evaluati
         record.assert_called_once_with(1000000)
         assert evaluate.call_args.kwargs["current_value"] == 1000000
         save.assert_not_called()
+
+
+@pytest.mark.parametrize("action", ["DEPOSIT", "WITHDRAW"])
+def test_statement_preceding_intent_advances_balance_without_consuming_cap(
+    tmp_path, action
+):
+    snapshot, parsed = export(tmp_path)
+    ledger = TransferLedger()
+    ledger.observe_external_balance(SAVEN, snapshot, parsed)
+    ledger.observe_broker(SAVEN, "broker", [], NOW)
+    ledger.remember_recommendations(
+        [recommendation(action, 100)], ROUTES, NOW.replace(day=6)
+    )
+    sign = -1 if action == "WITHDRAW" else 1
+    rows = [
+        ("07/11/2026", action, 20, 500000 + sign * 120),
+        ("02/11/2026", action, 100, 500000 + sign * 100),
+        ("01/11/2026", "Deposit", 500000, 500000),
+    ]
+    snapshot, parsed = export(tmp_path, rows)
+    for _ in range(2):
+        ledger.observe_external_balance(SAVEN, snapshot, parsed)
+        progress = ledger.progress(SAVEN, ACCOUNT)
+        assert (progress.source_cad if sign == -1 else progress.received_cad) == 20
+        assert ledger.account(SAVEN)["bank_out" if sign == -1 else "bank_in"] == cents(
+            120
+        )
+
+
+@pytest.mark.parametrize("receipt", [60000, 180000])
+def test_receipt_awaiting_export_reserves_transfer_cap(tmp_path, receipt):
+    ledger, snapshot = baseline(tmp_path, "WITHDRAW")
+    ledger.observe_broker(SAVEN, "broker", [activity(receipt)])
+    current = portfolio(snapshot, 500000 + receipt, receipt)
+    ledger.apply(current, ROUTES)
+    actions = calculate_trades(
+        current, {"EQ": 100, SAVEN: 0}, 1.35, 0, 0.1, set(), None, ROUTES
+    )
+    assert (
+        sum(t.amount_cad for t in actions if isinstance(t, TransferRecommendation))
+        == 180000 - receipt
+    )

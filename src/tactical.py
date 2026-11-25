@@ -8,7 +8,7 @@ position on the way back up.
 Key concepts:
 - Reference High: At baseline, equals the ATH (tracks new highs). When
   deployed, freezes at the ATH value when deployment first triggered.
-- Regime: One of baseline, level_1, level_2, level_3 — determines the
+- Regime: Baseline or a configured deployment level determines the
   current fixed/equity split.
 - Hysteresis: Different thresholds on the way down vs. up to avoid
   whipsawing near boundaries.
@@ -16,6 +16,7 @@ Key concepts:
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 
@@ -25,9 +26,6 @@ from src.paths import get_tactical_state_file
 # ══════════════════════════════════════════════════════════════════
 # Data types
 # ══════════════════════════════════════════════════════════════════
-
-
-REGIMES = ("baseline", "level_1", "level_2", "level_3")
 
 
 @dataclass
@@ -42,6 +40,12 @@ class TacticalConfig:
     recovery_thresholds: list[
         dict
     ]  # sorted by drawdown_pct ascending (most negative first)
+
+    @property
+    def regimes(self):
+        return ["baseline"] + [
+            f"level_{i}" for i in range(1, len(self.deploy_thresholds) + 1)
+        ]
 
 
 @dataclass
@@ -127,12 +131,20 @@ def parse_tactical_config(raw: dict) -> TacticalConfig | None:
     for symbol, ratio in raw.get("fixed_composition", {}).items():
         fixed_composition[str(symbol)] = float(ratio)
 
-    if not fixed_composition:
-        return None
+    if not 0 <= baseline_fixed_pct <= 100:
+        raise ValueError("baseline_fixed_pct must be between 0 and 100.")
+    if {"CAD", "USD"} & fixed_composition.keys():
+        raise ValueError("Remove brokerage cash from fixed_composition.")
+    if not fixed_composition or any(
+        not math.isfinite(v) or v < 0 for v in fixed_composition.values()
+    ):
+        raise ValueError("Fixed composition needs finite, nonnegative weights.")
 
     # Normalize to ratios summing to 1.0 (config uses percentages summing to 100)
     total_ratio = sum(fixed_composition.values())
-    if total_ratio > 0 and abs(total_ratio - 1.0) > 0.001:
+    if not math.isfinite(total_ratio) or total_ratio <= 0:
+        raise ValueError("Fixed composition requires a positive total.")
+    if abs(total_ratio - 1.0) > 0.001:
         fixed_composition = {
             symbol: ratio / total_ratio for symbol, ratio in fixed_composition.items()
         }
@@ -159,6 +171,31 @@ def parse_tactical_config(raw: dict) -> TacticalConfig | None:
         )
     recovery_thresholds.sort(key=lambda t: t["drawdown_pct"])
 
+    levels = [baseline_fixed_pct] + [t["fixed_pct"] for t in deploy_thresholds]
+    if any(not 0 <= lower < upper for upper, lower in zip(levels, levels[1:])):
+        raise ValueError("Each deployment level must reduce fixed income.")
+    deploy_points = [t["drawdown_pct"] for t in deploy_thresholds]
+    if len(set(deploy_points)) != len(deploy_points) or any(
+        not -100 <= d < 0 for d in deploy_points
+    ):
+        raise ValueError(
+            "Deployment drawdowns must be distinct and between -100 and 0."
+        )
+    prior_drawdown, prior_fixed = -math.inf, -math.inf
+    for threshold in recovery_thresholds:
+        d, fixed = threshold["drawdown_pct"], threshold["fixed_pct"]
+        if fixed not in levels[:-1] or not (
+            math.isfinite(d) and d > prior_drawdown and fixed > prior_fixed
+        ):
+            raise ValueError(
+                "Recovery thresholds must lead to successively higher configured fixed levels."
+            )
+        if d <= deploy_points[levels.index(fixed)]:
+            raise ValueError(
+                "Recovery must occur above the drawdown for entering the deeper level."
+            )
+        prior_drawdown, prior_fixed = d, fixed
+
     return TacticalConfig(
         baseline_fixed_pct=baseline_fixed_pct,
         fixed_composition=fixed_composition,
@@ -179,12 +216,7 @@ def _fixed_pct_for_regime(regime: str, config: TacticalConfig) -> float:
     if regime == "baseline":
         return baseline_fixed
 
-    # Match regime to deploy threshold level
-    regime_index = REGIMES.index(regime) - 1  # 0-indexed into deploy_thresholds
-    if 0 <= regime_index < len(config.deploy_thresholds):
-        return config.deploy_thresholds[regime_index]["fixed_pct"]
-
-    return baseline_fixed
+    return config.deploy_thresholds[config.regimes.index(regime) - 1]["fixed_pct"]
 
 
 def _determine_regime(
@@ -199,27 +231,14 @@ def _determine_regime(
     in one day, it moves straight to the appropriate deployment level in a
     single evaluation.
     """
-    current_index = REGIMES.index(current_regime)
+    current_index = config.regimes.index(current_regime)
 
     # Check deploy thresholds (going deeper into drawdown)
     # These trigger moving to a MORE deployed state (less fixed).
     # Find the deepest level that qualifies (don't stop at first match).
-    best_deploy = None
-    for threshold in config.deploy_thresholds:
-        target_fixed = threshold["fixed_pct"]
-        trigger_drawdown = threshold["drawdown_pct"]
-
-        target_regime = _regime_for_fixed_pct(target_fixed, config)
-        if target_regime is None:
-            continue
-
-        target_index = REGIMES.index(target_regime)
-
-        if target_index > current_index and drawdown_pct <= trigger_drawdown:
-            best_deploy = target_regime  # Keep going — later matches are deeper
-
-    if best_deploy is not None:
-        return best_deploy
+    for index in range(len(config.deploy_thresholds), current_index, -1):
+        if drawdown_pct <= config.deploy_thresholds[index - 1]["drawdown_pct"]:
+            return config.regimes[index]
 
     # Check recovery thresholds (recovering from drawdown)
     # These trigger moving to a LESS deployed state (more fixed).
@@ -232,7 +251,7 @@ def _determine_regime(
         if target_regime is None:
             continue
 
-        target_index = REGIMES.index(target_regime)
+        target_index = config.regimes.index(target_regime)
 
         if target_index < current_index and drawdown_pct >= trigger_drawdown:
             return target_regime
@@ -244,14 +263,12 @@ def _regime_for_fixed_pct(fixed_pct: float, config: TacticalConfig) -> str | Non
     """Map a fixed_pct value to its corresponding regime name."""
     baseline_fixed = config.baseline_fixed_pct
 
-    if abs(fixed_pct - baseline_fixed) < 0.01:
+    if fixed_pct == baseline_fixed:
         return "baseline"
 
     for i, threshold in enumerate(config.deploy_thresholds):
-        if abs(threshold["fixed_pct"] - fixed_pct) < 0.01:
-            regime_index = i + 1  # +1 because index 0 in REGIMES is "baseline"
-            if regime_index < len(REGIMES):
-                return REGIMES[regime_index]
+        if threshold["fixed_pct"] == fixed_pct:
+            return f"level_{i + 1}"
 
     return None
 
@@ -313,7 +330,11 @@ def evaluate_tactical_posture(
     # Persist state if transition occurred
     if transition_occurred:
         if new_regime == "baseline":
-            # Returning to baseline: clear frozen reference
+            reference_high, reference_high_date = ath_value, ath_date
+            drawdown_pct = (
+                (current_value / ath_value - 1) * 100 if ath_value > 0 else 0.0
+            )
+            # Returning to baseline clears the frozen reference.
             state.regime = "baseline"
             state.reference_high = None
             state.reference_high_date = None
@@ -367,11 +388,11 @@ def _next_deploy_trigger(
     config: TacticalConfig,
 ) -> dict | None:
     """Find the next deploy threshold below current regime."""
-    current_index = REGIMES.index(current_regime)
+    current_index = config.regimes.index(current_regime)
 
     # Next deploy level is one deeper
     next_index = current_index + 1
-    if next_index >= len(REGIMES):
+    if next_index >= len(config.regimes):
         return None  # Already at max deployment
 
     # Find the deploy threshold for the next level
@@ -386,7 +407,7 @@ def _next_deploy_trigger(
         "drawdown_pct": threshold["drawdown_pct"],
         "fixed_pct": threshold["fixed_pct"],
         "dollar_value": dollar_value,
-        "target_regime": REGIMES[next_index],
+        "target_regime": config.regimes[next_index],
     }
 
 
@@ -444,30 +465,14 @@ def resolve_tactical_targets(
     """
     fixed_symbols = set(config.fixed_composition.keys())
 
-    # Separate equity targets from fixed/cash targets
-    equity_targets = {}
-    cash_targets = {}
-    for symbol, pct in targets.items():
-        if symbol in fixed_symbols:
-            # Will be overridden by tactical
-            continue
-        elif symbol in ("CAD", "USD"):
-            cash_targets[symbol] = pct
-        else:
-            equity_targets[symbol] = pct
-
-    # Calculate the current equity sum (what we're scaling from)
-    current_equity_sum = sum(equity_targets.values())
-
-    # The target equity sum based on posture (minus cash targets)
-    cash_sum = sum(cash_targets.values())
-    target_equity_sum = posture.equity_pct - cash_sum
-
-    # Scale equity targets proportionally
-    if current_equity_sum > 0 and target_equity_sum > 0:
-        scale_factor = target_equity_sum / current_equity_sum
+    if {"CAD", "USD"} & targets.keys():
+        raise ValueError("Remove brokerage cash from targets.")
+    equity_targets = {s: pct for s, pct in targets.items() if s not in fixed_symbols}
+    equity_sum = sum(equity_targets.values())
+    if equity_sum > 0:
         equity_targets = {
-            symbol: pct * scale_factor for symbol, pct in equity_targets.items()
+            symbol: pct * posture.equity_pct / equity_sum
+            for symbol, pct in equity_targets.items()
         }
 
     # Compute fixed-income targets from composition ratios
@@ -478,7 +483,6 @@ def resolve_tactical_targets(
 
     # Combine all targets
     result = {}
-    result.update(cash_targets)
     result.update(equity_targets)
     result.update(fixed_targets)
 
