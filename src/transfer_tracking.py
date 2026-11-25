@@ -421,6 +421,28 @@ class TransferLedger:
             awaiting = min(cycle["limit"], received)
         return source, received, pending, awaiting
 
+    @staticmethod
+    def _missing_broker_debit(cycle, source, received):
+        if cycle["action"] != "DEPOSIT":
+            return 0
+        # The amount inside the original cap can be a delayed broker debit.
+        # Excess receipts are valued in full but cannot consume later intent.
+        return max(0, min(cycle["limit"], received) - source)
+
+    def confirm_bank_top_up(self, symbol, amount):
+        """Resolve an unmatched receipt using the customer's verified outside contribution."""
+        record = self.data["accounts"].get(symbol)
+        if record is None or record["cycle"] is None:
+            raise ValueError("No transfer is awaiting a broker debit for this account.")
+        source, received, _, _ = self._amounts(record)
+        missing = self._missing_broker_debit(record["cycle"], source, received)
+        if not missing or cents(amount) != missing:
+            raise ValueError(
+                "Confirm exactly the outstanding amount shown as Awaiting broker debit."
+            )
+        # The receipt is already in the bank balance. Close only the explained intent.
+        record["cycle"] = None
+
     def _unsettled(self, record):
         amounts = self._amounts(record)
         if amounts is None:
@@ -429,7 +451,7 @@ class TransferLedger:
         return bool(
             transit
             or offset
-            or (record["cycle"]["action"] == "DEPOSIT" and received and not source)
+            or self._missing_broker_debit(record["cycle"], source, received)
         )
 
     def retain_routes(self, endpoints):
@@ -462,6 +484,7 @@ class TransferLedger:
             received / 100,
             pending / 100,
             awaiting / 100,
+            self._missing_broker_debit(cycle, source, received) / 100,
         )
 
     def apply(self, portfolio, endpoints):
@@ -506,7 +529,7 @@ class TransferLedger:
             if cycle is not None:
                 moved = progress.source_cad > 0 or progress.received_cad > 0
                 pending = progress.in_transit_cad > 0 or progress.source_offset_cad > 0
-                if progress.awaiting_broker_withdrawal or (moved and pending):
+                if progress.awaiting_broker_debit_cad or (moved and pending):
                     # The original cap must survive until observed money settles.
                     continue
                 if (

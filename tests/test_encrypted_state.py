@@ -141,11 +141,8 @@ def test_validates_every_managed_state_file(state_root):
     read_text.assert_called_once_with(history_path)
 
 
-@pytest.mark.skipif(
-    os.environ.get("RUN_SOPS_INTEGRATION") != "1",
-    reason="requires an installed SOPS binary and disposable age key",
-)
-def test_real_sops_round_trip_keeps_plaintext_off_disk(tmp_path, monkeypatch):
+@pytest.fixture
+def real_sops(tmp_path, monkeypatch):
     sops_executable = os.environ["SOPS_EXECUTABLE"]
     age_keygen = os.environ["AGE_KEYGEN_EXECUTABLE"]
     age_key_file = tmp_path / "disposable-age-key"
@@ -161,15 +158,25 @@ def test_real_sops_round_trip_keeps_plaintext_off_disk(tmp_path, monkeypatch):
         text=True,
     ).stdout.strip()
 
-    (tmp_path / ".sops.yaml").write_text(
+    root = tmp_path / "state"
+    root.mkdir()
+    (root / ".sops.yaml").write_text(
         "creation_rules:\n"
         "  - path_regex: '(tokens.*\\.json|data.*\\.(json|jsonl))$'\n"
         f"    age: {recipient}\n",
         encoding="utf-8",
     )
-    monkeypatch.setattr("src.encrypted_state.get_state_root", lambda: tmp_path)
+    monkeypatch.setenv("REBALANCER_STATE_DIR", str(root))
     monkeypatch.setenv("SOPS_EXECUTABLE", sops_executable)
+    return root, age_keygen, recipient
 
+
+@pytest.mark.skipif(
+    os.environ.get("RUN_SOPS_INTEGRATION") != "1",
+    reason="requires an installed SOPS binary and disposable age key",
+)
+def test_real_sops_round_trip_keeps_plaintext_off_disk(real_sops):
+    tmp_path, age_keygen, recipient = real_sops
     token_path = tmp_path / "tokens" / "account.json"
     history_path = tmp_path / "data" / "portfolio_history.jsonl"
     tactical_path = tmp_path / "data" / "tactical_state.json"
@@ -214,3 +221,91 @@ def test_real_sops_round_trip_keeps_plaintext_off_disk(tmp_path, monkeypatch):
     config.write_text(f"creation_rules:\n  - age: {other_recipient}\n")
     with pytest.raises(EncryptedStateError, match="could not decrypt"):
         validate_encrypted_state_files([token_path.name])
+
+
+@pytest.mark.skipif(
+    os.environ.get("RUN_SOPS_INTEGRATION") != "1", reason="requires SOPS and age-keygen"
+)
+def test_remote_advances_during_rotation_preserves_only_new_ciphertext(
+    real_sops, tmp_path, monkeypatch
+):
+    from unittest.mock import Mock
+    from src import questrade_client, state_sync
+    from tests.test_state_sync import git
+
+    root, _, _ = real_sops
+    remote, other = tmp_path / "remote.git", tmp_path / "other"
+    token = root / "tokens" / "login.json"
+    output, recovery = tmp_path / "output", tmp_path / "recovery"
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    monkeypatch.setenv("REBALANCER_TOKEN_RECOVERY_DIR", str(recovery))
+    git(tmp_path, "init", "--bare", str(remote))
+    git(root, "init", "-b", "main")
+
+    def identity(path):
+        git(path, "config", "user.name", "Fixture")
+        git(path, "config", "user.email", "test@example.invalid")
+        git(path, "config", "commit.gpgsign", "false")
+        git(path, "config", "core.hooksPath", str(tmp_path / "no-hooks"))
+
+    identity(root)
+    write_encrypted_json(token, {"refresh_token": "original"})
+    initial = token.read_bytes()
+    git(root, "add", "tokens/login.json")
+    git(root, "commit", "-m", "fixture")
+    git(root, "remote", "add", "origin", str(remote))
+    git(root, "push", "-u", "origin", "main")
+    state_sync.prepare_state([token.name])
+    git(tmp_path, "clone", "-b", "main", str(remote), str(other))
+    identity(other)
+    (other / "config.txt").write_text("unrelated change")
+    git(other, "add", "config.txt")
+    git(other, "commit", "-m", "concurrent change")
+    git(other, "push")
+    before = git(remote, "rev-parse", "main")
+    response = Mock()
+    response.json.return_value = {
+        "refresh_token": "new-disposable-token",
+        "access_token": "fixture",
+        "api_server": "https://example.invalid/",
+    }
+    post = Mock(return_value=response)
+    monkeypatch.setattr(questrade_client.requests, "post", post)
+    with pytest.raises(state_sync.StateSyncError, match="publication failed"):
+        questrade_client.QuestradeClient(str(token), "Fixture", {})
+    assert post.call_count == 1
+    assert git(remote, "rev-parse", "main") == before
+    assert (
+        git(remote, "show", "main:tokens/login.json").splitlines()
+        == initial.splitlines()
+    )
+    assert [p.name for p in recovery.iterdir()] == [token.name]
+    blob = (recovery / token.name).read_bytes()
+    assert blob == token.read_bytes() and b"new-disposable-token" not in blob
+    assert read_encrypted_json(token, ciphertext=blob) == {
+        "refresh_token": "new-disposable-token"
+    }
+    assert output.read_text().strip() == "token_recovery=true"
+
+
+@pytest.mark.skipif(
+    os.environ.get("RUN_SOPS_INTEGRATION") != "1", reason="requires SOPS and age-keygen"
+)
+def test_token_recovery_rejects_plaintext_and_stale_ciphertext(
+    real_sops, tmp_path, monkeypatch
+):
+    from src.state_sync import StateSyncError, preserve_failed_rotation
+
+    root, _, _ = real_sops
+    token = root / "tokens" / "account.json"
+    recovery = tmp_path / "recovery"
+    output = tmp_path / "output"
+    monkeypatch.setenv("REBALANCER_TOKEN_RECOVERY_DIR", str(recovery))
+    monkeypatch.setenv("GITHUB_OUTPUT", str(output))
+    write_encrypted_json(token, {"refresh_token": "old"})
+    with pytest.raises(StateSyncError):
+        preserve_failed_rotation(token, "replacement")
+    token.write_bytes(b'{"refresh_token":"replacement"}')
+    with pytest.raises(StateSyncError):
+        preserve_failed_rotation(token, "replacement")
+    assert not recovery.exists() and not output.exists()

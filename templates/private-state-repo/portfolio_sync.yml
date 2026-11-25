@@ -65,7 +65,18 @@ jobs:
         env:
           REBALANCER_STATE_DIR: ${{ github.workspace }}/state
           SOPS_AGE_KEY: ${{ secrets.SOPS_AGE_KEY }}
+          REBALANCER_TOKEN_RECOVERY_DIR: ${{ runner.temp }}/rebalancer-token-recovery
         run: python main.py --sync
+
+      - name: Preserve unpublished encrypted token
+        if: always() && steps.sync.outputs.token_recovery == 'true'
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: encrypted-token-recovery-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/rebalancer-token-recovery/
+          retention-days: 3
+          if-no-files-found: error
+          include-hidden-files: true
 
       - name: Publish remaining encrypted state
         id: publish

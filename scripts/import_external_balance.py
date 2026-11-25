@@ -16,6 +16,7 @@ from src.external_accounts import (
 )
 from src.external_providers import PROVIDERS, provider_for
 from src.paths import get_config_dir, get_data_dir
+from src.transfer_tracking import TransferLedger
 
 
 def main() -> int:
@@ -23,6 +24,11 @@ def main() -> int:
     source = parser.add_mutually_exclusive_group(required=True)
     source.add_argument("--file", type=Path)
     source.add_argument("--directory", type=Path)
+    source.add_argument(
+        "--confirm-bank-top-up",
+        metavar="CAD",
+        help="Confirm the full unmatched receipt as outside-bank money for --account.",
+    )
     parser.add_argument(
         "--account", help="Refresh one configured PROVIDER:<account-id>."
     )
@@ -38,6 +44,21 @@ def main() -> int:
         accounts = parse_external_accounts(settings)
         if args.account is not None and args.account not in accounts:
             raise ValueError("The requested account is not in the portfolio targets.")
+        if args.confirm_bank_top_up is not None:
+            if not args.account:
+                raise ValueError("--confirm-bank-top-up requires --account.")
+            ledger = TransferLedger.load()
+            ledger.confirm_bank_top_up(args.account, args.confirm_bank_top_up)
+            if args.save:
+                ledger.save()
+                print(
+                    "Outside-bank contribution confirmed. Run the rebalancer to sync the ledger."
+                )
+            else:
+                print(
+                    "Confirmation matches. Add --save after verifying both institutions' records."
+                )
+            return 0
         if not accounts:
             print("No external accounts are configured for tracking.")
             return 0

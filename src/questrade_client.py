@@ -14,7 +14,7 @@ from src.encrypted_state import (
     read_encrypted_json,
     write_encrypted_json,
 )
-from src.state_sync import StateSyncError, sync_state
+from src.state_sync import StateSyncError, preserve_failed_rotation, sync_state
 
 QUESTRADE_AUTH_URL = "https://login.questrade.com/oauth2/token"
 GET_RETRY_DELAYS_SECONDS = (0.5, 1.0)
@@ -72,11 +72,22 @@ class QuestradeClient:
         self.refresh_token = replacement
         try:
             write_encrypted_json(self.token_path, {"refresh_token": replacement})
-            sync_state(self.token_path)
         except (EncryptedStateError, OSError) as exc:
             raise StateSyncError(
-                "Token rotated but its persistence or publication failed. "
-                "Verify private state before any further refresh."
+                "Token rotated but saving its replacement failed."
+            ) from exc
+
+        try:
+            sync_state(self.token_path)
+        except (EncryptedStateError, OSError) as exc:
+            try:
+                preserve_failed_rotation(self.token_path, replacement)
+            except (EncryptedStateError, OSError) as recovery_error:
+                raise StateSyncError(
+                    "Token publication and recovery staging both failed."
+                ) from recovery_error
+            raise StateSyncError(
+                "Token publication failed. Verify private state before any further refresh."
             ) from exc
         self.access_token = token_data["access_token"]
         self.api_server = token_data["api_server"]

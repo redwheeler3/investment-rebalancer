@@ -177,6 +177,15 @@ def test_top_up_from_external_bank_is_counted_once(tmp_path, action):
     assert current.total_value_cad == 1015000
     assert current.transfer_progress[0].in_transit_cad == 0
     assert current.transfer_progress[0].source_offset_cad == 0
+    if action == "DEPOSIT":
+        assert current.transfer_progress[0].awaiting_broker_debit_cad == 15000
+        with pytest.raises(ValueError, match="exactly"):
+            ledger.confirm_bank_top_up(SAVEN, "14999.99")
+        ledger.confirm_bank_top_up(SAVEN, "15000.00")
+        settled = portfolio(bank, broker_value, cash)
+        ledger.apply(settled, ROUTES)
+        assert settled.total_value_cad == 1015000
+        assert settled.transfer_progress == []
     ledger.remember_recommendations([recommendation(action, 10000)], ROUTES)
     assert ledger.account(SAVEN)["cycle"]["limit"] == cents(10000)
 
@@ -883,8 +892,12 @@ def test_receipt_awaiting_export_reserves_transfer_cap(tmp_path, receipt):
     )
 
 
-def test_receipt_first_local_report_keeps_debit_in_original_cycle(tmp_path):
+@pytest.mark.parametrize("first_debit_before_receipt", [True, False])
+def test_split_debits_stay_with_original_cycle(tmp_path, first_debit_before_receipt):
     ledger, _ = baseline(tmp_path)
+    first = [activity(-60000, day=2)]
+    if first_debit_before_receipt:
+        ledger.observe_broker(SAVEN, "broker", first, NOW.replace(day=2))
     bank, parsed = bank_deposit(tmp_path, 180000)
     ledger.observe_external_balance(SAVEN, bank, parsed)
 
@@ -899,14 +912,20 @@ def test_receipt_first_local_report_keeps_debit_in_original_cycle(tmp_path):
     waiting = report()
     assert not any(isinstance(t, TransferRecommendation) for t in waiting)
     ledger.remember_recommendations(waiting, ROUTES, NOW.replace(day=2))
+    ledger.observe_broker(SAVEN, "broker", first, NOW.replace(day=2))
+    ledger = TransferLedger(ledger.data)
+    assert ledger.progress(SAVEN, ACCOUNT).awaiting_broker_debit_cad == 120000
+    assert not any(isinstance(t, TransferRecommendation) for t in report())
+    ledger.remember_recommendations([], ROUTES, NOW.replace(day=2))
+    with pytest.raises(ValueError, match="until its transfer settles"):
+        ledger.retain_routes({})
+    posted = first + [activity(-120000, day=3)]
     for _ in range(2):
-        ledger.observe_broker(SAVEN, "broker", [activity(-180000)], NOW.replace(day=3))
+        ledger.observe_broker(SAVEN, "broker", posted, NOW.replace(day=3))
         orders = report()
         assert [
             t.amount_cad for t in orders if isinstance(t, TransferRecommendation)
         ] == [120000]
     ledger.remember_recommendations(orders, ROUTES, NOW.replace(day=3))
-    ledger.observe_broker(
-        SAVEN, "broker", [activity(-180000), activity(-120000, day=4)]
-    )
+    ledger.observe_broker(SAVEN, "broker", posted + [activity(-120000, day=4)])
     assert ledger.progress(SAVEN, ACCOUNT).in_transit_cad == 120000

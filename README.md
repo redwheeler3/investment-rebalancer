@@ -907,6 +907,12 @@ tokens/
 
 Copy `config/settings.example.yaml` from this repo into your private state repo as `config/settings.yaml`.
 
+### A workflow rotated a token but could not push it
+
+Open the failed Portfolio Sync run in the **private state repository**. If the run provides an `encrypted-token-recovery-<run>-<attempt>` artifact, download it within three days. It contains the SOPS-encrypted replacement for the affected login. Check the final publication step, remote token history, and any later successful rotations first. If the final retry succeeded or a later run published a newer token, keep the remote copy.
+
+If the remote token is still the predecessor, start from current private `main`, restore the recovered file under its original name in `tokens/`, and run `python -m src.encrypted_state` from the code checkout with the private state directory configured. Commit only that ciphertext file and fast-forward push it before another broker run. If the copies conflict and their order is unclear, regenerate the broker credential. An artifact upload failure requires manual recovery.
+
 ### Local run worked but push failed
 
 Your tokens may have rotated locally without being pushed upstream. Push the private state repo manually before running from another machine or waiting for GitHub Actions. Every configured encrypted token must already be tracked and published on the private repository’s main branch.

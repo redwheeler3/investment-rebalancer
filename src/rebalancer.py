@@ -428,7 +428,7 @@ class RebalancePlanner:
                 None,
             )
             if progress is not None:
-                if progress.awaiting_broker_withdrawal:
+                if progress.awaiting_broker_debit_cad:
                     continue
                 unsettled = (
                     progress.in_transit_cad > 0 or progress.source_offset_cad > 0

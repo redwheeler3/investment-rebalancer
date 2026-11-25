@@ -965,7 +965,7 @@ def display_external_transfers(portfolio, actions: list) -> None:
     awaiting = [
         item
         for item in portfolio.transfer_progress
-        if item.source_offset_cad > 0 or item.awaiting_broker_withdrawal
+        if item.source_offset_cad > 0 or item.awaiting_broker_debit_cad
     ]
     # A settled cycle can retain unused allowance internally. Show only actionable
     # instructions, money in transit, or an export needed to reconcile valuation.
@@ -1004,10 +1004,10 @@ def display_external_transfers(portfolio, actions: list) -> None:
         external = _external_account_label(
             item.symbol, portfolio.external_balances[item.symbol]
         )
-        if item.awaiting_broker_withdrawal:
+        if item.awaiting_broker_debit_cad:
             table.add_row(
                 f"{account_label} -> {external}",
-                _format_money(item.received_cad),
+                _format_money(item.awaiting_broker_debit_cad),
                 "Awaiting broker debit",
             )
             continue

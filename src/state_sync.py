@@ -1,6 +1,8 @@
 """Publish only validated encrypted state to the private repository's main branch."""
 
 import argparse
+import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -126,6 +128,31 @@ def _publish_pending(root, allowed, retry_seconds=0):
                 time.sleep(min(delay, remaining))
                 delay = min(delay * 2, 300)
             first = False
+
+
+def preserve_failed_rotation(token: Path, replacement: str):
+    """Stage only the validated ciphertext from this exchange for the private CI artifact."""
+    directory = os.environ.get("REBALANCER_TOKEN_RECOVERY_DIR")
+    if not directory:
+        return
+    blob = token.read_bytes()
+    try:
+        document = json.loads(blob)
+    except (UnicodeError, ValueError):
+        raise StateSyncError("Recovery file is not encrypted token JSON.") from None
+    if (
+        not isinstance(document, dict)
+        or set(document) != {"refresh_token", "sops"}
+        or not str(document["refresh_token"]).startswith("ENC[AES256_GCM,")
+        or read_encrypted_json(token, ciphertext=blob) != {"refresh_token": replacement}
+    ):
+        raise StateSyncError("Could not verify the encrypted replacement for recovery.")
+    # A run stops on its first failed publication. Never mix files from other runs.
+    folder = Path(directory)
+    folder.mkdir(mode=0o700, exist_ok=False)
+    (folder / token.name).write_bytes(blob)
+    with open(os.environ["GITHUB_OUTPUT"], "a", encoding="utf-8") as output:
+        output.write("token_recovery=true\n")
 
 
 def prepare_state(token_names):
