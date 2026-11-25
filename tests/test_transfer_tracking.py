@@ -929,3 +929,40 @@ def test_split_debits_stay_with_original_cycle(tmp_path, first_debit_before_rece
     ledger.remember_recommendations(orders, ROUTES, NOW.replace(day=3))
     ledger.observe_broker(SAVEN, "broker", posted + [activity(-120000, day=4)])
     assert ledger.progress(SAVEN, ACCOUNT).in_transit_cad == 120000
+
+
+def test_broker_cash_receipt_clears_transit_before_activity_without_replaying(tmp_path):
+    from dataclasses import replace
+
+    ledger, _ = baseline(tmp_path, "WITHDRAW")
+    bank, parsed = bank_withdrawal(tmp_path, 58182.32)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
+    cash = replace(ACCOUNT, cash_cad=58326.883, start_of_day_cash_cad=144.563)
+    routes = {SAVEN: cash}
+    ledger.observe_broker_cash(SAVEN, cash, 0)
+
+    # The balance evidence survives a report and the next day's opening balance.
+    ledger.remember_recommendations([], routes)
+    ledger = TransferLedger(ledger.data)
+    for rows in ([], [activity(20000)], [activity(20000), activity(38182.32, day=3)]):
+        ledger.observe_broker(SAVEN, cash.number, rows)
+        p = portfolio(bank, broker_value=558182.32, cash=cash.cash_cad)
+        ledger.apply(p, routes)
+        progress = p.transfer_progress[0]
+        assert progress.received_cad == 58182.32
+        assert progress.in_transit_cad == 0
+        assert p.total_value_cad == pytest.approx(1000000)
+    assert not progress.awaiting_broker_receipt_activity
+
+
+def test_unexplained_cash_increase_cannot_be_counted_alongside_transit(tmp_path):
+    from dataclasses import replace
+
+    ledger, _ = baseline(tmp_path, "WITHDRAW")
+    bank, parsed = bank_withdrawal(tmp_path, 58182.32)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
+    cash = replace(ACCOUNT, cash_cad=58182.32, start_of_day_cash_cad=0)
+    ledger.observe_broker_cash(SAVEN, cash, 58182.32)
+    assert ledger.progress(SAVEN, cash).in_transit_cad == 58182.32
+    with pytest.raises(ValueError, match="without matching activity"):
+        ledger.observe_broker_cash(SAVEN, cash, 20000)

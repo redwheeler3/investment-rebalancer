@@ -21,6 +21,7 @@ from copy import deepcopy
 from datetime import UTC, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from src.encrypted_state import read_encrypted_json, write_encrypted_json
 from src.models import TransferProgress, TransferRecommendation
@@ -168,7 +169,7 @@ class TransferLedger:
         if cycle is not None:
             if (
                 not isinstance(cycle, dict)
-                or set(cycle)
+                or set(cycle) - {"balance_receipt"}
                 != {
                     "action",
                     "limit",
@@ -189,6 +190,16 @@ class TransferLedger:
                 raise ValueError("Invalid transfer recommendation amounts.")
             if datetime.fromisoformat(cycle["started_at"]).utcoffset() is None:
                 raise ValueError("Transfer recommendation dates require timezones.")
+            balance_receipt = cycle.get("balance_receipt", 0)
+            if (
+                type(balance_receipt) is not int
+                or not 0 <= balance_receipt <= cycle["limit"]
+            ):
+                raise ValueError("Invalid broker balance receipt.")
+            if balance_receipt and cycle["action"] != "WITHDRAW":
+                raise ValueError(
+                    "Only broker-bound transfers can have a balance receipt."
+                )
             source_key, received_key = (
                 ("broker_out", "bank_in")
                 if cycle["action"] == "DEPOSIT"
@@ -378,6 +389,35 @@ class TransferLedger:
             broker_seen=known,
             checked_at=(now or datetime.now(UTC)).isoformat(),
         )
+        cycle = record["cycle"]
+        if (
+            cycle
+            and "balance_receipt" in cycle
+            and cycle["balance_receipt"]
+            <= record["broker_in"] - cycle["received_start"]
+        ):
+            cycle.pop("balance_receipt", None)
+
+    def observe_broker_cash(self, symbol, endpoint, today_cash_activity):
+        """Recognize an exact cash match while the broker's activity feed catches up."""
+        record = self.account(symbol)
+        cycle = record["cycle"]
+        opening = endpoint.start_of_day_cash_cad
+        if not cycle or cycle["action"] != "WITHDRAW" or opening is None:
+            return
+        source, _, pending, _ = self._amounts(record)
+        if not pending:
+            return
+        # Broker cash can carry fractions of a cent. Round the difference,
+        # not each balance, to compare it with the statement principal.
+        unexplained = cents(round(endpoint.cash_cad - opening - today_cash_activity, 2))
+        if unexplained == pending and not cycle.get("balance_receipt"):
+            cycle["balance_receipt"] = source
+        elif unexplained > 0:
+            raise ValueError(
+                "Broker cash increased without matching activity while a transfer is in transit. "
+                "Wait for Questrade activity before using the portfolio report."
+            )
 
     def activity_start(self, symbol, now):
         """Cover recent activity, polling gaps and the active cycle, with a day of overlap."""
@@ -411,7 +451,9 @@ class TransferLedger:
         # Cap inferred source principal across the entire cycle. Actual receipts
         # stay uncapped: extra money may have come from the intermediate bank.
         source = min(cycle["limit"], max(0, source_total - cycle["source_start"]))
-        received = max(0, received_total - cycle["received_start"])
+        received = max(
+            0, received_total - cycle["received_start"], cycle.get("balance_receipt", 0)
+        )
         pending = max(0, source - received)
         awaiting = 0
         if cycle["action"] == "WITHDRAW" and source == 0:
@@ -452,6 +494,7 @@ class TransferLedger:
             transit
             or offset
             or self._missing_broker_debit(record["cycle"], source, received)
+            or record["cycle"].get("balance_receipt", 0)
         )
 
     def retain_routes(self, endpoints):
@@ -485,6 +528,7 @@ class TransferLedger:
             pending / 100,
             awaiting / 100,
             self._missing_broker_debit(cycle, source, received) / 100,
+            bool(cycle.get("balance_receipt")),
         )
 
     def apply(self, portfolio, endpoints):
@@ -528,8 +572,7 @@ class TransferLedger:
             cycle = record["cycle"]
             if cycle is not None:
                 moved = progress.source_cad > 0 or progress.received_cad > 0
-                pending = progress.in_transit_cad > 0 or progress.source_offset_cad > 0
-                if progress.awaiting_broker_debit_cad or (moved and pending):
+                if self._unsettled(record):
                     # The original cap must survive until observed money settles.
                     continue
                 if (
@@ -597,11 +640,21 @@ def reconcile_transfer_activity(portfolio, balances, clients, endpoints):
             "Each external account requires a distinct Questrade transfer endpoint."
         )
     now = datetime.now(UTC)
+    eastern = ZoneInfo("America/Toronto")
+    broker_day = now.astimezone(eastern).date()
     for symbol, endpoint in endpoints.items():
         client = client_accounts[endpoint.number]
         start = ledger.activity_start(symbol, now)
+        first_start = start
         counts = Counter()
         examples = {}
+        today_cash_activity = 0.0
+        cycle = ledger.account(symbol)["cycle"]
+        check_cash = (
+            endpoint.start_of_day_cash_cad is not None
+            and cycle is not None
+            and cycle["action"] == "WITHDRAW"
+        )
         while start < now:
             # The API permits at most 31 days; 30-day windows stay within it.
             end = min(start + timedelta(days=30), now)
@@ -610,6 +663,14 @@ def reconcile_transfer_activity(portfolio, balances, clients, endpoints):
             )
             window = Counter()
             for row in rows:
+                if check_cash and row.get("currency") == "CAD" and row.get("netAmount"):
+                    posted = _posted_at(row)
+                    if (
+                        start <= posted <= end
+                        and posted.astimezone(eastern).date() == broker_day
+                        and (start == first_start or posted != start)
+                    ):
+                        today_cash_activity += float(row["netAmount"])
                 if (
                     str(row.get("type", "")).casefold()
                     not in {"deposits", "withdrawals"}
@@ -627,6 +688,7 @@ def reconcile_transfer_activity(portfolio, balances, clients, endpoints):
             start = end
         rows = [examples[key] for key, count in counts.items() for _ in range(count)]
         ledger.observe_broker(symbol, endpoint.number, rows, now)
+        ledger.observe_broker_cash(symbol, endpoint, today_cash_activity)
     ledger.apply(portfolio, endpoints)
     ledger.save()
     return ledger

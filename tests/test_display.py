@@ -38,3 +38,13 @@ def test_household_value_labels_return_for_priced_holdings(monkeypatch):
     )
     display.display_daily_change(10100, 100, 10)
     assert "Priced holdings:" in output.getvalue() and "10.0%" in output.getvalue()
+
+
+def test_allocation_tables_hide_internal_transit_key(monkeypatch):
+    output = StringIO()
+    monkeypatch.setattr(display, "console", Console(file=output, width=100))
+    allocations = {"ETF": 90, "TRANSIT:SAVEN:1006": 10}
+    display.display_allocations(allocations, {"ETF": 100}, 0.1)
+    display.display_projected_allocations(allocations, {"ETF": 100}, 0.1)
+    assert "Transit" not in output.getvalue() and "TRANSIT" not in output.getvalue()
+    assert output.getvalue().count("ETF") == 2

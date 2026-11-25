@@ -115,6 +115,8 @@ a bank top-up; exact amount equality is not required.
 
 ### External account to Questrade
 
+Questrade can update its reported cash balance before the deposit appears in activity. When the increase after accounting for today's posted cash transactions exactly matches the outstanding transfer, the ledger clears transit and keeps that balance evidence until the activity arrives. An unexplained increase of another amount pauses the report rather than valuing the same money twice. The portfolio always uses the broker's actual cash balance.
+
 Process a new statement as soon as it shows the withdrawal, even before Questrade
 receives the money. The lower external balance plus transit preserves tracked
 value until receipt.

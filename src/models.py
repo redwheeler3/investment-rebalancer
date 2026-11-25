@@ -102,6 +102,7 @@ class TransferProgress:
     awaiting_broker_debit_cad: float = (
         0.0  # Receipt principal still awaiting source evidence.
     )
+    awaiting_broker_receipt_activity: bool = False
 
     @property
     def transit_symbol(self) -> str:

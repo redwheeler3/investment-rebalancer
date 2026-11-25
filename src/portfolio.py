@@ -91,6 +91,7 @@ class AccountInfo:
     cash_cad: float = 0.0
     cash_usd: float = 0.0
     redemption_limits: dict[str, RedemptionLimit] = field(default_factory=dict)
+    start_of_day_cash_cad: float | None = None
 
 
 @dataclass
@@ -239,6 +240,14 @@ def build_portfolio(
                     raise ValueError("Duplicate or unsupported broker cash currency.")
                 cash[currency] = amount
             cash_cad, cash_usd = cash.get("CAD", 0.0), cash.get("USD", 0.0)
+            opening_cad = next(
+                (
+                    _required_amount(row, "cash")
+                    for row in balances_data.get("sodPerCurrencyBalances", [])
+                    if row["currency"] == "CAD"
+                ),
+                None,
+            )
 
             # Get positions
             raw_positions = raw_positions_by_account.get(acct_number, [])
@@ -333,6 +342,7 @@ def build_portfolio(
                 ),
                 cash_cad=cash_cad,
                 cash_usd=cash_usd,
+                start_of_day_cash_cad=opening_cad,
             )
             all_accounts.append(account_info)
 

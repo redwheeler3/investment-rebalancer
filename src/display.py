@@ -81,8 +81,6 @@ def _format_symbol(symbol: str, external_symbols) -> str:
     if symbol in external_symbols:
         provider, identifier = symbol.split(":", 1)
         return f"{provider}:...{identifier[-4:]}"
-    if symbol.startswith("TRANSIT:") and symbol[len("TRANSIT:") :] in external_symbols:
-        return f"Transit (...{symbol[-4:]})"
     return symbol
 
 
@@ -108,7 +106,11 @@ def _partition_symbols(allocations: dict, targets: dict, drifts: dict):
     """Split symbols into stocks (sorted by drift) and cash (sorted alphabetically)."""
     all_symbols = allocations.keys() | targets.keys()
     stocks = sorted(
-        [s for s in all_symbols if s not in _CASH_SYMBOLS],
+        [
+            s
+            for s in all_symbols
+            if s not in _CASH_SYMBOLS and not s.startswith("TRANSIT:")
+        ],
         key=lambda s: drifts.get(s, 0.0),
         reverse=True,
     )
