@@ -31,13 +31,15 @@ def test_ytd_chart_high_uses_intraday_high(monkeypatch):
     assert "High $120.00" in rendered
 
 
-def test_household_value_labels_return_for_priced_holdings(monkeypatch):
+def test_household_value_shows_day_change_without_label(monkeypatch):
     output = StringIO()
     monkeypatch.setattr(
         display, "console", Console(file=output, width=140, force_terminal=False)
     )
     display.display_daily_change(10100, 100, 10)
-    assert "Priced holdings:" in output.getvalue() and "10.0%" in output.getvalue()
+    rendered = output.getvalue()
+    assert "Priced holdings:" not in rendered
+    assert "$10,100.00" in rendered and "+$100.00 (+10.0%)" in rendered
 
 
 def test_allocation_tables_hide_internal_transit_key(monkeypatch):

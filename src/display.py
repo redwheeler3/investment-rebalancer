@@ -346,7 +346,7 @@ def display_daily_change(
         console.print(
             f"  [bold]Portfolio Value:[/bold]         "
             f"[default]${portfolio_value:,.2f}[/default]  "
-            f"Priced holdings: {_format_signed_change(day_pnl_cad, day_pnl_pct)}"
+            f"{_format_signed_change(day_pnl_cad, day_pnl_pct)}"
         )
 
 
