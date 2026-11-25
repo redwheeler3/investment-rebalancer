@@ -77,14 +77,15 @@ def test_scheduled_sync_keeps_market_snapshot_best_effort(capsys):
         patch("main.get_tokens_dir"),
         patch("main.QuestradeClient", return_value=object()),
         patch(
-            "main.get_usd_to_cad_rate", side_effect=RuntimeError("market unavailable")
+            "main.get_usd_to_cad_rate",
+            side_effect=main.MarketRateUnavailable("market unavailable"),
         ),
     ):
         main.run_scheduled_sync()
 
     output = capsys.readouterr().out
     assert "Could not snapshot portfolio value: market unavailable" in output
-    assert "Portfolio sync complete." in output
+    assert "Accuracy:" not in output
 
 
 def test_scheduled_sync_validates_before_rotating_tokens():

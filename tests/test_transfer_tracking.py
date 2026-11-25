@@ -827,12 +827,16 @@ def test_scheduled_sync_reconciles_before_recording_history_or_tactical_evaluati
     ):
         ath.return_value.value = 1000000
         ath.return_value.date = "2026-11-01"
-        main.run_scheduled_sync()
+        if activity_failure:
+            with pytest.raises(RuntimeError, match="activity unavailable"):
+                main.run_scheduled_sync()
+        else:
+            main.run_scheduled_sync()
     if activity_failure:
         record.assert_not_called()
         evaluate.assert_not_called()
     else:
-        record.assert_called_once_with(1000000)
+        record.assert_called_once_with(1000000, as_of=main.household_date())
         assert evaluate.call_args.kwargs["current_value"] == 1000000
         save.assert_not_called()
 
@@ -877,3 +881,32 @@ def test_receipt_awaiting_export_reserves_transfer_cap(tmp_path, receipt):
         sum(t.amount_cad for t in actions if isinstance(t, TransferRecommendation))
         == 180000 - receipt
     )
+
+
+def test_receipt_first_local_report_keeps_debit_in_original_cycle(tmp_path):
+    ledger, _ = baseline(tmp_path)
+    bank, parsed = bank_deposit(tmp_path, 180000)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
+
+    def report():
+        p = portfolio(bank, 320000)
+        ledger.apply(p, ROUTES)
+        assert p.total_value_cad == 1000000
+        return calculate_trades(
+            p, {"EQ": 20, SAVEN: 80}, 1.35, 0, 0.1, set(), None, ROUTES
+        )
+
+    waiting = report()
+    assert not any(isinstance(t, TransferRecommendation) for t in waiting)
+    ledger.remember_recommendations(waiting, ROUTES, NOW.replace(day=2))
+    for _ in range(2):
+        ledger.observe_broker(SAVEN, "broker", [activity(-180000)], NOW.replace(day=3))
+        orders = report()
+        assert [
+            t.amount_cad for t in orders if isinstance(t, TransferRecommendation)
+        ] == [120000]
+    ledger.remember_recommendations(orders, ROUTES, NOW.replace(day=3))
+    ledger.observe_broker(
+        SAVEN, "broker", [activity(-180000), activity(-120000, day=4)]
+    )
+    assert ledger.progress(SAVEN, ACCOUNT).in_transit_cad == 120000

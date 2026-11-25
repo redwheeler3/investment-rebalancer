@@ -396,27 +396,7 @@ self.plan.add_trade(TradeRecommendation(
 
 ### The `fund_buy` mechanism inside `CashLedger`
 
-This is where the CAD-vs-USD decision happens:
-
-```python
-def fund_buy(self, account_number, currency, cost_native, dlr_quotes=None) -> bool:
-    native_cash = self.cash(account_number, currency)
-
-    if native_cash >= cost_native:
-        # Easy path: pay with same-currency cash
-        self.balances[account_number][currency] -= cost_native
-        return False  # No FX needed
-
-    # Hard path: use native cash + convert the remainder
-    remainder_native = cost_native - native_cash
-    self.balances[account_number][currency] = 0.0
-    source_currency = "CAD" if currency == "USD" else "USD"
-    consume_cross_currency_cash(
-        self.balances[account_number],
-        source_currency, currency, remainder_native, ...
-    )
-    return True  # FX was needed
-```
+A buy first spends available cash in its own currency. If there is a shortfall, the ledger sizes a whole-share DLR conversion and debits the source currency. It reserves the journal fee on the first conversion in each account and direction. Subsequent buys sharing that journal can use the remaining proceeds.
 
 ---
 
@@ -466,7 +446,7 @@ Then it runs a **dry-run first**: it simulates selling the most overweight candi
 
 ```python
 candidates.sort(key=lambda item: item[0], reverse=True)  # Most overweight first
-simulated_cash = current_cash
+simulated_cash = self.ledger.funded_balance(acct.number, currency, self.dlr_quotes)
 planned_sells = []
 for _drift_pct, symbol, bid_price, max_sellable in candidates:
     shortfall = target_native - simulated_cash
@@ -706,30 +686,7 @@ In a typical run with 5-8 symbols and 3 accounts:
 
 ## The `CashLedger` State Object
 
-Tracks what cash is available in each account as trades are planned:
-
-```python
-@dataclass
-class CashLedger:
-    usd_to_cad_rate: float
-    fee_cad: float
-    balances: dict  # {account_number: {"CAD": float, "USD": float}}
-
-    def cash(self, account_number, currency) -> float:
-        return max(0.0, self.balances.get(account_number, {}).get(currency, 0.0))
-
-    def total_buying_power(self, account_number, buy_currency, dlr_quotes=None) -> float:
-        """Same-currency cash + what you could get by converting the other currency."""
-        native = self.cash(account_number, buy_currency)
-        source_currency = "CAD" if buy_currency == "USD" else "USD"
-        convertible = cross_currency_buying_power(
-            self.cash(account_number, source_currency),
-            source_currency, self.usd_to_cad_rate, self.fee_cad, dlr_quotes
-        )
-        return native + convertible
-```
-
-**Key insight:** `total_buying_power` includes cross-currency cash. So if an account has $0 USD but $60,000 CAD, buying power for USD symbols is still ~US$44,000 (after conversion).
+The ledger tracks signed CAD and USD balances. Buying power adds the amount available from a whole-share conversion after any outstanding fee. A funding-sale simulation uses that same calculation, so the proceeds only need to cover the remaining shortfall. Another account's cash is never included.
 
 ---
 
@@ -1359,6 +1316,8 @@ rebalancer.py
 ```
 
 ## Restricted redemptions
+
+Verified lots are keyed by account and broker security ID. A ticker-only checkpoint must be rebuilt from posted activity before its units can be recommended. Conflicting broker IDs never match solely because the tickers agree.
 
 The optional `redemption_holding_months` section in private settings maps each
 broker symbol to a positive whole number of calendar months, such as `24`, or

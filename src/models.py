@@ -100,6 +100,13 @@ class TransferProgress:
     source_offset_cad: float = 0.0  # Positive amount to deduct from a stale source
 
     @property
+    def awaiting_broker_withdrawal(self) -> bool:
+        """A bank receipt arrived before any broker debit for this deposit cycle."""
+        return (
+            self.action == "DEPOSIT" and self.received_cad > 0 and self.source_cad == 0
+        )
+
+    @property
     def transit_symbol(self) -> str:
         return f"TRANSIT:{self.symbol}"
 

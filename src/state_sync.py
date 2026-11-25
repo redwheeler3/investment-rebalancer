@@ -131,6 +131,7 @@ def _publish_pending(root, allowed, retry_seconds=0):
 def prepare_state(token_names):
     """Verify encryption and recover prior commits before consuming any token."""
     root = get_state_root()
+    token_names = tuple(token_names)
     paths = validate_encrypted_state_files(token_names)
     try:
         if (
@@ -140,7 +141,18 @@ def prepare_state(token_names):
             raise StateSyncError("State directory must be the private repository root.")
         _git(root, "var", "GIT_AUTHOR_IDENT")
         _git(root, "var", "GIT_COMMITTER_IDENT")
+        _git(root, "fetch", "origin", "main")
         _publish_pending(root, {p.relative_to(root).as_posix() for p in paths})
+        for name in token_names:
+            rel = f"tokens/{name}"
+            if not _git(root, "ls-files", "-v", "--", rel).startswith(
+                b"H "
+            ) or not _git(root, "ls-tree", "origin/main", "--", rel).startswith(
+                b"100644 blob "
+            ):
+                raise StateSyncError(
+                    f"Track and publish encrypted {rel} on main before rotating it."
+                )
     except (subprocess.SubprocessError, OSError) as exc:
         raise StateSyncError(
             "Cannot publish private state. Check branch, remote and Git identity."
@@ -163,22 +175,29 @@ def sync_state(token: Path | None = None, *, retry_seconds=0):
         if not selected:
             return
         paths = sorted(selected)
-        if not _git(
-            root, "status", "--porcelain", "--untracked-files=all", "--", *paths
-        ):
-            return
-        _git(root, "add", "--", *paths)
-        if _git(root, "diff", "--cached", "--name-only", "-z", "--", *paths):
-            _git(
-                root,
-                "commit",
-                "--only",
-                "-m",
-                "chore(sync): persist encrypted state",
-                "--",
-                *paths,
-            )
-        _publish_pending(root, allowed, retry_seconds)
+        if _git(root, "status", "--porcelain", "--untracked-files=all", "--", *paths):
+            _git(root, "add", "--", *paths)
+            if _git(root, "diff", "--cached", "--name-only", "-z", "--", *paths):
+                _git(
+                    root,
+                    "commit",
+                    "--only",
+                    "-m",
+                    "chore(sync): persist encrypted state",
+                    "--",
+                    *paths,
+                )
+            _publish_pending(root, allowed, retry_seconds)
+        elif token is not None:
+            # An empty Git status alone is not proof of remote publication.
+            _git(root, "fetch", "origin", "main")
+        if token is not None:
+            rel = paths[0]
+            expected = _git(root, "hash-object", f"--path={rel}", "--", rel)
+            if _git(root, "rev-parse", f"origin/main:{rel}") != expected:
+                raise StateSyncError(
+                    "Remote token does not match the saved replacement."
+                )
     except (subprocess.SubprocessError, OSError) as error:
         raise StateSyncError(
             "Private state sync failed. Preserve the local state and verify origin/main "

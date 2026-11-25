@@ -569,3 +569,21 @@ class TestComputePortfolioDayPnl:
         pnl, pct = _compute_portfolio_day_pnl(portfolio, usd_to_cad_rate=1.36)
         assert pnl == -2000.0  # (48 - 50) × 1000
         assert abs(pct - (-4.0)) < 0.01
+
+
+def test_previous_close_timeout_preserves_quotes_and_other_day_changes():
+    p = _make_portfolio()
+    client = MagicMock()
+    client.get_quote.return_value = [
+        {"symbol": "VCN.TO", "bidPrice": 49, "askPrice": 51}
+    ]
+    client.get_candles.side_effect = [
+        requests.Timeout(),
+        [{"start": "2020-01-01", "close": 59}],
+    ]
+    fetch_quotes_for_holdings(p, [client])
+    assert (p.holdings["VCN.TO"].bid_price, p.holdings["VCN.TO"].prev_close_price) == (
+        49,
+        0,
+    )
+    assert p.holdings["VUN.TO"].prev_close_price == 59

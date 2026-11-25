@@ -132,15 +132,19 @@ def _resolve_fx_split_rule(
             f"fx_target_rules.{rule_name} must have max_usd_to_cad_rate greater than min_usd_to_cad_rate"
         )
 
-    clamped_rate = _clamp(usd_to_cad_rate, min_rate, max_rate)
-    cad_fraction = (clamped_rate - min_rate) / (max_rate - min_rate)
-    raw_cad_pct = total_target_pct * cad_fraction
-
-    cad_target_pct = _clamp(
-        _sticky_round(raw_cad_pct, rounding_step, prior_cad_target),
-        0.0,
-        total_target_pct,
-    )
+    if usd_to_cad_rate <= min_rate:
+        cad_target_pct = 0.0
+    elif usd_to_cad_rate >= max_rate:
+        cad_target_pct = total_target_pct
+    else:
+        cad_fraction = (usd_to_cad_rate - min_rate) / (max_rate - min_rate)
+        cad_target_pct = _clamp(
+            _sticky_round(
+                total_target_pct * cad_fraction, rounding_step, prior_cad_target
+            ),
+            0.0,
+            total_target_pct,
+        )
     usd_target_pct = total_target_pct - cad_target_pct
 
     targets[usd_symbol] = usd_target_pct

@@ -5,6 +5,7 @@ No side effects: history recording is handled by the caller (main.py).
 """
 
 from dataclasses import dataclass, field
+from datetime import date
 
 from src.fx_conversions import CurrencyConversion
 from src.history import (
@@ -45,6 +46,8 @@ def build_report_data(
     transient_alerts: list[TransientAlert],
     hidden_symbols: set[str],
     tactical_posture: TacticalPosture | None = None,
+    *,
+    as_of: date | None = None,
 ) -> RebalanceReportData:
     """Calculate all report inputs from the current portfolio state."""
     current_snapshot = build_allocation_snapshot(
@@ -65,8 +68,12 @@ def build_report_data(
             conversions=currency_conversions,
         )
 
-    all_time_high = get_all_time_high(current_value=portfolio.total_value_cad)
-    ytd_history = get_year_to_date_history(current_value=portfolio.total_value_cad)
+    all_time_high = get_all_time_high(
+        current_value=portfolio.total_value_cad, as_of=as_of
+    )
+    ytd_history = get_year_to_date_history(
+        current_value=portfolio.total_value_cad, as_of=as_of
+    )
 
     return RebalanceReportData(
         current=current_snapshot,

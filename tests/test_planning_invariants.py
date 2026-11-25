@@ -154,6 +154,8 @@ def test_fx_budget_is_conserved(rate, prior):
         weights = resolve_targets({}, {"pair": rule}, rate)
     assert weights["C"] + weights["U"] == 20
     assert min(weights.values()) >= 0
+    if rate in (1, 1.5):
+        assert weights["C"] == (20 if rate == 1.5 else 0)
 
 
 @pytest.mark.parametrize("flag,code", [("--syn", 2), ("--help", 0)])
@@ -173,6 +175,8 @@ def test_cli_stops_before_side_effects(flag, code):
 @pytest.mark.parametrize(
     "update,match",
     [
+        ({"norberts_gambit_fee_cad": -1}, "norberts_gambit_fee_cad"),
+        ({"drift_trade_threshold_pct": float("nan")}, "drift_trade_threshold_pct"),
         ({"targets": {"ETF": 110, "OTHER": -10}}, "Invalid target"),
         ({"targets": {"ETF": float("nan")}}, "Invalid target"),
         ({"targets": {"ETF": 100, "CAD": 0}}, "Remove CAD"),
@@ -205,3 +209,85 @@ def test_invalid_config_stops_both_runs_before_auth(tmp_path, update, match):
             with pytest.raises(ValueError, match=match):
                 run()
         auth.assert_not_called()
+
+
+def test_two_buys_share_one_journal_fee():
+    acct = dict(
+        number="a",
+        type="TFSA",
+        owner="A",
+        cash_cad=37.49,
+        positions=[dict(symbol=s, qty=1, price=10, currency="USD") for s in ("Y", "X")],
+    )
+    p = _build_test_portfolio([acct], RATE)
+    targets = {"Y": 50, "X": 50}
+    orders = calculate_trades(p, targets, RATE, 10.49, 0.1, set(), QUOTES)
+    assert [(o.symbol, o.quantity) for o in orders] == [("X", 1), ("Y", 1)]
+    conv = calculate_currency_needs(orders, p.accounts, RATE, QUOTES, targets, 10.49)
+    assert len(conv) == 1 and conv[0].source_amount + conv[0].fee == pytest.approx(
+        37.49
+    )
+    assert simulate_rebalance(
+        p, orders, targets, RATE, conversions=conv
+    ).accuracy == pytest.approx(100)
+
+
+@pytest.mark.parametrize(
+    "cad,expected", [(22, [("SELL", "S"), ("BUY", "B")]), (19.49, [])]
+)
+def test_funding_sale_counts_all_available_cash(cad, expected):
+    p = _build_test_portfolio(
+        [
+            dict(
+                number="a",
+                type="Margin",
+                owner="A",
+                cash_cad=cad,
+                cash_usd=30,
+                positions=[
+                    dict(symbol="B", qty=1, price=100, currency="CAD"),
+                    dict(symbol="S", qty=1, price=40, currency="CAD"),
+                ],
+            ),
+            dict(
+                number="b",
+                type="Margin",
+                owner="A",
+                positions=[dict(symbol="Z", qty=1000, price=100, currency="CAD")],
+            ),
+        ],
+        RATE,
+    )
+    orders = calculate_trades(p, {"B": 1, "Z": 99}, RATE, 0, 0.1, set(), QUOTES)
+    assert [(o.action, o.symbol) for o in orders] == expected
+
+
+@pytest.mark.parametrize(
+    "second,match",
+    [
+        ({"openQuantity": -1}, "Short"),
+        ({"symbol": "USD"}, "reserved"),
+        ({"symbolId": 2}, "security ID"),
+        ({"currency": "USD"}, "currencies"),
+    ],
+)
+def test_broker_rejects_unsupported_holdings(second, match):
+    c = Mock(owner_name="Example", account_type_display_overrides={})
+    c.get_accounts.return_value = [dict(number=n, type="Margin") for n in ("1", "2")]
+    row = dict(
+        symbol="EQ",
+        symbolId=1,
+        currency="CAD",
+        openQuantity=1,
+        currentPrice=100,
+        currentMarketValue=100,
+    )
+    c.get_balances.return_value = {
+        "perCurrencyBalances": [{"currency": "CAD", "cash": 0}]
+    }
+    c.get_symbols.return_value = []
+    c.get_positions.side_effect = [[row], [row]]
+    assert build_portfolio([c], RATE).holdings["EQ"].total_quantity == 2
+    c.get_positions.side_effect = [[row], [{**row, **second}]]
+    with pytest.raises(ValueError, match=match):
+        build_portfolio([c], RATE)

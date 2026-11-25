@@ -18,8 +18,9 @@ from __future__ import annotations
 
 import math
 from dataclasses import dataclass, field
-from datetime import UTC, datetime
+from datetime import date
 
+from src.history import household_date
 from src.encrypted_state import read_encrypted_json, write_encrypted_json
 from src.paths import get_tactical_state_file
 
@@ -283,6 +284,8 @@ def evaluate_tactical_posture(
     ath_value: float,
     ath_date: str,
     config: TacticalConfig,
+    *,
+    as_of: date | None = None,
 ) -> TacticalPosture:
     """Evaluate the tactical posture given current portfolio state.
 
@@ -304,7 +307,7 @@ def evaluate_tactical_posture(
         TacticalPosture with regime, targets, and display info.
     """
     state = load_tactical_state()
-    today = datetime.now(UTC).astimezone().date().isoformat()
+    today = (as_of or household_date()).isoformat()
 
     # Determine reference high
     if state.regime == "baseline":

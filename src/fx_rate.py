@@ -8,6 +8,10 @@ DLR.TO/DLR.U.TO quote data used for Norbert's Gambit calculations.
 from dataclasses import dataclass
 
 
+class MarketRateUnavailable(RuntimeError):
+    """No usable exchange rate for this snapshot."""
+
+
 @dataclass
 class DlrQuotes:
     """Cached DLR quote data — used for both exchange rate and Norbert's Gambit."""
@@ -108,7 +112,7 @@ def get_usd_to_cad_rate(client) -> float:
     """
     rate = fetch_dlr_quotes(client).exchange_rate
     if rate is None:
-        raise RuntimeError(
+        raise MarketRateUnavailable(
             "Could not derive a live USD/CAD exchange rate from Questrade DLR quotes."
         )
     return rate

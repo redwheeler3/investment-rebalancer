@@ -327,8 +327,7 @@ class TransferLedger:
         """Baseline old records and count newly posted CAD deposits/withdrawals once."""
         record = self.account(symbol)
         if record["broker_account"] not in (None, account_number):
-            amounts = self._amounts(record)
-            if amounts is not None and (amounts[2] > 0 or amounts[3] > 0):
+            if self._unsettled(record):
                 raise ValueError(
                     "Cannot change a broker endpoint with an outstanding transfer."
                 )
@@ -422,13 +421,23 @@ class TransferLedger:
             awaiting = min(cycle["limit"], received)
         return source, received, pending, awaiting
 
+    def _unsettled(self, record):
+        amounts = self._amounts(record)
+        if amounts is None:
+            return False
+        source, received, transit, offset = amounts
+        return bool(
+            transit
+            or offset
+            or (record["cycle"]["action"] == "DEPOSIT" and received and not source)
+        )
+
     def retain_routes(self, endpoints):
         """Allow removal only after cash has settled, preserving pending valuation."""
         for symbol, record in list(self.data["accounts"].items()):
             if symbol in endpoints:
                 continue
-            amounts = self._amounts(record)
-            if amounts is not None and (amounts[2] > 0 or amounts[3] > 0):
+            if self._unsettled(record):
                 raise ValueError(
                     "Keep an external target and its Questrade endpoint configured until its transfer settles."
                 )
@@ -497,7 +506,7 @@ class TransferLedger:
             if cycle is not None:
                 moved = progress.source_cad > 0 or progress.received_cad > 0
                 pending = progress.in_transit_cad > 0 or progress.source_offset_cad > 0
-                if moved and pending:
+                if progress.awaiting_broker_withdrawal or (moved and pending):
                     # The original cap must survive until observed money settles.
                     continue
                 if (

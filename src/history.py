@@ -11,8 +11,17 @@ import json
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 
+from zoneinfo import ZoneInfo
+
 from src.encrypted_state import read_encrypted_text, write_encrypted_text
 from src.paths import get_history_file
+
+
+def household_date(instant: datetime | None = None) -> date:
+    """Shared reporting day for local runs and UTC workflow runners."""
+    return (
+        (instant or datetime.now(UTC)).astimezone(ZoneInfo("America/Vancouver")).date()
+    )
 
 
 @dataclass
@@ -34,7 +43,7 @@ class HistoryPoint:
     high: float
 
 
-def record_value(total_value_cad: float) -> None:
+def record_value(total_value_cad: float, *, as_of: date | None = None) -> None:
     """
     Record today's portfolio value in the history file.
 
@@ -46,7 +55,7 @@ def record_value(total_value_cad: float) -> None:
     Args:
         total_value_cad: Current total portfolio value in CAD.
     """
-    today = datetime.now(UTC).astimezone().date().isoformat()
+    today = (as_of or household_date()).isoformat()
     history = _load_history()
 
     rounded_value = round(total_value_cad, 2)
@@ -67,7 +76,9 @@ def record_value(total_value_cad: float) -> None:
     _save_history(history)
 
 
-def get_all_time_high(current_value: float) -> AllTimeHigh:
+def get_all_time_high(
+    current_value: float, *, as_of: date | None = None
+) -> AllTimeHigh:
     """
     Calculate the all-time high, considering both recorded history and
     the live portfolio value.
@@ -83,7 +94,7 @@ def get_all_time_high(current_value: float) -> AllTimeHigh:
         AllTimeHigh with the peak value, date, and drawdown from ATH.
     """
     history = _load_history()
-    today = datetime.now(UTC).astimezone().date().isoformat()
+    today = (as_of or household_date()).isoformat()
 
     # Find the historical best (if any)
     if history:
@@ -111,7 +122,9 @@ def get_all_time_high(current_value: float) -> AllTimeHigh:
     )
 
 
-def get_year_to_date_history(current_value: float) -> list[HistoryPoint]:
+def get_year_to_date_history(
+    current_value: float, *, as_of: date | None = None
+) -> list[HistoryPoint]:
     """Return recorded portfolio values from Jan 1 of the current year through today.
 
     Today's entry always uses the live current_value so the chart reflects
@@ -119,7 +132,7 @@ def get_year_to_date_history(current_value: float) -> list[HistoryPoint]:
 
     Missing dates are not synthesized; only recorded values are returned.
     """
-    today = datetime.now(UTC).astimezone().date()
+    today = as_of or household_date()
     start_of_year = date(today.year, 1, 1)
 
     latest_by_day: dict[date, tuple[float, float]] = {}

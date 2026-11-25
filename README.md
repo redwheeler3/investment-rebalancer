@@ -67,6 +67,7 @@ CAD/USD planning, and Questrade-specific workflow details.
 - **Unified Portfolio View** — Aggregates all accounts into one portfolio view
 - **External Account Tracking** — Uses registered statement adapters and dated encrypted balance caches for supported institutions
 - **Cash in Transit** — Reconciles recommended transfers between the broker and external account while keeping actual buying power separate
+- **Long positions only** — A broker position with negative open quantity stops the run before history, tactical evaluation, or trade recommendations. Household history uses the Vancouver calendar date in both local and scheduled runs.
 - **Fail-Closed Account Loading** — Stops before portfolio evaluation if any configured Questrade account is unavailable
 - **Target Allocation Tracking** — Compares holdings against configurable targets
 - **Accuracy Score** — Single percentage showing how close the portfolio is to target
@@ -908,7 +909,7 @@ Copy `config/settings.example.yaml` from this repo into your private state repo 
 
 ### Local run worked but push failed
 
-Your tokens may have rotated locally without being pushed upstream. Push the private state repo manually before running from another machine or waiting for GitHub Actions.
+Your tokens may have rotated locally without being pushed upstream. Push the private state repo manually before running from another machine or waiting for GitHub Actions. Every configured encrypted token must already be tracked and published on the private repository’s main branch.
 
 ---
 

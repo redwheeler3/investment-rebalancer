@@ -283,7 +283,7 @@ def test_scheduled_history_and_accuracy_include_savings(tmp_path, capsys):
     ):
         main.run_scheduled_sync()
     load.assert_called_once_with(CONFIGS)
-    record.assert_called_once_with(100000)
+    record.assert_called_once_with(100000, as_of=main.household_date())
     assert "Accuracy: 100.0%" in capsys.readouterr().out
 
 

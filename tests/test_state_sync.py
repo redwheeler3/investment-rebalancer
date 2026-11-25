@@ -156,3 +156,26 @@ def test_next_login_and_401_retry_see_published_token(repo, monkeypatch):
     monkeypatch.setattr(broker.requests, "get", get)
     assert client._get("v1/example") == {"ok": True}
     assert len(rotations) == 3
+
+
+def test_token_preflight_requires_remote_file_and_rotation_verifies_blob(
+    repo, monkeypatch
+):
+    root, remote = repo
+    ignored = root / "tokens/new.json"
+    ignored.write_bytes(b"cipher-new")
+    (root / ".git/info/exclude").write_text("tokens/new.json\n")
+    # Real SOPS preflight is exercised by the encryption tests.
+    token = root / "tokens/a.json"
+    monkeypatch.setattr(
+        state_sync, "validate_encrypted_state_files", lambda *args: [token, ignored]
+    )
+    with pytest.raises(state_sync.StateSyncError, match="Track and publish"):
+        state_sync.prepare_state([ignored.name])
+    state_sync.prepare_state([token.name])
+    state_sync.sync_state(token)
+    git(root, "update-index", "--assume-unchanged", "tokens/a.json")
+    token.write_bytes(b"cipher-different")
+    with pytest.raises(state_sync.StateSyncError, match="does not match"):
+        state_sync.sync_state(token)
+    assert git(remote, "show", "main:tokens/a.json") == b"cipher-initial"

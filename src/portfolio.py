@@ -22,6 +22,7 @@ from src.fx_math import (
     to_cad,
 )
 from src.models import TransferProgress
+from src.questrade_client import RETRYABLE_HTTP_STATUSES
 from src.redemption import RedemptionLimit, account_redemption_limits
 
 
@@ -184,6 +185,7 @@ def build_portfolio(
     updated_lots = dict(saved_lots)
 
     account_numbers = set()
+    security_ids = {}
     for client in clients:
         accounts = client.get_accounts()
 
@@ -245,6 +247,10 @@ def build_portfolio(
             for pos in raw_positions:
                 symbol = pos.get("symbol") or ""
                 quantity = _required_amount(pos, "openQuantity")
+                if quantity < 0:
+                    raise ValueError(
+                        "Short positions are unsupported. Rebalancing requires long-only accounts."
+                    )
                 if quantity == 0 and pos.get("currentMarketValue") in (0, None):
                     continue
                 market_value = _required_amount(pos, "currentMarketValue")
@@ -260,6 +266,18 @@ def build_portfolio(
                     symbol,
                     symbol_currency_map,
                 )
+
+                if symbol in {"CAD", "USD"} or symbol.startswith("TRANSIT:"):
+                    raise ValueError(
+                        f"Broker ticker {symbol} conflicts with a reserved portfolio key."
+                    )
+                if symbol in holdings and holdings[symbol].currency != currency:
+                    raise ValueError(f"Conflicting broker currencies for {symbol}.")
+                if (
+                    symbol_id
+                    and security_ids.setdefault(symbol, symbol_id) != symbol_id
+                ):
+                    raise ValueError(f"Conflicting broker security IDs for {symbol}.")
 
                 position = Position(
                     symbol=symbol,
@@ -506,9 +524,15 @@ def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
                     exclude_date=quote_trade_dates.get(symbol),
                 )
             except requests.HTTPError as error:
-                if getattr(error.response, "status_code", None) != 404:
+                status = getattr(error.response, "status_code", None)
+                if status == 404:
+                    prev_close = holding.current_price
+                elif status in RETRYABLE_HTTP_STATUSES:
+                    prev_close = 0.0
+                else:
                     raise
-                prev_close = holding.current_price
+            except (requests.Timeout, requests.ConnectionError):
+                prev_close = 0.0
 
             holding.prev_close_price = prev_close
 

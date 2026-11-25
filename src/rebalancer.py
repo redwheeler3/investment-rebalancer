@@ -249,6 +249,15 @@ class CashLedger:
     fee_cad: float
     balances: dict[str, dict[str, float]]
 
+    paid_journals: set[tuple[str, str]] = field(default_factory=set)
+
+    def remaining_fee(self, account_number: str, buy_currency: str) -> float:
+        return (
+            0.0
+            if (account_number, buy_currency) in self.paid_journals
+            else self.fee_cad
+        )
+
     @classmethod
     def from_portfolio(cls, portfolio, usd_to_cad_rate: float, fee_cad: float):
         balances = {
@@ -263,19 +272,21 @@ class CashLedger:
     def same_currency_buying_power(self, account_number: str, currency: str) -> float:
         return self.cash(account_number, currency)
 
-    def total_buying_power(
-        self, account_number: str, buy_currency: str, dlr_quotes=None
-    ) -> float:
+    def funded_balance(self, account_number, buy_currency, dlr_quotes=None):
+        """Signed cash after converting the available source, including any debit."""
         native = self.balances[account_number][buy_currency]
         source_currency = "CAD" if buy_currency == "USD" else "USD"
         convertible = cross_currency_buying_power(
             self.cash(account_number, source_currency),
             source_currency,
             self.usd_to_cad_rate,
-            self.fee_cad,
+            self.remaining_fee(account_number, buy_currency),
             dlr_quotes=dlr_quotes,
         )
-        return max(0.0, native + convertible)
+        return native + convertible
+
+    def total_buying_power(self, account_number, buy_currency, dlr_quotes=None):
+        return max(0.0, self.funded_balance(account_number, buy_currency, dlr_quotes))
 
     def credit_sale(
         self, account_number: str, currency: str, proceeds_native: float
@@ -302,9 +313,10 @@ class CashLedger:
             currency,
             remainder_native,
             self.usd_to_cad_rate,
-            self.fee_cad,
+            self.remaining_fee(account_number, currency),
             dlr_quotes=dlr_quotes,
         )
+        self.paid_journals.add((account_number, currency))
         return True
 
 
@@ -416,6 +428,8 @@ class RebalancePlanner:
                 None,
             )
             if progress is not None:
+                if progress.awaiting_broker_withdrawal:
+                    continue
                 unsettled = (
                     progress.in_transit_cad > 0 or progress.source_offset_cad > 0
                 )
@@ -499,7 +513,7 @@ class RebalancePlanner:
             if symbol not in ("CAD", "USD")
             and drift_pct > self.drift_trade_threshold_pct
         ]
-        overweight_symbols.sort(key=lambda item: item[1], reverse=True)
+        overweight_symbols.sort(key=lambda item: (-item[1], item[0]))
 
         for symbol, _ in overweight_symbols:
             current_drift = self.plan.drifts().get(symbol, drifts.get(symbol, 0.0))
@@ -557,7 +571,7 @@ class RebalancePlanner:
             if symbol not in ("CAD", "USD")
             and drift_pct < -self.drift_trade_threshold_pct
         ]
-        underweight_symbols.sort(key=lambda item: item[1])
+        underweight_symbols.sort(key=lambda item: (item[1], item[0]))
 
         for symbol, _ in underweight_symbols:
             count += self._buy_symbol_toward_target(symbol)
@@ -740,8 +754,9 @@ class RebalancePlanner:
         candidates.sort(key=lambda item: item[0], reverse=True)
 
         # Dry-run: compute planned sells and check if they raise enough cash
-        current_cash = self.ledger.same_currency_buying_power(acct.number, currency)
-        simulated_cash = current_cash
+        simulated_cash = self.ledger.funded_balance(
+            acct.number, currency, self.dlr_quotes
+        )
         planned_sells: list[tuple[str, int, float, float]] = []
 
         for _drift_pct, symbol, bid_price_native, max_sellable in candidates:
@@ -968,7 +983,7 @@ class RebalancePlanner:
             source_cash,
             source_currency,
             self.usd_to_cad_rate,
-            self.fee_cad,
+            self.ledger.remaining_fee(acct.number, other_currency),
             dlr_quotes=self.dlr_quotes,
         )
         cross_cash += min(0.0, self.ledger.balances[acct.number][other_currency])
@@ -1002,7 +1017,7 @@ class RebalancePlanner:
 
         cost_native = quantity * ask_price_native
         if requires_fx:
-            self.ledger.fund_buy(
+            requires_fx = self.ledger.fund_buy(
                 acct.number,
                 buy_currency,
                 cost_native,
@@ -1073,7 +1088,7 @@ class RebalancePlanner:
                         while True:
                             trade = build_deploy_cash_underweight(
                                 acct,
-                                self.ledger.balances,
+                                self.ledger,
                                 self.holdings_view,
                                 projected_drifts,
                                 self.hidden_symbols,
@@ -1082,10 +1097,6 @@ class RebalancePlanner:
                                 source_currency=source_currency,
                                 buy_currency=buy_currency,
                                 underweight_threshold_pct=0.0,
-                                fee_cad=self.fee_cad if requires_fx else 0.0,
-                                note="Deploy cash (underweight) (FX)"
-                                if requires_fx
-                                else "Deploy cash (underweight)",
                                 dlr_quotes=self.dlr_quotes if requires_fx else None,
                             )
                             if trade is None:

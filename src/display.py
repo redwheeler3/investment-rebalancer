@@ -167,7 +167,7 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
     table.add_column("Shares", justify="right")
     table.add_column("Price", justify="right")
     table.add_column("Value (CAD)", justify="right")
-    table.add_column("Day P&L (CAD)", justify="right")
+    table.add_column("Priced holdings P&L (CAD)", justify="right")
 
     # Collect holdings sorted alphabetically
     total_day_pnl_cad = 0.0
@@ -209,7 +209,11 @@ def display_holdings_summary(portfolio, usd_to_cad_rate: float):
 
         total_day_pnl_cad += day_pnl_cad
         total_value_for_pct += prev_value_cad
-        pnl_str = _format_signed_change(day_pnl_cad, change_pct)
+        pnl_str = (
+            _format_signed_change(day_pnl_cad, change_pct)
+            if prev_close > 0
+            else "Unavailable"
+        )
 
         rows.append((symbol, qty_str, price_str, value_cad, pnl_str))
 
@@ -340,7 +344,7 @@ def display_daily_change(
         console.print(
             f"  [bold]Portfolio Value:[/bold]         "
             f"[default]${portfolio_value:,.2f}[/default]  "
-            f"{_format_signed_change(day_pnl_cad, day_pnl_pct)}"
+            f"Priced holdings: {_format_signed_change(day_pnl_cad, day_pnl_pct)}"
         )
 
 
@@ -486,7 +490,7 @@ def display_year_to_date_chart(history_points: list, console_height: int | None 
     if not history_points:
         return
 
-    today = datetime.now(UTC).astimezone().date()
+    today = history_points[-1].date
     start_of_year = date(today.year, 1, 1)
     total_days = max(1, (today - start_of_year).days)
     values = [point.value for point in history_points]
@@ -959,7 +963,9 @@ def display_external_transfers(portfolio, actions: list) -> None:
         action for action in actions if action.action in {"DEPOSIT", "WITHDRAW"}
     ]
     awaiting = [
-        item for item in portfolio.transfer_progress if item.source_offset_cad > 0
+        item
+        for item in portfolio.transfer_progress
+        if item.source_offset_cad > 0 or item.awaiting_broker_withdrawal
     ]
     # A settled cycle can retain unused allowance internally. Show only actionable
     # instructions, money in transit, or an export needed to reconcile valuation.
@@ -995,8 +1001,18 @@ def display_external_transfers(portfolio, actions: list) -> None:
         account_label = _format_account_label(
             item.owner, item.account_type, item.account_number
         )
+        external = _external_account_label(
+            item.symbol, portfolio.external_balances[item.symbol]
+        )
+        if item.awaiting_broker_withdrawal:
+            table.add_row(
+                f"{account_label} -> {external}",
+                _format_money(item.received_cad),
+                "Awaiting broker debit",
+            )
+            continue
         table.add_row(
-            f"{_external_account_label(item.symbol, portfolio.external_balances[item.symbol])} -> {account_label}",
+            f"{external} -> {account_label}",
             _format_money(item.source_offset_cad),
             "Awaiting export",
         )

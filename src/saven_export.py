@@ -140,11 +140,10 @@ def find_latest_saven_export(
     """Select by export format/account and file time, independently of filename."""
     candidates = []
     for path in directory.glob("*.csv"):
-        try:
-            with path.open(encoding="utf-8-sig", newline="") as stream:
-                exported_account = _read_prefix(csv.reader(stream), account_number)
-        except UnicodeDecodeError:
-            continue
+        # Probe only the header tolerantly. The selected account's complete
+        # statement is decoded strictly by read_saven_export.
+        with path.open(encoding="utf-8-sig", errors="replace", newline="") as stream:
+            exported_account = _read_prefix(csv.reader(stream), account_number)
         if exported_account is not None:
             candidates.append((path, exported_account, path.stat().st_mtime_ns))
     if not candidates:

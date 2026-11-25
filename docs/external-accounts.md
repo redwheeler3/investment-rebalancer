@@ -99,6 +99,8 @@ tactical evaluation, accuracy reporting, or planning, or cause amount warnings.
 
 ### Questrade to an external account
 
+When savings shows a deposit before any matching broker debit, the report shows `Awaiting broker debit` and holds new instructions for that route. The original cycle stays active until the withdrawal posts. A larger receipt can include an outside-bank top-up once the source debit is observed.
+
 Posted CAD withdrawals establish transit up to the cap. This is an external
 household asset, not broker buying power. A new statement confirming receipts
 replaces matched transit with the reported balance. A larger receipt can include

@@ -7,6 +7,7 @@ from unittest.mock import patch
 import pytest
 
 from src.history import (
+    household_date,
     get_all_time_high,
     get_year_to_date_history,
     record_value,
@@ -42,7 +43,7 @@ class TestRecordValue:
         entry = json.loads(lines[0])
         assert entry["value"] == 500000.0
         assert entry["high"] == 500000.0
-        assert entry["date"] == datetime.now(UTC).astimezone().date().isoformat()
+        assert entry["date"] == household_date().isoformat()
 
     def test_overwrites_same_day(self, history_file):
         record_value(500000.0)
@@ -64,9 +65,7 @@ class TestRecordValue:
 
     def test_appends_new_day(self, history_file):
         # Seed with yesterday's entry
-        yesterday = (
-            datetime.now(UTC).astimezone().date() - timedelta(days=1)
-        ).isoformat()
+        yesterday = (household_date() - timedelta(days=1)).isoformat()
         history_file.parent.mkdir(parents=True, exist_ok=True)
         with open(history_file, "w") as f:
             f.write(
@@ -89,9 +88,7 @@ class TestGetAllTimeHigh:
     def test_new_ath_today(self, history_file):
         # Seed with lower historical value
         history_file.parent.mkdir(parents=True, exist_ok=True)
-        yesterday = (
-            datetime.now(UTC).astimezone().date() - timedelta(days=1)
-        ).isoformat()
+        yesterday = (household_date() - timedelta(days=1)).isoformat()
         with open(history_file, "w") as f:
             f.write(
                 json.dumps(
@@ -112,9 +109,7 @@ class TestGetAllTimeHigh:
     def test_below_ath(self, history_file):
         # Seed with higher historical value
         history_file.parent.mkdir(parents=True, exist_ok=True)
-        past_date = (
-            datetime.now(UTC).astimezone().date() - timedelta(days=30)
-        ).isoformat()
+        past_date = (household_date() - timedelta(days=30)).isoformat()
         with open(history_file, "w") as f:
             f.write(
                 json.dumps(
@@ -133,7 +128,7 @@ class TestGetAllTimeHigh:
         assert abs(ath.drawdown_pct - (-10.0)) < 0.01
 
     def test_uses_recorded_intraday_high_for_ath(self, history_file):
-        today = datetime.now(UTC).astimezone().date().isoformat()
+        today = household_date().isoformat()
         history_file.parent.mkdir(parents=True, exist_ok=True)
         with open(history_file, "w") as f:
             f.write(
@@ -161,9 +156,7 @@ class TestGetAllTimeHigh:
     def test_drawdown_calculation(self, history_file):
         """Drawdown should be negative percentage."""
         history_file.parent.mkdir(parents=True, exist_ok=True)
-        past_date = (
-            datetime.now(UTC).astimezone().date() - timedelta(days=10)
-        ).isoformat()
+        past_date = (household_date() - timedelta(days=10)).isoformat()
         with open(history_file, "w") as f:
             f.write(
                 json.dumps(
@@ -186,11 +179,11 @@ class TestGetYearToDateHistory:
         assert len(result) == 1
         assert result[0].value == 500000.0
         assert result[0].high == 500000.0
-        assert result[0].date == datetime.now(UTC).astimezone().date()
+        assert result[0].date == household_date()
 
     def test_excludes_last_year(self, history_file):
         history_file.parent.mkdir(parents=True, exist_ok=True)
-        today = datetime.now(UTC).astimezone().date()
+        today = household_date()
         last_year = date(today.year - 1, 6, 15).isoformat()
         this_year = date(today.year, 2, 1).isoformat()
         with open(history_file, "w") as f:
@@ -222,7 +215,7 @@ class TestGetYearToDateHistory:
 
     def test_overrides_today_with_live_value(self, history_file):
         history_file.parent.mkdir(parents=True, exist_ok=True)
-        today = datetime.now(UTC).astimezone().date().isoformat()
+        today = household_date().isoformat()
         with open(history_file, "w") as f:
             f.write(
                 json.dumps(
@@ -236,16 +229,14 @@ class TestGetYearToDateHistory:
             )
 
         result = get_year_to_date_history(current_value=510000.0)
-        today_point = [
-            p for p in result if p.date == datetime.now(UTC).astimezone().date()
-        ]
+        today_point = [p for p in result if p.date == household_date()]
         assert len(today_point) == 1
         assert today_point[0].value == 510000.0  # Live value, not recorded
         assert today_point[0].high == 510000.0
 
     def test_preserves_today_intraday_high_with_live_value_override(self, history_file):
         history_file.parent.mkdir(parents=True, exist_ok=True)
-        today = datetime.now(UTC).astimezone().date().isoformat()
+        today = household_date().isoformat()
         with open(history_file, "w") as f:
             f.write(
                 json.dumps(
@@ -259,9 +250,22 @@ class TestGetYearToDateHistory:
             )
 
         result = get_year_to_date_history(current_value=510000.0)
-        today_point = [
-            p for p in result if p.date == datetime.now(UTC).astimezone().date()
-        ]
+        today_point = [p for p in result if p.date == household_date()]
         assert len(today_point) == 1
         assert today_point[0].value == 510000.0
         assert today_point[0].high == 520000.0
+
+
+def test_household_new_year_boundary_and_intraday_high(history_file):
+    local = datetime.fromisoformat("2026-12-31T19:30:00-08:00")
+    as_of = household_date(local.astimezone(UTC))
+    assert as_of == household_date(local) == date(2026, 12, 31)
+    record_value(120, as_of=as_of)
+    record_value(100, as_of=as_of)
+    assert json.loads(history_file.read_text()) == {
+        "date": "2026-12-31",
+        "value": 100,
+        "high": 120,
+    }
+    assert get_year_to_date_history(100, as_of=as_of)[0].date == as_of
+    assert get_all_time_high(100, as_of=as_of).date == "2026-12-31"

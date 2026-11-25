@@ -55,7 +55,7 @@ def test_lookup_continues_across_empty_months_and_stops_on_reconciliation():
     limit = check([buy("2026-04-01", 3)], 3, "2026-06-10", cache, client)
     assert client.get_activities.call_count == 3
     assert limit.next_eligible == date(2028, 4, 1)
-    assert cache["123:FUND"]["lots"] == {"2026-04-01": 3}
+    assert cache["123:id:33"]["lots"] == {"2026-04-01": 3}
 
 
 def test_cache_gap_requires_new_evidence_even_if_quantity_is_unchanged():
@@ -81,7 +81,7 @@ def test_short_holding_period_waits_until_next_month_when_day_is_missing():
 def test_permanent_rule_needs_no_history_and_lookup_failure_remains_restricted():
     client = Mock()
     client.get_activities.side_effect = requests.ConnectionError()
-    p = SimpleNamespace(symbol="FUND", account_number="123")
+    p = SimpleNamespace(symbol="FUND", symbol_id=33, account_number="123")
     assert (
         account_redemption_limits(
             client, [p], parse_redemption_holding_months({"FUND": "never"})
@@ -113,3 +113,25 @@ def test_permanent_rule_needs_no_history_and_lookup_failure_remains_restricted()
 def test_invalid_rule_rejected(bad):
     with pytest.raises(ValueError):
         parse_redemption_holding_months({"FUND": bad})
+
+
+def test_conflicting_security_ids_and_old_checkpoint_cannot_establish_maturity():
+    cache = {"123:FUND": {"through": "2026-05-01", "lots": {"2025-01-01": 5}}}
+    row = {**buy("2026-03-03", 5), "symbolId": 999}
+    assert check([row], 5, "2026-11-24", cache, months=1).units == 0
+    row.update(symbol="FORMER", symbolId=33)
+    assert check([row], 5, "2026-11-24", cache, months=1).units == 5
+    assert "123:FUND" not in cache
+    broker = Mock()
+    broker.get_activities.return_value = []
+    pos = SimpleNamespace(
+        symbol="FUND", symbol_id=999, account_number="123", quantity=5
+    )
+    limits = account_redemption_limits(
+        broker,
+        [pos],
+        parse_redemption_holding_months({"FUND": 1}),
+        datetime(2026, 12, 1, 18, tzinfo=UTC),
+        cache,
+    )
+    assert limits["FUND"].units == 0

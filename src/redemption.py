@@ -17,7 +17,9 @@ class RedemptionRule:
 def parse_redemption_holding_months(raw: dict) -> dict[str, RedemptionRule]:
     rules = {}
     if not isinstance(raw, dict):
-        raise ValueError("redemption_holding_months must map symbols to holding periods")
+        raise ValueError(
+            "redemption_holding_months must map symbols to holding periods"
+        )
     for symbol, policy in raw.items():
         if policy == "never":
             rules[symbol] = RedemptionRule(None)
@@ -55,9 +57,10 @@ def _movements(rows, position):
     buys = Counter()
     sold = 0
     for row in rows:
-        if row.get("symbol") != position.symbol and not (
-            position.symbol_id and row.get("symbolId") == position.symbol_id
-        ):
+        if position.symbol_id and row.get("symbolId"):
+            if row["symbolId"] != position.symbol_id:
+                continue
+        elif row.get("symbol") != position.symbol:
             continue
         qty = float(row["quantity"])
         if row["type"] == "Dividends" and qty == 0:
@@ -87,8 +90,13 @@ def _verified_lots(client, position, now, cache):
     month_index = today.year * 12 + today.month - 1 - 16
     year, month = divmod(month_index, 12)
     floor = date(year, month + 1, min(today.day, monthrange(year, month + 1)[1]))
-    key = f"{position.account_number}:{position.symbol}"
-    previous = cache.get(key)
+    # Only a broker ID can carry verified lots across ticker changes or reuse.
+    key = (
+        f"{position.account_number}:id:{position.symbol_id}"
+        if position.symbol_id
+        else None
+    )
+    previous = cache.get(key) if key else None
     checkpoint = today - timedelta(days=30)
     history = Counter()
     if previous:
@@ -128,7 +136,9 @@ def _verified_lots(client, position, now, cache):
                 older_lots = _remaining_lots(history, older_sold)
                 combined = Counter(older_lots) + recent
                 lots = _remaining_lots(combined, recent_sold)
-                cache[key] = {"through": checkpoint.isoformat(), "lots": older_lots}
+                if key:
+                    cache[key] = {"through": checkpoint.isoformat(), "lots": older_lots}
+                    cache.pop(f"{position.account_number}:{position.symbol}", None)
                 return lots
         last = first - timedelta(days=1)
     raise ValueError("unit history could not be verified")

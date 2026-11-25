@@ -16,6 +16,7 @@ import subprocess
 import sys
 from pathlib import Path
 
+import requests
 import yaml
 
 # Ensure UTF-8 output on Windows (prevents UnicodeEncodeError with Rich)
@@ -26,7 +27,6 @@ if sys.platform == "win32":
         sys.stderr.reconfigure(encoding="utf-8")
 
 from src.display import console, display_full_report
-from src.encrypted_state import EncryptedStateError
 from src.external_accounts import (
     ExternalAccountConfig,
     attach_external_balances,
@@ -35,9 +35,9 @@ from src.external_accounts import (
     resolve_external_transfer_accounts,
 )
 from src.fx_conversions import calculate_currency_needs
-from src.fx_rate import fetch_dlr_quotes, get_usd_to_cad_rate
+from src.fx_rate import MarketRateUnavailable, fetch_dlr_quotes, get_usd_to_cad_rate
 from src.fx_targets import resolve_targets
-from src.history import get_all_time_high, record_value
+from src.history import get_all_time_high, record_value, household_date
 from src.models import get_transient_status
 from src.paths import get_config_dir, get_state_root, get_tokens_dir
 from src.portfolio import (
@@ -45,7 +45,7 @@ from src.portfolio import (
     build_portfolio,
     fetch_quotes_for_holdings,
 )
-from src.questrade_client import QuestradeClient
+from src.questrade_client import QuestradeClient, RETRYABLE_HTTP_STATUSES
 from src.rebalancer import calculate_trades, redemption_suggestions
 from src.redemption import parse_redemption_holding_months
 from src.report_builder import build_report_data
@@ -133,7 +133,13 @@ def load_config() -> tuple:
     transient_symbols = data.get("transient_symbols", [])
     norberts_gambit_fee_cad = data.get("norberts_gambit_fee_cad", 0.0)
     fx_target_rules = data.get("fx_target_rules", {})
-    drift_trade_threshold_pct = float(data.get("drift_trade_threshold_pct", 0.1))
+    drift_trade_threshold_pct = data.get("drift_trade_threshold_pct", 0.1)
+    for name, value in (
+        ("norberts_gambit_fee_cad", norberts_gambit_fee_cad),
+        ("drift_trade_threshold_pct", drift_trade_threshold_pct),
+    ):
+        if type(value) not in (float, int) or not math.isfinite(value) or value < 0:
+            raise ValueError(f"{name} must be a finite nonnegative number.")
     tactical_config = parse_tactical_config(data.get("tactical_deployment", {}))
     external_accounts = parse_external_accounts(data)
     equity_symbols = set(targets)
@@ -233,67 +239,66 @@ def run_scheduled_sync():
     if not all_ok:
         sys.exit(1)
 
-    # Snapshot portfolio value for ATH tracking (best-effort)
-    accuracy = None
-    if clients:
-        try:
-            usd_to_cad_rate = get_usd_to_cad_rate(client=clients[0])
-            portfolio = build_portfolio(clients, usd_to_cad_rate, redemption_rules)
-            attach_external_balances(portfolio, external_balances, external_accounts)
-            transfer_accounts = resolve_external_transfer_accounts(
-                portfolio, external_accounts
-            )
-            reconcile_transfer_activity(
-                portfolio, external_balances, clients, transfer_accounts
-            )
-            record_value(portfolio.total_value_cad)
-            print(f"  ✓ Portfolio value recorded: ${portfolio.total_value_cad:,.2f}")
-
-            # Evaluate tactical regime transitions (if configured)
-            if tactical_config:
-                ath = get_all_time_high(current_value=portfolio.total_value_cad)
-                posture = evaluate_tactical_posture(
-                    current_value=portfolio.total_value_cad,
-                    ath_value=ath.value,
-                    ath_date=ath.date,
-                    config=tactical_config,
-                )
-                if posture.transition_occurred:
-                    print(
-                        f"  ⚡ Tactical regime changed: "
-                        f"{posture.previous_regime} → {posture.regime}"
-                    )
-                else:
-                    print(f"  ✓ Tactical regime: {posture.regime}")
-
-            # Compute accuracy for drift alerting
-            resolved_targets = resolve_targets(
-                targets, fx_target_rules, usd_to_cad_rate
-            )
-            if tactical_config:
-                resolved_targets = resolve_tactical_targets(
-                    resolved_targets, posture, tactical_config
-                )
-            _validate_resolved_targets(resolved_targets)
-            hidden_symbols = {
-                symbol for symbol in transient_symbols if symbol in portfolio.holdings
-            }
-            snapshot = build_allocation_snapshot(
-                portfolio,
-                resolved_targets,
-                usd_to_cad_rate,
-                excluded_symbols=hidden_symbols,
-            )
-            accuracy = snapshot.accuracy
-            print(f"  ✓ Accuracy: {accuracy:.1f}%")
-        except EncryptedStateError:
+    as_of = household_date()
+    try:
+        usd_to_cad_rate = get_usd_to_cad_rate(client=clients[0])
+    except (MarketRateUnavailable, requests.Timeout, requests.ConnectionError) as error:
+        print(f"  ⚠ Could not snapshot portfolio value: {error}")
+        return
+    except requests.HTTPError as error:
+        if getattr(error.response, "status_code", None) not in RETRYABLE_HTTP_STATUSES:
             raise
-        except Exception as e:  # noqa: BLE001 - market snapshot is explicitly best-effort
-            print(f"  ⚠ Could not snapshot portfolio value: {e}")
+        print(f"  ⚠ Could not snapshot portfolio value: {error}")
+        return
+    portfolio = build_portfolio(clients, usd_to_cad_rate, redemption_rules)
+    attach_external_balances(portfolio, external_balances, external_accounts)
+    transfer_accounts = resolve_external_transfer_accounts(portfolio, external_accounts)
+    reconcile_transfer_activity(
+        portfolio, external_balances, clients, transfer_accounts
+    )
+    record_value(portfolio.total_value_cad, as_of=as_of)
+    print(f"  ✓ Portfolio value recorded: ${portfolio.total_value_cad:,.2f}")
+
+    # Evaluate tactical regime transitions (if configured)
+    if tactical_config:
+        ath = get_all_time_high(current_value=portfolio.total_value_cad, as_of=as_of)
+        posture = evaluate_tactical_posture(
+            current_value=portfolio.total_value_cad,
+            ath_value=ath.value,
+            ath_date=ath.date,
+            config=tactical_config,
+            as_of=as_of,
+        )
+        if posture.transition_occurred:
+            print(
+                f"  ⚡ Tactical regime changed: "
+                f"{posture.previous_regime} → {posture.regime}"
+            )
+        else:
+            print(f"  ✓ Tactical regime: {posture.regime}")
+
+    # Compute accuracy for drift alerting
+    resolved_targets = resolve_targets(targets, fx_target_rules, usd_to_cad_rate)
+    if tactical_config:
+        resolved_targets = resolve_tactical_targets(
+            resolved_targets, posture, tactical_config
+        )
+    _validate_resolved_targets(resolved_targets)
+    hidden_symbols = {
+        symbol for symbol in transient_symbols if symbol in portfolio.holdings
+    }
+    snapshot = build_allocation_snapshot(
+        portfolio,
+        resolved_targets,
+        usd_to_cad_rate,
+        excluded_symbols=hidden_symbols,
+    )
+    accuracy = snapshot.accuracy
+    print(f"  ✓ Accuracy: {accuracy:.1f}%")
 
     # Write accuracy to GitHub Actions output (if running in CI)
     github_output = os.environ.get("GITHUB_OUTPUT")
-    if github_output and accuracy is not None:
+    if github_output:
         with open(github_output, "a") as f:
             f.write(f"accuracy={accuracy:.1f}\n")
 
@@ -432,6 +437,7 @@ def _display_external_status(
 def run_rebalancer():
     """Main rebalancer logic."""
 
+    as_of = household_date()
     console.print("  [dim]Loading configuration...[/dim]")
     (
         accounts,
@@ -471,12 +477,13 @@ def run_rebalancer():
     # Evaluate tactical posture and adjust targets if configured
     tactical_posture = None
     if tactical_config:
-        ath = get_all_time_high(current_value=portfolio.total_value_cad)
+        ath = get_all_time_high(current_value=portfolio.total_value_cad, as_of=as_of)
         tactical_posture = evaluate_tactical_posture(
             current_value=portfolio.total_value_cad,
             ath_value=ath.value,
             ath_date=ath.date,
             config=tactical_config,
+            as_of=as_of,
         )
         resolved_targets = resolve_tactical_targets(
             resolved_targets, tactical_posture, tactical_config
@@ -518,8 +525,9 @@ def run_rebalancer():
         transient_alerts,
         hidden_symbols,
         tactical_posture=tactical_posture,
+        as_of=as_of,
     )
-    record_value(portfolio.total_value_cad)
+    record_value(portfolio.total_value_cad, as_of=as_of)
     _render_report(
         portfolio,
         resolved_targets,

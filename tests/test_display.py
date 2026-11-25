@@ -29,3 +29,12 @@ def test_ytd_chart_high_uses_intraday_high(monkeypatch):
     rendered = output.getvalue()
     assert "Latest $90.00" in rendered
     assert "High $120.00" in rendered
+
+
+def test_household_value_labels_return_for_priced_holdings(monkeypatch):
+    output = StringIO()
+    monkeypatch.setattr(
+        display, "console", Console(file=output, width=140, force_terminal=False)
+    )
+    display.display_daily_change(10100, 100, 10)
+    assert "Priced holdings:" in output.getvalue() and "10.0%" in output.getvalue()

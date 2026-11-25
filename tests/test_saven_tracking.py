@@ -207,3 +207,20 @@ def test_refresh_status_describes_source_and_dates_the_balance_in_use(tmp_path, 
     assert snapshot["accounts"][ACCOUNT_A]["balance_cad"] == "10.00"
     if existing:
         assert snapshot == existing
+
+
+def test_newest_matching_export_with_bad_ledger_encoding_cannot_use_cache(tmp_path):
+    old = export(tmp_path / "old.csv")
+    existing = cached(old)
+    old.unlink()
+    (tmp_path / "unrelated.csv").write_bytes(b"other\x92\n")
+    result, _ = refresh_external_balances(
+        PROVIDERS["SAVEN"], [ACCOUNT_A], existing, directory=tmp_path
+    )
+    assert result == existing
+    new = export(tmp_path / "new.csv", amount="200.00")
+    new.write_bytes(new.read_bytes().replace(b"Deposit", b"Deposit\x92"))
+    with pytest.raises(UnicodeDecodeError):
+        refresh_external_balances(
+            PROVIDERS["SAVEN"], [ACCOUNT_A], existing, directory=tmp_path
+        )

@@ -9,10 +9,6 @@ Builds buy trades from available cash after the planner's main sell/buy passes:
 
 import math
 
-from src.fx_math import (
-    consume_cross_currency_cash,
-    cross_currency_buying_power,
-)
 from src.models import TradeRecommendation
 
 # ══════════════════════════════════════════════════════════════════
@@ -53,13 +49,13 @@ def underweight_candidates(
         seen.add(pos.symbol)
         candidates.append((pos.symbol, drift_pct, ask_price_native))
 
-    candidates.sort(key=lambda item: item[1])
+    candidates.sort(key=lambda item: (item[1], item[0]))
     return candidates
 
 
 def build_deploy_cash_underweight(
     acct,
-    cash_by_account: dict[str, dict[str, float]],
+    ledger,
     holdings: dict,
     drifts: dict,
     hidden_symbols: set,
@@ -68,8 +64,6 @@ def build_deploy_cash_underweight(
     source_currency: str,
     buy_currency: str,
     underweight_threshold_pct: float,
-    fee_cad: float = 0.0,
-    note: str = "",
     dlr_quotes=None,
 ) -> TradeRecommendation | None:
     """Build one buy trade funded by available cash.
@@ -79,25 +73,14 @@ def build_deploy_cash_underweight(
     through underweight candidates so that if the most underweight symbol
     is too expensive, a cheaper alternative is used.
     """
-    acct_cash = cash_by_account.setdefault(acct.number, {"CAD": 0.0, "USD": 0.0})
     requires_fx = source_currency != buy_currency
-
-    # Compute buying power
-    source_cash = acct_cash.get(source_currency, 0.0)
-    if source_cash <= 0:
+    if ledger.cash(acct.number, source_currency) <= 0:
         return None
-
-    if requires_fx:
-        buying_power = cross_currency_buying_power(
-            source_cash,
-            source_currency,
-            usd_to_cad_rate,
-            fee_cad,
-            dlr_quotes=dlr_quotes,
-        )
-        buying_power += min(0.0, acct_cash[buy_currency])
-    else:
-        buying_power = source_cash
+    buying_power = (
+        ledger.total_buying_power(acct.number, buy_currency, dlr_quotes)
+        if requires_fx
+        else ledger.cash(acct.number, buy_currency)
+    )
 
     # Find candidates in the buy currency
     candidates = underweight_candidates(
@@ -131,19 +114,9 @@ def build_deploy_cash_underweight(
 
         cost_native = shares * ask_price_native
 
-        # Consume cash
-        if requires_fx:
-            consume_cross_currency_cash(
-                acct_cash,
-                source_currency,
-                buy_currency,
-                cost_native,
-                usd_to_cad_rate,
-                fee_cad,
-                dlr_quotes=dlr_quotes,
-            )
-        else:
-            acct_cash[buy_currency] -= cost_native
+        requires_fx = ledger.fund_buy(
+            acct.number, buy_currency, cost_native, dlr_quotes
+        )
 
         return TradeRecommendation(
             symbol=symbol,
@@ -155,7 +128,9 @@ def build_deploy_cash_underweight(
             price=ask_price_native,
             currency=buy_currency,
             estimated_value=cost_native,
-            note=note,
+            note="Deploy cash (underweight) (FX)"
+            if requires_fx
+            else "Deploy cash (underweight)",
             requires_fx=requires_fx,
         )
 
