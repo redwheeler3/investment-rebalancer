@@ -741,7 +741,7 @@ def display_trades(trades: list):
     """Display recommended trades table, grouped by account with sells before buys."""
     trades = [trade for trade in trades if trade.action in {"BUY", "SELL"}]
     if not trades:
-        console.print("  [green]No share trades recommended.[/green]")
+        console.print("  [green]No trades recommended.[/green]")
         console.print()
         return
 
@@ -789,8 +789,10 @@ def display_trades(trades: list):
         table.add_row(
             trade.symbol,
             Text(trade.action, style=action_style),
-            str(trade.quantity),
-            _format_money(trade.price, trade.currency),
+            str(trade.quantity) if trade.quantity is not None else "—",
+            _format_money(trade.price, trade.currency)
+            if trade.price is not None
+            else "—",
             _format_money(trade.estimated_value, trade.currency),
             account_label,
             trade.note,

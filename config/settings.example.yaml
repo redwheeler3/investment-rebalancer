@@ -25,15 +25,13 @@ accounts:
 # The symbol prefix chooses the statement adapter; labels come from these settings.
 # Targets select tracked accounts. Each Questrade owner/type must identify one
 # personal Margin account, with a distinct endpoint for each external account.
-external_accounts: {}
-# Example when SAVEN:0001112223 is included in targets/fixed_composition:
-# external_accounts:
-#   "SAVEN:0001112223":
-#     display_name: Saven
-#     account_type: HISA
-#     questrade_account:
-#       owner_name: Secondary
-#       account_type: Margin
+external_accounts:
+  "SAVEN:0001112223":  # Sample statement account number, also used in fixed_composition.
+    display_name: Saven
+    account_type: HISA
+    questrade_account:
+      owner_name: Secondary
+      account_type: Margin  # The broker account that sends and receives transfers.
 
 targets:
   VCN.TO: 20.0
@@ -41,11 +39,11 @@ targets:
   XEF.TO: 15.0
 
 # Map each broker symbol to its minimum holding period in calendar months.
-# Use never for a certificate the planner should never recommend selling.
-redemption_holding_months: {}
-# redemption_holding_months:
-#   PRIVATE_FUND: 24
-#   CERTIFICATE_SYMBOL: never
+# Recognized GICs are always locked, including terms absent from fixed_composition.
+# Use never for another holding whose principal should never fund trades.
+redemption_holding_months:
+  PRIVATE_FUND: 24  # A manual fund redemption requires 24 months of holding history.
+  LOCKED_FUND: never
 
 # FX-derived targets.
 # Each rule dynamically splits an allocation between a USD ETF and a
@@ -74,17 +72,13 @@ fx_target_rules:
 tactical_deployment:
   baseline_fixed_pct: 20.0
   fixed_composition:
-    ZMMK.TO: 50.0    # Money market
-    XSH.TO: 25.0     # Canadian short-term corporate bonds
-    XIGS.TO: 25.0    # US short-term corporate bonds
-    # Original-term GIC targets (e.g. "GIC:2Y" and "GIC:5Y") can take part of
-    # this mix. Recognized broker certificates count automatically across accounts.
-    # To include a Saven HISA, assign it part of this composition, e.g.
-    # "SAVEN:0001112223": 25.0
-    # Rebalance the other weights so the composition still sums to 100.
-    # Keep zero-weight members until their balance is empty and transfers settle.
-    # Local runs read Downloads CSVs; scheduled runs read encrypted cached balances.
-    # Run locally and sync the displayed recommendation before starting a transfer.
+    ZMMK.TO: 10.0             # Money market.
+    PRIVATE_FUND: 25.0        # Sample private fund with the redemption rule above.
+    "SAVEN:0001112223": 25.0  # Statement-backed savings balance.
+    "GIC:2Y": 20.0            # Two-year original term across all accounts.
+    "GIC:5Y": 20.0            # Five-year original term, including near maturity.
+  gic_account_types: [RRSP, SRRSP]  # Eligible Questrade account types for new certificates.
+  gic_min_buy_cad: 5000             # Minimum funded amount per order in one account.
   deploy_thresholds:
     - { drawdown_pct: -10.0, fixed_pct: 15.0 }
     - { drawdown_pct: -20.0, fixed_pct: 10.0 }

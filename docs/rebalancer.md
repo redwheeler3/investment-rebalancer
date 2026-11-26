@@ -33,6 +33,19 @@ fixed holdings' configured weights. Restricted principal, available account
 cash, and whole-unit sizes limit those purchases. Reports and scheduled
 accuracy checks continue to compare actual holdings with the ideal targets.
 
+Under `tactical_deployment`, `gic_account_types` selects eligible Questrade
+account types for new certificates. An eligible account can buy the first
+certificate of a term or replace its last matured certificate. The planner
+checks the household term deficit and applies `gic_min_buy_cad` to each
+funded order. Recommended Trades shows the term, account, and CAD amount.
+The investor selects the issuer and confirms funds have settled before ordering.
+Questrade certificate prices quoted per $100 of principal are normalized to
+face-dollar units for holdings and daily P&L.
+
+Cashability does not authorize a planner sale. A manual redemption or maturity
+becomes spendable when the broker posts the proceeds. A recognized certificate
+needs no individual `never` setting.
+
 ---
 
 ## Design Philosophy

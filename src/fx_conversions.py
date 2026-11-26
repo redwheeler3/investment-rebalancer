@@ -45,7 +45,7 @@ def _positive_target_currency_homes(acct, trades: list, targets: dict) -> set:
     """
     deltas: dict[str, int] = {}
     for trade in trades:
-        if trade.action not in {"BUY", "SELL"}:
+        if trade.action not in {"BUY", "SELL"} or trade.quantity is None:
             continue
         if trade.account_number != acct.number:
             continue

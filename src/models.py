@@ -51,13 +51,13 @@ class TradeRecommendation:
 
     symbol: str
     action: str  # "BUY" or "SELL"
-    quantity: int  # Whole shares
+    quantity: int | None  # Whole shares, or None for an amount-based GIC purchase.
     account_number: str
     account_type: str
     owner: str
-    price: float
+    price: float | None
     currency: str
-    estimated_value: float  # price * quantity in native currency
+    estimated_value: float  # Native trade value.
     note: str = ""
     requires_fx: bool = False  # True if funded via cross-currency conversion
 

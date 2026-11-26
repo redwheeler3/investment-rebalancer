@@ -38,7 +38,9 @@ class FixedIncomeBudget:
         return limits
 
 
-def fixed_income_budget(portfolio, targets, composition, rate):
+def fixed_income_budget(
+    portfolio, targets, composition, rate, purchases=None, unreleased=None
+):
     """Reserve locked principal, then split the remainder using the configured weights."""
     locked = {}
     for holding in portfolio.holdings.values():
@@ -53,6 +55,8 @@ def fixed_income_budget(portfolio, targets, composition, rate):
 
     total = portfolio.total_value_cad * sum(targets[s] for s in composition) / 100
     budgets = dict(locked)
+    for symbol, amount in (purchases or {}).items():
+        budgets[symbol] += amount
     weights = {s: w for s, w in composition.items() if s not in locked}
     # Manual redemptions cannot finance other trades in this run.
     floors = {}
@@ -62,6 +66,10 @@ def fixed_income_budget(portfolio, targets, composition, rate):
                 floors[pos.symbol] = floors.get(pos.symbol, 0.0) + to_cad(
                     pos.market_value, pos.currency, rate
                 )
+    locked_excess = max(0.0, sum(locked.values()) + sum(floors.values()) - total)
+    for symbol, value in (unreleased or {}).items():
+        if symbol in weights:
+            floors[symbol] = max(floors.get(symbol, 0.0), value)
     for symbol in list(weights):
         if not weights[symbol] or symbol not in portfolio.holdings:
             budgets[symbol] = floors.get(symbol, 0.0)
@@ -80,5 +88,5 @@ def fixed_income_budget(portfolio, targets, composition, rate):
     return FixedIncomeBudget(
         total,
         {s: 100 * value / portfolio.total_value_cad for s, value in budgets.items()},
-        max(0.0, sum(locked.values()) + sum(floors.values()) - total),
+        locked_excess,
     )

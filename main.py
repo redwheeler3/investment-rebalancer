@@ -48,7 +48,11 @@ from src.portfolio import (
     simulate_rebalance,
 )
 from src.questrade_client import QuestradeClient, RETRYABLE_HTTP_STATUSES
-from src.rebalancer import calculate_trades, redemption_suggestions
+from src.rebalancer import (
+    calculate_trades,
+    gic_purchase_amounts,
+    redemption_suggestions,
+)
 from src.redemption import parse_redemption_holding_months
 from src.report_builder import build_report_data
 from src.tactical import (
@@ -521,9 +525,19 @@ def run_rebalancer():
         external_transfer_accounts=transfer_accounts,
         blocked_sales=blocked_sales,
         fixed_budget=fixed_budget,
+        tactical_config=tactical_config,
     )
     fx_targets = resolved_targets
     if fixed_budget:
+        purchases = gic_purchase_amounts(trades)
+        if purchases:
+            fixed_budget = fixed_income_budget(
+                portfolio,
+                resolved_targets,
+                tactical_config.fixed_composition,
+                usd_to_cad_rate,
+                purchases,
+            )
         # A residual FX sweep needs a holding that can still accept a purchase.
         projected = simulate_rebalance(
             portfolio,

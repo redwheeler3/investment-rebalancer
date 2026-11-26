@@ -26,13 +26,14 @@ import math
 from dataclasses import dataclass, field, replace
 
 from src.cash_deploy import build_deploy_cash_underweight
-from src.fixed_income import FixedIncomeBudget
+from src.fixed_income import FixedIncomeBudget, fixed_income_budget
 from src.fx_math import consume_cross_currency_cash, cross_currency_buying_power, to_cad
 from src.models import TradeRecommendation, TransferRecommendation
 from src.portfolio import (
     get_current_allocations,
     get_drifts,
     get_holdings_view,
+    is_gic_group,
     simulate_rebalance,
 )
 
@@ -49,8 +50,21 @@ def net_trades(all_trades: list) -> list:
     """Net share orders and external transfers separately per symbol/account."""
     position_map = {}  # (symbol, account_number) -> list of trades
     transfer_map = {}
+    gic_buys = {}
     for trade in all_trades:
         key = (trade.symbol, trade.account_number)
+        if isinstance(trade, TradeRecommendation) and trade.quantity is None:
+            prior = gic_buys.get(key)
+            if prior:
+                trade = replace(
+                    trade,
+                    estimated_value=round(
+                        prior.estimated_value + trade.estimated_value, 2
+                    ),
+                    requires_fx=prior.requires_fx or trade.requires_fx,
+                )
+            gic_buys[key] = trade
+            continue
         if isinstance(trade, TransferRecommendation):
             # Arrivals already in flight must stay separate from new instructions.
             key += (trade.in_progress,)
@@ -136,7 +150,18 @@ def net_trades(all_trades: list) -> list:
                     requires_fx=any(t.requires_fx for t in transfers),
                 )
             )
-    return final_trades
+    return final_trades + list(gic_buys.values())
+
+
+def gic_purchase_amounts(trades):
+    """Sum funded manual instructions by household term."""
+    amounts = {}
+    for trade in trades:
+        if isinstance(trade, TradeRecommendation) and trade.quantity is None:
+            amounts[trade.symbol] = round(
+                amounts.get(trade.symbol, 0.0) + trade.estimated_value, 2
+            )
+    return amounts
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -156,23 +181,69 @@ def calculate_trades(
     *,
     blocked_sales: set[tuple[str, str, str | None]] | None = None,
     fixed_budget: FixedIncomeBudget | None = None,
+    tactical_config=None,
 ) -> list:
     """Calculate trades and optionally collect restricted sells for the report."""
     if portfolio.total_value_cad == 0:
         return []
 
-    planner = RebalancePlanner(
-        portfolio=portfolio,
-        targets=targets,
-        usd_to_cad_rate=usd_to_cad_rate,
-        fee_cad=norberts_gambit_fee_cad,
-        drift_trade_threshold_pct=drift_trade_threshold_pct,
-        hidden_symbols=transient_symbols,
-        dlr_quotes=dlr_quotes,
-        external_transfer_accounts=external_transfer_accounts or {},
-        fixed_budget=fixed_budget,
-    )
-    trades = planner.build()
+    requested = {}
+    if fixed_budget and tactical_config and tactical_config.gic_account_types:
+        for symbol in tactical_config.fixed_composition:
+            if is_gic_group(symbol):
+                deficit = (
+                    (targets[symbol] - fixed_budget.targets[symbol])
+                    * portfolio.total_value_cad
+                    / 100
+                )
+                amount = math.floor(deficit * 100 + 1e-8) / 100
+                if amount >= tactical_config.gic_min_buy_cad:
+                    requested[symbol] = amount
+
+    # Only funded orders may displace other fixed holdings. Discard the entire
+    # trial (including its sales and FX) if account funding reduced a reservation.
+    unreleased = {}
+    while True:
+        budget = fixed_budget
+        if requested:
+            budget = fixed_income_budget(
+                portfolio,
+                targets,
+                tactical_config.fixed_composition,
+                usd_to_cad_rate,
+                requested,
+                unreleased,
+            )
+        planner = RebalancePlanner(
+            portfolio=portfolio,
+            targets=targets,
+            usd_to_cad_rate=usd_to_cad_rate,
+            fee_cad=norberts_gambit_fee_cad,
+            drift_trade_threshold_pct=drift_trade_threshold_pct,
+            hidden_symbols=transient_symbols,
+            dlr_quotes=dlr_quotes,
+            external_transfer_accounts=external_transfer_accounts or {},
+            fixed_budget=budget,
+            gic_remaining=dict(requested),
+            gic_account_types=tactical_config.gic_account_types if requested else (),
+            gic_min_buy_cad=tactical_config.gic_min_buy_cad if requested else 0,
+        )
+        trades = planner.build()
+        funded = gic_purchase_amounts(trades)
+        if funded == requested:
+            break
+        if funded:
+            # A registered account cannot spend proceeds stranded in another
+            # account. Preserve those fixed holdings when redividing the budget.
+            projected = planner.plan.projected_snapshot()
+            for symbol, pct in budget.targets.items():
+                holding = portfolio.holdings.get(symbol)
+                if holding and projected.allocations.get(symbol, 0) > pct:
+                    value = (
+                        projected.allocations[symbol] * projected.total_value_cad / 100
+                    )
+                    unreleased[symbol] = min(holding.value_cad, value)
+        requested = funded
     if blocked_sales is not None:
         blocked_sales.update(planner.blocked_sales)
     return trades
@@ -229,7 +300,7 @@ class TradePlan:
     def position_deltas(self) -> dict[tuple[str, str], int]:
         deltas: dict[tuple[str, str], int] = {}
         for trade in self.trades:
-            if isinstance(trade, TransferRecommendation):
+            if isinstance(trade, TransferRecommendation) or trade.quantity is None:
                 continue
             key = (trade.account_number, trade.symbol)
             delta = trade.quantity if trade.action == "BUY" else -trade.quantity
@@ -341,6 +412,9 @@ class RebalancePlanner:
     dlr_quotes: object | None = None
     external_transfer_accounts: dict = field(default_factory=dict)
     fixed_budget: FixedIncomeBudget | None = None
+    gic_remaining: dict[str, float] = field(default_factory=dict)
+    gic_account_types: tuple[str, ...] = ()
+    gic_min_buy_cad: float = 0
     holdings_view: dict = field(init=False)
     initial_drifts: dict[str, float] = field(init=False)
     plan: TradePlan = field(init=False)
@@ -416,6 +490,7 @@ class RebalancePlanner:
         for _ in range(MAX_ROUNDS):
             starter_changes = self._plan_external_transfers()
             starter_changes += self._sell_overweight_starters()
+            starter_changes += self._buy_gics()
             starter_changes += self._plan_external_transfers()
             starter_changes += self._buy_underweight_starters()
 
@@ -425,6 +500,72 @@ class RebalancePlanner:
                 break
 
         return self.plan.netted_trades()
+
+    def _buy_gics(self):
+        count = 0
+        for symbol in sorted(
+            self.gic_remaining, key=self.gic_remaining.get, reverse=True
+        ):
+            if self.gic_remaining[symbol] < self.gic_min_buy_cad:
+                continue
+            accounts = self._eligible_buy_accounts(symbol, "CAD")
+            for index, acct in enumerate(accounts):
+                room = self.fixed_budget.room_cad(self.plan.projected_snapshot())
+                target = min(self.gic_remaining[symbol], room)
+                if target + 1e-8 < self.gic_min_buy_cad:
+                    break
+                available = self.ledger.total_buying_power(
+                    acct.number, "CAD", self.dlr_quotes
+                )
+                if available < target:
+                    self._raise_cash_in_account(
+                        acct, symbol, "CAD", target, self.gic_min_buy_cad
+                    )
+                    available = self.ledger.total_buying_power(
+                        acct.number, "CAD", self.dlr_quotes
+                    )
+                amount = math.floor(min(target, available) * 100 + 1e-8) / 100
+                if amount < self.gic_min_buy_cad:
+                    continue
+                # Leave a minimum-sized second order if taking every dollar here
+                # would strand a fundable remainder in another eligible account.
+                if (
+                    target >= 2 * self.gic_min_buy_cad
+                    and 0.005 < target - amount < self.gic_min_buy_cad
+                    and any(
+                        self.ledger.total_buying_power(
+                            other.number, "CAD", self.dlr_quotes
+                        )
+                        >= self.gic_min_buy_cad
+                        for other in accounts[index + 1 :]
+                    )
+                ):
+                    amount = (
+                        math.floor((target - self.gic_min_buy_cad) * 100 + 1e-8) / 100
+                    )
+                converted = self.ledger.fund_buy(
+                    acct.number, "CAD", amount, self.dlr_quotes
+                )
+                self.plan.add_trade(
+                    TradeRecommendation(
+                        symbol=symbol,
+                        action="BUY",
+                        quantity=None,
+                        price=None,
+                        currency="CAD",
+                        estimated_value=amount,
+                        account_number=acct.number,
+                        account_type=acct.account_type,
+                        owner=acct.owner,
+                        requires_fx=converted,
+                        note="Select certificate once CAD is available",
+                    )
+                )
+                self.gic_remaining[symbol] = round(
+                    self.gic_remaining[symbol] - amount, 2
+                )
+                count += 1
+        return count
 
     def _plan_external_transfers(self) -> int:
         """Plan external CAD movements using the same cash ledger as share buys."""
@@ -533,17 +674,29 @@ class RebalancePlanner:
     def _sell_overweight_starters(self) -> int:
         count = 0
         drifts = self.plan.drifts() if self.plan.trades else dict(self.initial_drifts)
+        # A qualifying GIC purchase can release temporarily parked fixed income
+        # even when its dollar deficit is smaller than the ordinary drift threshold.
+        parking = (
+            self.fixed_budget.targets
+            if self.fixed_budget
+            and any(
+                amount >= self.gic_min_buy_cad for amount in self.gic_remaining.values()
+            )
+            else {}
+        )
         overweight_symbols = [
             (symbol, drift_pct)
             for symbol, drift_pct in drifts.items()
             if symbol not in ("CAD", "USD")
-            and drift_pct > self.drift_trade_threshold_pct
+            and drift_pct > (0 if symbol in parking else self.drift_trade_threshold_pct)
         ]
         overweight_symbols.sort(key=lambda item: (-item[1], item[0]))
 
         for symbol, _ in overweight_symbols:
             current_drift = self.plan.drifts().get(symbol, drifts.get(symbol, 0.0))
-            if current_drift <= self.drift_trade_threshold_pct:
+            if current_drift <= (
+                0 if symbol in parking else self.drift_trade_threshold_pct
+            ):
                 continue
 
             holding = self.holdings_view.get(symbol)
@@ -648,7 +801,15 @@ class RebalancePlanner:
         return trades_added
 
     def _eligible_buy_accounts(self, symbol: str, currency: str) -> list:
-        accounts = find_accounts_for_symbol(symbol, self.portfolio.accounts)
+        accounts = (
+            [
+                a
+                for a in self.portfolio.accounts
+                if a.account_type in self.gic_account_types
+            ]
+            if symbol in self.gic_remaining
+            else find_accounts_for_symbol(symbol, self.portfolio.accounts)
+        )
 
         def sort_key(account):
             same_currency = self.ledger.same_currency_buying_power(
@@ -899,6 +1060,23 @@ class RebalancePlanner:
             if not any(
                 p.symbol == sell_symbol and p.quantity > 0 for p in acct.positions
             ):
+                continue
+
+            if (
+                acct.account_type in self.gic_account_types
+                and any(
+                    amount >= self.gic_min_buy_cad
+                    for amount in self.gic_remaining.values()
+                )
+                and (
+                    sell_symbol in self.fixed_budget.targets
+                    or self.ledger.total_buying_power(
+                        acct.number, "CAD", self.dlr_quotes
+                    )
+                    < sum(self.gic_remaining.values())
+                )
+            ):
+                productive.add(acct.number)
                 continue
 
             if self._external_underweight_in_account(

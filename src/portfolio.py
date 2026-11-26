@@ -34,7 +34,12 @@ def is_gic_group(symbol: str) -> bool:
 
 def _locked_bond_target(symbol, details, currency, quantity, price, market_value):
     """Only the verified compound-certificate format identifies an original term."""
+    description = str(details.get("description", "")).strip()
     if details.get("securityType") != "Bond" or details.get("isTradable") is True:
+        if details.get("securityType") == "Bond" and re.search(
+            r"\bGIC\b", description, re.I
+        ):
+            return symbol
         # Missing metadata must not turn a percent-of-par quote into share proceeds.
         if market_value > 0 and math.isclose(
             quantity * price / 100, market_value, rel_tol=0.0001
@@ -48,7 +53,7 @@ def _locked_bond_target(symbol, details, currency, quantity, price, market_value
     ):
         match = re.fullmatch(
             r".+?\s+MAT\s+(\d{2}/\d{2}/\d{4})\s+\d+(?:\.\d+)?%\s+([1-9]\d*)Y\s+CPD",
-            str(details.get("description", "")).strip(),
+            description,
             re.IGNORECASE,
         )
         if match:
@@ -315,6 +320,9 @@ def build_portfolio(
                     locked_target == symbol
                     and rule
                     and rule.minimum_months
+                    and not re.search(
+                        r"\bGIC\b", str(details.get("description", "")), re.I
+                    )
                     and math.isclose(
                         quantity * current_price, market_value, abs_tol=0.01
                     )
@@ -339,6 +347,10 @@ def build_portfolio(
                 ):
                     raise ValueError(f"Conflicting broker security IDs for {symbol}.")
 
+                if locked_target and is_gic_group(locked_target):
+                    # Certificate quantity is face dollars. Broker prices are per $100 par.
+                    current_price /= 100
+                    avg_cost /= 100
                 position = Position(
                     symbol=symbol,
                     symbol_id=symbol_id,
@@ -577,10 +589,12 @@ def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
         symbol = quote.get("symbol", "")
         if symbol in portfolio.holdings:
             holding = portfolio.holdings[symbol]
-            holding.bid_price = float(quote.get("bidPrice") or 0)
-            holding.ask_price = float(quote.get("askPrice") or 0)
+            divisor = 100 if is_gic_group(holding.locked_bond_target or "") else 1
+            holding.bid_price = float(quote.get("bidPrice") or 0) / divisor
+            holding.ask_price = float(quote.get("askPrice") or 0) / divisor
             holding.current_price = (
-                float(quote.get("lastTradePrice") or 0) or holding.current_price
+                float(quote.get("lastTradePrice") or 0) / divisor
+                or holding.current_price
             )
             quote_trade_dates[symbol] = _get_quote_trade_date(quote)
 
@@ -594,6 +608,8 @@ def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
                     symbol_id,
                     exclude_date=quote_trade_dates.get(symbol),
                 )
+                if is_gic_group(holding.locked_bond_target or ""):
+                    prev_close /= 100
             except requests.HTTPError as error:
                 status = getattr(error.response, "status_code", None)
                 if status == 404:
@@ -793,6 +809,12 @@ def simulate_rebalance(
                     trade.amount_cad if trade.action == "DEPOSIT" else -trade.amount_cad
                 )
                 projected_holdings_value_cad[trade.symbol] += movement
+            continue
+        if trade.quantity is None:
+            projected_holdings_value_cad[trade.symbol] = (
+                projected_holdings_value_cad.get(trade.symbol, 0.0)
+                + trade.estimated_value
+            )
             continue
         # Units change at their opening valuation; cash changes at bid or ask.
         mark = marks.get((trade.account_number, trade.symbol), trade.price)

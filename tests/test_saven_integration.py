@@ -452,4 +452,4 @@ def test_transfer_only_plan_renders_without_fake_share_quantity(tmp_path, monkey
     display.display_trades([transfer])
     assert "Saven HISA (…2223) -> Primary Margin (broker)" in output.getvalue()
     assert "$5,000.00" in output.getvalue()
-    assert "No share trades recommended" in output.getvalue()
+    assert "No trades recommended" in output.getvalue()
