@@ -594,8 +594,6 @@ class RebalancePlanner:
                 None,
             )
             if progress is not None:
-                if progress.awaiting_broker_debit_cad:
-                    continue
                 unsettled = (
                     progress.in_transit_cad > 0
                     or progress.source_offset_cad > 0
@@ -621,14 +619,17 @@ class RebalancePlanner:
                         and not trade.in_progress
                         and trade.action == action
                     )
+                    committed = (
+                        max(progress.source_cad, progress.received_cad)
+                        if action == "DEPOSIT"
+                        else progress.source_cad + progress.source_offset_cad
+                    )
                     amount = min(
                         amount,
                         round(
                             max(
                                 0.0,
-                                progress.recommended_cad
-                                - (progress.source_cad + progress.source_offset_cad)
-                                - planned,
+                                progress.recommended_cad - committed - planned,
                             ),
                             2,
                         ),

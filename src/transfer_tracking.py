@@ -132,8 +132,13 @@ class TransferLedger:
             "checked_at",
             "cycle",
         }
-        if not isinstance(record, dict) or set(record) != required:
+        if not isinstance(record, dict) or set(record) - {"pending_debit"} != required:
             raise ValueError("Invalid transfer account state.")
+        if (
+            type(record.get("pending_debit", 0)) is not int
+            or record.get("pending_debit", 0) < 0
+        ):
+            raise ValueError("Invalid pending broker debit.")
         for key in ("bank_in", "bank_out", "broker_in", "broker_out"):
             if type(record[key]) is not int or record[key] < 0:
                 raise ValueError("Invalid cumulative transfer amount.")
@@ -170,7 +175,8 @@ class TransferLedger:
         if cycle is not None:
             if (
                 not isinstance(cycle, dict)
-                or set(cycle) - {"balance_receipt", "balance_debit", "cash_baseline"}
+                or set(cycle)
+                - {"balance_receipt", "balance_debit", "cash_baseline", "prior_debit"}
                 != {
                     "action",
                     "limit",
@@ -197,10 +203,15 @@ class TransferLedger:
             ):
                 if field in cycle and (
                     type(cycle[field]) is not int
-                    or not 0 < cycle[field] <= cycle["limit"]
+                    or cycle[field] <= 0
+                    or (field == "balance_receipt" and cycle[field] > cycle["limit"])
                     or cycle["action"] != direction
                 ):
                     raise ValueError("Invalid inferred broker transfer amount.")
+            if type(cycle.get("prior_debit", 0)) is not int or cycle.get(
+                "prior_debit", 0
+            ) < record.get("pending_debit", 0):
+                raise ValueError("Invalid broker debit baseline.")
             if "cash_baseline" in cycle:
                 baseline = cycle["cash_baseline"]
                 if (
@@ -348,7 +359,7 @@ class TransferLedger:
         """Baseline old records and count newly posted CAD deposits/withdrawals once."""
         record = self.account(symbol)
         if record["broker_account"] not in (None, account_number):
-            if self._unsettled(record):
+            if self._unsettled(record) or self._pending_posting(record):
                 raise ValueError(
                     "Cannot change a broker endpoint with an outstanding transfer."
                 )
@@ -381,16 +392,26 @@ class TransferLedger:
         if previous is not None:
             for key, count in observed.items():
                 additional = max(0, count - previous.get(key, 0))
-                if record["cycle"] is not None:
-                    started = datetime.fromisoformat(record["cycle"]["started_at"])
+                if not additional:
+                    continue
+                increment = abs(amounts[key]) * additional
+                cycle = record["cycle"]
+                debit = amounts[key] < 0
+                if debit and record.get("pending_debit"):
+                    record["pending_debit"] = max(
+                        0, record["pending_debit"] - increment
+                    )
+                if cycle is not None:
+                    started = datetime.fromisoformat(cycle["started_at"])
                     # Late-posted historical activity is not evidence for this
                     # recommendation. Same-day order relies on the saved baseline.
                     if dates[key].date() < started.astimezone(dates[key].tzinfo).date():
+                        if debit and cycle.get("prior_debit"):
+                            cycle["prior_debit"] = max(
+                                0, cycle["prior_debit"] - increment
+                            )
                         continue
-                amount = amounts[key]
-                record["broker_in" if amount > 0 else "broker_out"] += (
-                    abs(amount) * additional
-                )
+                record["broker_out" if debit else "broker_in"] += increment
         known = dict(previous or {})
         for key, count in observed.items():
             known[key] = max(known.get(key, 0), count)
@@ -406,11 +427,17 @@ class TransferLedger:
                 del cycle[field]
 
     @staticmethod
-    def _broker_evidence(record):
+    def _prior_debit_posted(record):
+        # Of the already-observed cash debits outstanding when this cycle
+        # began, only rows dated inside this cycle affect its cash equation.
+        return record["cycle"].get("prior_debit", 0) - record.get("pending_debit", 0)
+
+    def _broker_evidence(self, record):
         cycle = record["cycle"]
         if cycle["action"] == "WITHDRAW":
             return "balance_receipt", record["broker_in"] - cycle["received_start"]
-        return "balance_debit", record["broker_out"] - cycle["source_start"]
+        posted = record["broker_out"] - cycle["source_start"]
+        return "balance_debit", posted - self._prior_debit_posted(record)
 
     def observe_broker_cash(self, symbol, endpoint, daily, day):
         """Infer the unposted cash movement in the intended direction, up to the cap."""
@@ -449,14 +476,19 @@ class TransferLedger:
         start = date.fromisoformat(baseline["day"])
         explained = sum(value for d, value in daily.items() if d >= start)
         residual = round(100 * (cash - explained)) - baseline["cents"]
+        # The baseline already included the lower cash. A late debit in the
+        # feed changes explained activity but cannot signal another movement.
+        residual -= self._prior_debit_posted(record)
         cap = cycle["limit"]
         if field == "balance_receipt":
             source = record["bank_out"] - cycle["source_start"]
             if source:
                 cap = min(cap, source)
+            inferred = min(cap, posted + residual)
         else:
-            residual = -residual
-        inferred = min(cap, posted + residual)
+            # Keep the entire debit for matching a later EFT row. Only the
+            # capped portion can become transit for this recommendation.
+            inferred = posted - residual
         if inferred > posted:
             cycle[field] = inferred
         else:
@@ -493,10 +525,10 @@ class TransferLedger:
         source_total, received_total = self._totals(record, cycle["action"])
         # Cap inferred source principal across the entire cycle. Actual receipts
         # stay uncapped: extra money may have come from the intermediate bank.
-        source = min(
-            cycle["limit"],
-            max(cycle.get("balance_debit", 0), source_total - cycle["source_start"]),
-        )
+        posted_source = source_total - cycle["source_start"]
+        if cycle["action"] == "DEPOSIT":
+            posted_source -= self._prior_debit_posted(record)
+        source = min(cycle["limit"], max(cycle.get("balance_debit", 0), posted_source))
         received = max(
             0, received_total - cycle["received_start"], cycle.get("balance_receipt", 0)
         )
@@ -509,51 +541,37 @@ class TransferLedger:
             awaiting = min(cycle["limit"], received)
         return source, received, pending, awaiting
 
-    @staticmethod
-    def _missing_broker_debit(cycle, source, received):
-        if cycle["action"] != "DEPOSIT":
-            return 0
-        # The amount inside the original cap can be a delayed broker debit.
-        # Excess receipts are valued in full but cannot consume later intent.
-        return max(0, min(cycle["limit"], received) - source)
-
-    def confirm_bank_top_up(self, symbol, amount):
-        """Resolve an unmatched receipt using the customer's verified outside contribution."""
-        record = self.data["accounts"].get(symbol)
-        if record is None or record["cycle"] is None:
-            raise ValueError("No transfer is awaiting a broker debit for this account.")
-        if record["cycle"].get("balance_debit"):
-            raise ValueError(
-                "Wait for the inferred broker withdrawal to post before confirming a bank top-up."
-            )
-        source, received, _, _ = self._amounts(record)
-        missing = self._missing_broker_debit(record["cycle"], source, received)
-        if not missing or cents(amount) != missing:
-            raise ValueError(
-                "Confirm exactly the outstanding amount shown as Awaiting broker debit."
-            )
-        # The receipt is already in the bank balance. Close only the explained intent.
-        record["cycle"] = None
+    def _pending_posting(self, record):
+        cycle = record["cycle"] or {}
+        return (
+            record.get("pending_debit", 0)
+            or cycle.get("balance_debit", 0)
+            or cycle.get("balance_receipt", 0)
+        )
 
     def _unsettled(self, record):
         amounts = self._amounts(record)
         if amounts is None:
             return False
-        source, received, transit, offset = amounts
-        return bool(
-            transit
-            or offset
-            or self._missing_broker_debit(record["cycle"], source, received)
-            or record["cycle"].get("balance_receipt", 0)
-            or record["cycle"].get("balance_debit", 0)
-        )
+        _, _, transit, offset = amounts
+        return bool(transit or offset or record["cycle"].get("balance_receipt"))
+
+    def _close_cycle(self, record):
+        # A statement can fulfill the deposit before the observed cash debit
+        # posts. Carry only that known debit, never the outside-funded remainder.
+        field, posted = self._broker_evidence(record)
+        if field == "balance_debit":
+            unposted = max(0, record["cycle"].get(field, 0) - posted)
+            if unposted:
+                record["pending_debit"] = record.get("pending_debit", 0) + unposted
+        record["cycle"] = None
 
     def retain_routes(self, endpoints):
         """Allow removal only after cash has settled, preserving pending valuation."""
         for symbol, record in list(self.data["accounts"].items()):
             if symbol in endpoints:
                 continue
-            if self._unsettled(record):
+            if self._unsettled(record) or self._pending_posting(record):
                 raise ValueError(
                     "Keep an external target and its Questrade endpoint configured until its transfer settles."
                 )
@@ -568,6 +586,9 @@ class TransferLedger:
         source, received, pending, awaiting = amounts
         cycle = record["cycle"]
         field, posted = self._broker_evidence(record)
+        unposted = max(0, cycle.get(field, 0) - posted)
+        if cycle["action"] == "DEPOSIT":
+            unposted = min(unposted, pending)
         return TransferProgress(
             symbol,
             cycle["action"],
@@ -579,8 +600,7 @@ class TransferLedger:
             received / 100,
             pending / 100,
             awaiting / 100,
-            self._missing_broker_debit(cycle, source, received) / 100,
-            max(0, cycle.get(field, 0) - posted) / 100,
+            unposted / 100,
         )
 
     def apply(self, portfolio, endpoints):
@@ -590,6 +610,12 @@ class TransferLedger:
         for symbol, endpoint in endpoints.items():
             progress = self.progress(symbol, endpoint)
             if progress is None:
+                continue
+            if (
+                progress.action == "DEPOSIT"
+                and progress.received_cad >= progress.recommended_cad
+            ):
+                self._close_cycle(self.account(symbol))
                 continue
             portfolio.transfer_progress.append(progress)
             if progress.source_offset_cad:
@@ -646,7 +672,7 @@ class TransferLedger:
                 ):
                     # Repeated reports must not resize an unexecuted cycle's cap.
                     continue
-                record["cycle"] = None
+                self._close_cycle(record)
             if recommendation is not None and recommendation.amount_cad >= 0.01:
                 # Counter baselines separate this intent from all prior movements.
                 source, received = self._totals(record, recommendation.action)
@@ -657,6 +683,8 @@ class TransferLedger:
                     "received_start": received,
                     "started_at": (now or datetime.now(UTC)).isoformat(),
                 }
+                if record.get("pending_debit"):
+                    record["cycle"]["prior_debit"] = record["pending_debit"]
                 if symbol in self.cash_baselines:
                     record["cycle"]["cash_baseline"] = self.cash_baselines[symbol]
 

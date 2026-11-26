@@ -177,17 +177,11 @@ def test_top_up_from_external_bank_is_counted_once(tmp_path, action):
     current = portfolio(bank, broker_value, cash)
     ledger.apply(current, ROUTES)
     assert current.total_value_cad == 1015000
-    assert current.transfer_progress[0].in_transit_cad == 0
-    assert current.transfer_progress[0].source_offset_cad == 0
     if action == "DEPOSIT":
-        assert current.transfer_progress[0].awaiting_broker_debit_cad == 15000
-        with pytest.raises(ValueError, match="exactly"):
-            ledger.confirm_bank_top_up(SAVEN, "14999.99")
-        ledger.confirm_bank_top_up(SAVEN, "15000.00")
-        settled = portfolio(bank, broker_value, cash)
-        ledger.apply(settled, ROUTES)
-        assert settled.total_value_cad == 1015000
-        assert settled.transfer_progress == []
+        assert current.transfer_progress == []
+    else:
+        assert current.transfer_progress[0].in_transit_cad == 0
+        assert current.transfer_progress[0].source_offset_cad == 0
     ledger.remember_recommendations([recommendation(action, 10000)], ROUTES)
     assert ledger.account(SAVEN)["cycle"]["limit"] == cents(10000)
 
@@ -211,7 +205,7 @@ def test_excess_withdrawal_is_an_outflow_but_actual_receipt_is_uncapped(
     current = portfolio(bank, broker_value, cash)
     ledger.apply(current, ROUTES)
     assert current.total_value_cad == total
-    assert current.transfer_progress[0].in_transit_cad == 0
+    assert sum(p.in_transit_cad for p in current.transfer_progress) == 0
 
 
 def test_recipient_first_offsets_stale_saven_until_csv_confirms_partial_source(
@@ -247,7 +241,7 @@ def test_destination_first_deposit_and_later_broker_record_do_not_double_count(
     repeated = portfolio(bank, 320000)
     ledger.apply(repeated, ROUTES)
     assert repeated.total_value_cad == 1000000
-    assert repeated.transfer_progress[0].in_transit_cad == 0
+    assert repeated.transfer_progress == []
 
 
 def test_partial_duplicate_looking_withdrawals_are_counted_once_and_share_one_cap(
@@ -263,6 +257,96 @@ def test_partial_duplicate_looking_withdrawals_are_counted_once_and_share_one_ca
     assert ledger.account(SAVEN)["cycle"]["limit"] == cents(180000)
     ledger.observe_broker(SAVEN, "broker", [first, first, activity(-100000, day=3)])
     assert ledger.progress(SAVEN, ACCOUNT).source_cad == 180000
+
+
+@pytest.mark.parametrize("broker_debit", [0, 6000, 10000])
+def test_statement_fulfills_deposit_without_confirmation(tmp_path, broker_debit):
+    ledger, _ = baseline(tmp_path)
+    ledger.remember_recommendations([], ROUTES, NOW)
+    ledger.remember_recommendations([recommendation(amount=10000)], ROUTES, NOW)
+    bank, parsed = bank_deposit(tmp_path, 10000)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
+    if broker_debit:
+        ledger.observe_broker(SAVEN, ACCOUNT.number, [activity(-broker_debit)])
+    for _ in range(2):
+        p = portfolio(bank, 500000 - broker_debit)
+        ledger.apply(p, ROUTES)
+        assert p.total_value_cad == 1010000 - broker_debit
+        assert p.transfer_progress == []
+        ledger = TransferLedger(ledger.data)
+        ledger.observe_external_balance(SAVEN, bank, parsed)
+
+
+@pytest.mark.parametrize("direction", ["DEPOSIT", "WITHDRAW"])
+def test_late_debit_after_completed_receipt_cannot_fund_new_cycle(tmp_path, direction):
+    from dataclasses import replace
+
+    ledger, _ = baseline(tmp_path)
+    ledger.remember_recommendations([], ROUTES, NOW)
+    account = replace(ACCOUNT, cash_cad=10000, start_of_day_cash_cad=10000)
+    day = NOW.date()
+    ledger.observe_broker_cash(SAVEN, account, {}, day)
+    ledger.remember_recommendations([recommendation(amount=10000)], ROUTES, NOW)
+    account.cash_cad -= 6000
+    ledger.observe_broker_cash(SAVEN, account, {}, day)
+    bank, parsed = bank_deposit(tmp_path, 10000)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
+    p = portfolio(bank, 494000, account.cash_cad)
+    ledger.apply(p, ROUTES)
+    assert p.transfer_progress == []
+    ledger.remember_recommendations([recommendation(direction, 8000)], ROUTES, NOW)
+    for amount in (2000, 6000, 6000):
+        ledger = TransferLedger(ledger.data)
+        rows = [activity(-2000, day=1)]
+        if amount == 6000:
+            rows.append(activity(-4000, day=1))
+        ledger.observe_broker(SAVEN, account.number, rows, NOW)
+        ledger.observe_broker_cash(SAVEN, account, {day: -amount}, day)
+        progress = ledger.progress(SAVEN, account)
+        assert (
+            progress.source_cad
+            == progress.received_cad
+            == progress.unposted_broker_cad
+            == 0
+        )
+        assert progress.in_transit_cad == progress.source_offset_cad == 0
+    account.cash_cad += 1000 if direction == "WITHDRAW" else -1000
+    ledger.observe_broker_cash(SAVEN, account, {day: -6000}, day)
+    assert ledger.progress(SAVEN, account).unposted_broker_cad == 1000
+
+
+def test_new_debit_posts_before_backdated_confirmation_from_completed_cycle(tmp_path):
+    from dataclasses import replace
+
+    ledger, _ = baseline(tmp_path)
+    first = replace(ACCOUNT, start_of_day_cash_cad=200000, cash_cad=140000)
+    ledger.observe_broker_cash(SAVEN, first, {}, NOW.date())
+    bank, parsed = bank_deposit(tmp_path, 180000)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
+    ledger.apply(portfolio(bank, 440000), {SAVEN: first})
+    # No recommendation for a day. Only the previously observed $60k debit
+    # carries forward; the $120k supplied outside the portfolio is complete.
+    ledger = TransferLedger(ledger.data)
+    today = NOW.replace(day=3)
+    second = replace(first, start_of_day_cash_cad=140000)
+    ledger.observe_broker_cash(SAVEN, second, {}, today.date())
+    ledger.remember_recommendations(
+        [recommendation(amount=50000)], {SAVEN: second}, today
+    )
+    second.cash_cad -= 20000
+    fresh = activity(-20000, day=3)
+    old = activity(-60000, day=2)
+    for rows, still_unposted in (
+        ([fresh], 20000),
+        ([old, fresh], 0),
+        ([fresh, old], 0),
+    ):
+        ledger = TransferLedger(ledger.data)
+        ledger.observe_broker(SAVEN, second.number, rows, today)
+        ledger.observe_broker_cash(SAVEN, second, {today.date(): -20000}, today.date())
+        progress = ledger.progress(SAVEN, second)
+        assert progress.source_cad == progress.in_transit_cad == 20000
+        assert progress.unposted_broker_cad == still_unposted
 
 
 def test_bank_replay_interest_and_same_day_round_trip_are_safe(tmp_path):
@@ -698,7 +782,10 @@ def test_partial_destination_arrivals_release_only_received_principal(tmp_path, 
             current = portfolio(bank, 500000 + total_received, total_received)
         ledger.apply(current, ROUTES)
         assert current.total_value_cad == 1000000
-        assert current.transfer_progress[0].in_transit_cad == 180000 - total_received
+        assert (
+            sum(p.in_transit_cad for p in current.transfer_progress)
+            == 180000 - total_received
+        )
 
 
 def test_same_day_duplicate_bank_rows_keep_multiplicity_across_full_exports(tmp_path):
@@ -896,43 +983,32 @@ def test_receipt_awaiting_export_reserves_transfer_cap(tmp_path, receipt):
     )
 
 
-@pytest.mark.parametrize("first_debit_before_receipt", [True, False])
-def test_split_debits_stay_with_original_cycle(tmp_path, first_debit_before_receipt):
+@pytest.mark.parametrize(
+    "sent,received", [(0, 4000), (6000, 4000), (4000, 6000), (6000, 6000)]
+)
+def test_partial_savings_receipt_limits_recommendation_to_uncommitted_amount(
+    tmp_path, sent, received
+):
     ledger, _ = baseline(tmp_path)
-    first = [activity(-60000, day=2)]
-    if first_debit_before_receipt:
-        ledger.observe_broker(SAVEN, "broker", first, NOW.replace(day=2))
-    bank, parsed = bank_deposit(tmp_path, 180000)
+    ledger.remember_recommendations([], ROUTES, NOW)
+    ledger.remember_recommendations([recommendation(amount=10000)], ROUTES, NOW)
+    bank, parsed = bank_deposit(tmp_path, received)
     ledger.observe_external_balance(SAVEN, bank, parsed)
-
-    def report():
-        p = portfolio(bank, 320000)
-        ledger.apply(p, ROUTES)
-        assert p.total_value_cad == 1000000
-        return calculate_trades(
-            p, {"EQ": 20, SAVEN: 80}, 1.35, 0, 0.1, set(), None, ROUTES
-        )
-
-    waiting = report()
-    assert not any(isinstance(t, TransferRecommendation) for t in waiting)
-    ledger.remember_recommendations(waiting, ROUTES, NOW.replace(day=2))
-    ledger.observe_broker(SAVEN, "broker", first, NOW.replace(day=2))
-    ledger = TransferLedger(ledger.data)
-    assert ledger.progress(SAVEN, ACCOUNT).awaiting_broker_debit_cad == 120000
-    assert not any(isinstance(t, TransferRecommendation) for t in report())
-    ledger.remember_recommendations([], ROUTES, NOW.replace(day=2))
-    with pytest.raises(ValueError, match="until its transfer settles"):
-        ledger.retain_routes({})
-    posted = first + [activity(-120000, day=3)]
-    for _ in range(2):
-        ledger.observe_broker(SAVEN, "broker", posted, NOW.replace(day=3))
-        orders = report()
-        assert [
-            t.amount_cad for t in orders if isinstance(t, TransferRecommendation)
-        ] == [120000]
-    ledger.remember_recommendations(orders, ROUTES, NOW.replace(day=3))
-    ledger.observe_broker(SAVEN, "broker", posted + [activity(-120000, day=4)])
-    assert ledger.progress(SAVEN, ACCOUNT).in_transit_cad == 120000
+    ledger.observe_broker(SAVEN, ACCOUNT.number, [activity(-sent)] if sent else [])
+    p = portfolio(bank, 500000 - sent, 20000 - sent)
+    ledger.apply(p, ROUTES)
+    trades = calculate_trades(
+        p, {"EQ": 20, SAVEN: 80}, 1.35, 0, 0.1, set(), None, {SAVEN: p.accounts[0]}
+    )
+    transfers = [t for t in trades if isinstance(t, TransferRecommendation)]
+    assert sum(t.amount_cad for t in transfers if t.in_progress) == max(
+        0, sent - received
+    )
+    assert sum(t.amount_cad for t in transfers if not t.in_progress) == 10000 - max(
+        sent, received
+    )
+    ledger.remember_recommendations(transfers, ROUTES, NOW)
+    assert ledger.account(SAVEN)["cycle"]["limit"] == cents(10000)
 
 
 def test_broker_cash_receipt_clears_transit_before_activity_without_replaying(

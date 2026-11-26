@@ -204,7 +204,7 @@ local plan can register new intent. A settled partial cycle can be superseded by
 an opposite-direction recommendation. Unused intent is removed if the local plan
 drops it. There is no elapsed-time expiry.
 
-For a Questrade-to-external transfer, recognized withdrawals contribute transit
+For a Questrade-to-external transfer, statement receipts fulfill the recommendation even when an outside bank provides part or all of the deposit. Both sent and received principal consume the same cap. Known cash debits awaiting posting carry forward separately when the cycle closes. Recognized withdrawals contribute transit
 cash until reconciled against a new export. In the reverse direction, import the
 export as soon as it shows the withdrawal. If Questrade receives first, offset the
 stale external valuation until an export establishes the source withdrawal. An interest-only export does not establish that withdrawal.
@@ -238,7 +238,7 @@ newer export.
 
 Cash-inferred deposits show as `Received` and outgoing withdrawals as
 `Sent (awaiting activity)` until the corresponding broker activity posts.
-Other transfer statuses are `Planned`, `In transit`, `Awaiting broker debit`, and `Awaiting export`. Settled movements are
+Other transfer statuses are `Planned`, `In transit`, and `Awaiting export`. Settled movements are
 omitted immediately, so the transfer table disappears when nothing needs to be
 recommended or reconciled. Retaining an unused partial-cycle allowance internally
 does not create a display row.

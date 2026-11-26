@@ -103,15 +103,16 @@ History, tactical evaluation and accuracy use the full reported balances through
 
 ### Questrade to an external account
 
-When a savings receipt exceeds the posted broker withdrawals, the report shows the outstanding amount within the original recommendation as `Awaiting broker debit`. Each posted debit reduces that amount. The original cycle stays active through split postings and repeated reports; a fully matched transfer clears automatically.
+A statement deposit counts toward the active recommendation regardless of how
+you funded it. Once receipts reach the recommended amount, the transfer block
+clears automatically. For a $10,000 receipt with $6,000 from Questrade, transit
+clears and the $4,000 bank contribution increases tracked household value. If
+your bank supplied all $10,000, household value rises by the full amount.
 
-If the outstanding amount came from the intermediate bank, first run the rebalancer with a current statement and check both institutions' records. Confirm only when all broker withdrawals for that receipt have posted. For example, if the outstanding amount is CAD 150.00, preview the confirmation with:
-
-```powershell
-python scripts/import_external_balance.py --account "SAVEN:<account-number>" --confirm-bank-top-up 150.00
-```
-
-Repeat with `--save` to close the verified cycle, then run the rebalancer to synchronize and calculate fresh instructions. The amount must exactly match the displayed gap. The receipt already counts in the bank balance, so confirmation changes neither cash nor household value.
+For partial transfers, the most left to send is the recommendation minus the
+larger of the amount already sent and the amount received, with a floor of
+zero. A $10,000 recommendation with $6,000 sent and $4,000 received therefore
+has $2,000 in transit and at most $4,000 left to send.
 
 An unexplained CAD cash debit can establish transit before the EFT posts. The
 transfer table shows that portion as `Sent (awaiting activity)`. A posted debit
@@ -158,7 +159,7 @@ is dropped if the local plan drops it, or replaced if its direction changes. A
 partly settled cycle retains its remaining cap even when residual drift falls
 below tolerance. That allowance is internal bookkeeping, not an asset/display row.
 
-A completed cycle can close once receipts are reconciled with the capped source principal or the unmatched bank contribution has been confirmed. An opposite-direction recommendation can replace
+The ledger remembers cash debits already observed for completed deposits until the EFT rows post. A late posting confirms those dollars even if another recommendation has started. A new cash movement is evaluated against the current recommendation. An opposite-direction recommendation can replace
 a settled partial cycle. A route with unsettled money cannot be changed or removed.
 No timer/expiry applies. The API's 31-day query limit is not display retention.
 

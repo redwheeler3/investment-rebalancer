@@ -204,7 +204,7 @@ def test_new_parser_and_settings_drive_loading_tracking_planning_and_nomenclatur
     settled = portfolio(received, configs, 850000)
     updated.apply(settled, endpoints)
     assert settled.total_value_cad == 1025000
-    assert settled.transfer_progress[0].in_transit_cad == 0
+    assert settled.transfer_progress == []
     data, storage = encrypted_store
     assert data / "acme_balance.json" in storage
     assert data / "saven_balance.json" not in storage
