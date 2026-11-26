@@ -83,6 +83,11 @@ recommended direction counts provisionally, up to the outstanding amount.
 An unrelated payment in that same direction can therefore be attributed to the
 recommendation. Opposite-direction cash movements do not advance it.
 
+When a recommendation starts, the ledger records any unexplained difference
+between opening and current CAD cash after accounting for the day's activity.
+If a deposit or withdrawal already visible in that balance posts later, its
+activity row does not create transit or a second receipt for the new recommendation.
+
 Recognized principal is capped across the whole recommendation:
 
 `min(cumulative related source withdrawals, original recommended amount)`

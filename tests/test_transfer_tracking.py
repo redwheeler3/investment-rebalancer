@@ -1235,20 +1235,95 @@ def test_cash_inference_caps_principal_and_keeps_outside_money(
     assert p.cash_cad_total == account.cash_cad
 
 
-def test_new_cycle_excludes_existing_same_day_cash_movement(tmp_path):
+@pytest.mark.parametrize("sign", [-1, 1])
+@pytest.mark.parametrize("action", ["DEPOSIT", "WITHDRAW"])
+def test_new_cycle_excludes_existing_same_day_cash_movement(tmp_path, sign, action):
+    from dataclasses import replace
+
+    ledger, bank = baseline(tmp_path)
+    ledger.remember_recommendations([], ROUTES)
+    account = replace(ACCOUNT, start_of_day_cash_cad=500, cash_cad=500 + sign * 50)
+    day = NOW.date()
+    ledger.observe_broker_cash(SAVEN, account, {}, day)
+    ledger.remember_recommendations([recommendation(action)], {SAVEN: account}, NOW)
+    for amounts in ([], [20], [20, 30], [20, 30]):
+        ledger = TransferLedger(ledger.data)
+        rows = [activity(sign * n, day=1) for n in amounts]
+        ledger.observe_broker(SAVEN, account.number, rows, NOW)
+        daily = {day: sign * sum(amounts)}
+        ledger.observe_broker_cash(SAVEN, account, daily, day)
+        p = portfolio(bank, broker_value=500000 + sign * 50, cash=account.cash_cad)
+        ledger.apply(p, {SAVEN: account})
+        progress = p.transfer_progress[0]
+        assert progress.source_cad == progress.received_cad == 0
+        assert p.total_value_cad == 1000000 + sign * 50
+    change = -100 if action == "DEPOSIT" else 100
+    account.cash_cad += change
+    ledger.observe_broker_cash(SAVEN, account, daily, day)
+    assert ledger.progress(SAVEN, account).unposted_broker_cad == 100
+    ledger.observe_broker(SAVEN, account.number, rows + [activity(change, day=1)], NOW)
+    ledger.observe_broker_cash(SAVEN, account, {day: sign * 50 + change}, day)
+    progress = ledger.progress(SAVEN, account)
+    assert max(progress.source_cad, progress.received_cad) == 100
+    assert progress.unposted_broker_cad == 0
+
+
+@pytest.mark.parametrize("action,sign", [("DEPOSIT", -1), ("WITHDRAW", 1)])
+def test_new_payment_posts_before_preintent_payment(tmp_path, action, sign):
     from dataclasses import replace
 
     ledger, _ = baseline(tmp_path)
-    ledger.remember_recommendations([], ROUTES)
-    account = replace(ACCOUNT, start_of_day_cash_cad=500, cash_cad=450)
-    day = NOW.date()
-    ledger.observe_broker_cash(SAVEN, account, {}, day)
-    ledger.remember_recommendations([recommendation()], {SAVEN: account}, NOW)
-    ledger.observe_broker_cash(SAVEN, account, {}, day)
-    assert ledger.progress(SAVEN, account).in_transit_cad == 0
-    account.cash_cad -= 100
-    ledger.observe_broker_cash(SAVEN, account, {}, day)
-    assert ledger.progress(SAVEN, account).in_transit_cad == 100
+    ledger.remember_recommendations([], ROUTES, NOW)
+    # Earlier posted activity and fractional broker cash must not inflate the gap.
+    known = activity(120, day=1)
+    account = replace(
+        ACCOUNT, start_of_day_cash_cad=500.103, cash_cad=620.103 + sign * 50
+    )
+    ledger.observe_broker(SAVEN, account.number, [known], NOW)
+    ledger.observe_broker_cash(SAVEN, account, {NOW.date(): 120}, NOW.date())
+    ledger.remember_recommendations([recommendation(action)], {SAVEN: account}, NOW)
+    account.cash_cad += sign * 100
+    fresh = activity(sign * 100, day=1)
+    late = activity(sign * 50, day=1)
+    for rows in ([known, fresh], [known, fresh, late], [late, known, fresh]):
+        ledger = TransferLedger(ledger.data)
+        ledger.observe_broker(SAVEN, account.number, rows, NOW)
+        ledger.observe_broker_cash(
+            SAVEN, account, {NOW.date(): sum(r["netAmount"] for r in rows)}, NOW.date()
+        )
+        progress = ledger.progress(SAVEN, account)
+        assert max(progress.source_cad, progress.received_cad) == 100
+    assert progress.unposted_broker_cad == 0
+
+
+def test_distinct_ordinary_and_completed_cycle_debits_can_post_together(tmp_path):
+    from dataclasses import replace
+
+    ledger, _ = baseline(tmp_path)
+    account = replace(ACCOUNT, start_of_day_cash_cad=200000, cash_cad=140000)
+    ledger.observe_broker_cash(SAVEN, account, {}, NOW.date())
+    bank, parsed = bank_deposit(tmp_path, 180000)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
+    ledger.apply(portfolio(bank, 440000), {SAVEN: account})
+
+    # Yesterday's $60k is already in today's opening balance. The ordinary
+    # $50 debit is also visible by the time a new recommendation is shown.
+    today = NOW.replace(day=3)
+    account = replace(account, start_of_day_cash_cad=140000, cash_cad=139950)
+    ledger.observe_broker_cash(SAVEN, account, {}, today.date())
+    ledger.remember_recommendations([recommendation()], {SAVEN: account}, today)
+    old = [activity(-60000, day=3), activity(-50, day=3)]
+    for extra in (0, 100):
+        ledger = TransferLedger(ledger.data)
+        account.cash_cad = 139950 - extra
+        rows = old + ([activity(-extra, day=3)] if extra else [])
+        ledger.observe_broker(SAVEN, account.number, rows, today)
+        ledger.observe_broker_cash(
+            SAVEN, account, {today.date(): -60050 - extra}, today.date()
+        )
+        progress = ledger.progress(SAVEN, account)
+        assert progress.in_transit_cad == extra
+        assert progress.unposted_broker_cad == 0
 
 
 @pytest.mark.parametrize("posted_qty", [0, 4, 10])

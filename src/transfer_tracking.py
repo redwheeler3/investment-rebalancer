@@ -216,11 +216,43 @@ class TransferLedger:
                 baseline = cycle["cash_baseline"]
                 if (
                     not isinstance(baseline, dict)
-                    or set(baseline) != {"day", "cents"}
+                    or set(baseline)
+                    not in (
+                        {"day", "cents"},
+                        {"day", "cents", "opening_gap", "posted_start"},
+                        {
+                            "day",
+                            "cents",
+                            "opening_gap",
+                            "posted_start",
+                            "matched_debits",
+                        },
+                    )
                     or type(baseline["cents"]) is not int
                 ):
                     raise ValueError("Invalid broker cash baseline.")
                 date.fromisoformat(baseline["day"])
+                if "opening_gap" in baseline:
+                    gap = baseline["opening_gap"]
+                    if (
+                        type(gap) is not int
+                        or not gap
+                        or type(baseline["posted_start"]) is not int
+                        or not (
+                            0
+                            <= baseline["posted_start"]
+                            <= record["broker_in" if gap > 0 else "broker_out"]
+                        )
+                    ):
+                        raise ValueError("Invalid pre-recommendation cash evidence.")
+                    if "matched_debits" in baseline and (
+                        gap >= 0
+                        or type(baseline["matched_debits"]) is not int
+                        or not 0
+                        <= baseline["matched_debits"]
+                        <= record["broker_out"] - baseline["posted_start"]
+                    ):
+                        raise ValueError("Invalid pre-recommendation debit match.")
             source_key, received_key = (
                 ("broker_out", "bank_in")
                 if cycle["action"] == "DEPOSIT"
@@ -427,17 +459,41 @@ class TransferLedger:
                 del cycle[field]
 
     @staticmethod
-    def _prior_debit_posted(record):
-        # Of the already-observed cash debits outstanding when this cycle
-        # began, only rows dated inside this cycle affect its cash equation.
-        return record["cycle"].get("prior_debit", 0) - record.get("pending_debit", 0)
+    def _prior_broker_postings(record, residual=None):
+        """Return debit and credit cents already in cash when this intent began."""
+        cycle = record["cycle"]
+        debit = cycle.get("prior_debit", 0) - record.get("pending_debit", 0)
+        baseline = cycle.get("cash_baseline", {})
+        gap = baseline.get("opening_gap", 0)
+        if not gap:
+            return debit, 0
+        counter = record["broker_in" if gap > 0 else "broker_out"]
+        new_postings = counter - baseline["posted_start"]
+        matched = min(abs(gap), new_postings)
+        if gap > 0:
+            return debit, matched
+        # A previous transfer's debit and today's opening gap may overlap.
+        # Count both only to the extent that posted rows and unchanged cash
+        # corroborate distinct debits. A reread cannot spend the evidence twice.
+        lower = max(debit, matched)
+        upper = min(new_postings, debit + matched)
+        confirmed = min(baseline.get("matched_debits", 0), upper)
+        if residual is not None:
+            confirmed = max(confirmed, min(residual, upper))
+            if confirmed > lower:
+                baseline["matched_debits"] = confirmed
+            else:
+                baseline.pop("matched_debits", None)
+        return max(lower, confirmed), 0
 
     def _broker_evidence(self, record):
         cycle = record["cycle"]
+        debit, credit = self._prior_broker_postings(record)
         if cycle["action"] == "WITHDRAW":
-            return "balance_receipt", record["broker_in"] - cycle["received_start"]
+            posted = record["broker_in"] - cycle["received_start"]
+            return "balance_receipt", posted - credit
         posted = record["broker_out"] - cycle["source_start"]
-        return "balance_debit", posted - self._prior_debit_posted(record)
+        return "balance_debit", posted - debit
 
     def observe_broker_cash(self, symbol, endpoint, daily, day):
         """Infer the unposted cash movement in the intended direction, up to the cap."""
@@ -450,11 +506,21 @@ class TransferLedger:
             "day": day.isoformat(),
             "cents": round(100 * (cash - daily.get(day, 0))),
         }
+        opening = endpoint.start_of_day_cash_cad
+        if opening is not None:
+            snapshot = self.cash_baselines[symbol]
+            gap = snapshot["cents"] - round(100 * Decimal(str(opening)))
+            if gap:
+                # Only postings first seen after this snapshot can explain
+                # this already-observed, pre-recommendation cash movement.
+                snapshot.update(
+                    opening_gap=gap,
+                    posted_start=record["broker_in" if gap > 0 else "broker_out"],
+                )
         if not cycle:
             return
-        field, posted = self._broker_evidence(record)
         if "cash_baseline" not in cycle:
-            opening = endpoint.start_of_day_cash_cad
+            field, posted = self._broker_evidence(record)
             adjusted = self.cash_baselines[symbol]["cents"]
             opening_cents = (
                 adjusted if opening is None else round(100 * Decimal(str(opening)))
@@ -476,9 +542,11 @@ class TransferLedger:
         start = date.fromisoformat(baseline["day"])
         explained = sum(value for d, value in daily.items() if d >= start)
         residual = round(100 * (cash - explained)) - baseline["cents"]
-        # The baseline already included the lower cash. A late debit in the
-        # feed changes explained activity but cannot signal another movement.
-        residual -= self._prior_debit_posted(record)
+        # A late posting for money already in the opening snapshot changes
+        # the activity sum without changing cash since the recommendation.
+        debit, credit = self._prior_broker_postings(record, residual)
+        field, posted = self._broker_evidence(record)
+        residual += credit - debit
         cap = cycle["limit"]
         if field == "balance_receipt":
             source = record["bank_out"] - cycle["source_start"]
@@ -526,12 +594,14 @@ class TransferLedger:
         # Cap inferred source principal across the entire cycle. Actual receipts
         # stay uncapped: extra money may have come from the intermediate bank.
         posted_source = source_total - cycle["source_start"]
+        posted_received = received_total - cycle["received_start"]
+        _, posted = self._broker_evidence(record)
         if cycle["action"] == "DEPOSIT":
-            posted_source -= self._prior_debit_posted(record)
+            posted_source = posted
+        else:
+            posted_received = posted
         source = min(cycle["limit"], max(cycle.get("balance_debit", 0), posted_source))
-        received = max(
-            0, received_total - cycle["received_start"], cycle.get("balance_receipt", 0)
-        )
+        received = max(0, posted_received, cycle.get("balance_receipt", 0))
         pending = max(0, source - received)
         awaiting = 0
         if cycle["action"] == "WITHDRAW" and source == 0:
