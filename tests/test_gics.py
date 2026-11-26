@@ -204,8 +204,6 @@ def purchase_plan(accounts, targets):
     config = parse_tactical_config(
         {
             "fixed_composition": composition,
-            "gic_account_types": ["RRSP", "SRRSP"],
-            "gic_min_buy_cad": 5000,
         }
     )
     budget = fixed_income_budget(portfolio, targets, config.fixed_composition, 1)
@@ -220,6 +218,8 @@ def purchase_plan(accounts, targets):
         quotes,
         fixed_budget=budget,
         tactical_config=config,
+        gic_account_types=("RRSP", "SRRSP"),
+        gic_min_buy_cad=5000,
     )
     return portfolio, trades, quotes
 
@@ -383,9 +383,9 @@ def test_example_config_enables_saven_and_gic_purchases(tmp_path, monkeypatch):
         tmp_path / "settings.yaml",
     )
     monkeypatch.setattr(main, "get_config_dir", lambda: tmp_path)
-    *_, tactical, external = main.load_config()
-    assert tactical.gic_account_types == ("RRSP", "SRRSP")
-    assert tactical.gic_min_buy_cad == 5000
+    *_, account_types, minimum, tactical, external = main.load_config()
+    assert account_types == ("RRSP", "SRRSP")
+    assert minimum == 5000
     assert (
         tactical.fixed_composition["GIC:2Y"]
         == tactical.fixed_composition["GIC:5Y"]

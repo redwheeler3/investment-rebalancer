@@ -26,7 +26,8 @@ The `run_rebalancer()` function is the spine of the app. Every other module is c
 ```python
 def run_rebalancer():
     (accounts, targets, transient_symbols, norberts_gambit_fee_cad,
-     fx_target_rules, drift_trade_threshold_pct, redemption_rules, tactical_config,
+     fx_target_rules, drift_trade_threshold_pct, redemption_rules,
+     gic_account_types, gic_min_buy_cad, tactical_config,
      external_accounts) = load_config()
 
     balances = load_external_balances(external_accounts, Path.home() / "Downloads")
@@ -86,6 +87,7 @@ and every app-managed file under `data/` are SOPS/age ciphertext at rest.
 - **transient_symbols** — things like DLR.TO you're temporarily holding during a conversion
 - **drift_trade_threshold_pct** — minimum drift before a trade is recommended
 - **norberts_gambit_fee_cad** — per-conversion fee
+- **gic_account_types** and **gic_min_buy_cad** govern account eligibility and the minimum per certificate purchase.
 - **tactical_config** — drawdown-based regime state machine that dynamically shifts the fixed/equity split (parsed via `parse_tactical_config()`)
 - **external_accounts** — enabled provider IDs with configured display names/types and linked Questrade endpoints
 

@@ -33,7 +33,7 @@ fixed holdings' configured weights. Restricted principal, available account
 cash, and whole-unit sizes limit those purchases. Reports and scheduled
 accuracy checks continue to compare actual holdings with the ideal targets.
 
-Under `tactical_deployment`, `gic_account_types` selects eligible Questrade
+The top-level setting `gic_account_types` selects eligible Questrade
 account types for new certificates. An eligible account can buy the first
 certificate of a term or replace its last matured certificate. The planner
 checks the household term deficit and applies `gic_min_buy_cad` to each

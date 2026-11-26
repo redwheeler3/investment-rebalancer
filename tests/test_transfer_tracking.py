@@ -815,6 +815,8 @@ def test_scheduled_sync_reconciles_before_recording_history_or_tactical_evaluati
         {},
         0.1,
         {},
+        (),
+        5000,
         config,
         CONFIGS,
     )

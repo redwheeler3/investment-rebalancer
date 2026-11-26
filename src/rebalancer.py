@@ -182,13 +182,15 @@ def calculate_trades(
     blocked_sales: set[tuple[str, str, str | None]] | None = None,
     fixed_budget: FixedIncomeBudget | None = None,
     tactical_config=None,
+    gic_account_types: tuple[str, ...] = (),
+    gic_min_buy_cad: float = 5000,
 ) -> list:
     """Calculate trades and optionally collect restricted sells for the report."""
     if portfolio.total_value_cad == 0:
         return []
 
     requested = {}
-    if fixed_budget and tactical_config and tactical_config.gic_account_types:
+    if fixed_budget and tactical_config and gic_account_types:
         for symbol in tactical_config.fixed_composition:
             if is_gic_group(symbol):
                 deficit = (
@@ -197,7 +199,7 @@ def calculate_trades(
                     / 100
                 )
                 amount = math.floor(deficit * 100 + 1e-8) / 100
-                if amount >= tactical_config.gic_min_buy_cad:
+                if amount >= gic_min_buy_cad:
                     requested[symbol] = amount
 
     # Only funded orders may displace other fixed holdings. Discard the entire
@@ -225,8 +227,8 @@ def calculate_trades(
             external_transfer_accounts=external_transfer_accounts or {},
             fixed_budget=budget,
             gic_remaining=dict(requested),
-            gic_account_types=tactical_config.gic_account_types if requested else (),
-            gic_min_buy_cad=tactical_config.gic_min_buy_cad if requested else 0,
+            gic_account_types=gic_account_types if requested else (),
+            gic_min_buy_cad=gic_min_buy_cad if requested else 0,
         )
         trades = planner.build()
         funded = gic_purchase_amounts(trades)

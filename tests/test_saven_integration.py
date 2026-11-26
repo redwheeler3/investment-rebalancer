@@ -228,7 +228,7 @@ def test_corrupt_cache_cannot_reach_portfolio_math(tmp_path, key, value):
 
 
 def test_missing_savings_stops_sync_before_token_rotation_and_history(tmp_path):
-    config = ([], {}, [], 0, {}, 0.1, {}, None, CONFIGS)
+    config = ([], {}, [], 0, {}, 0.1, {}, (), 5000, None, CONFIGS)
     with (
         patch.object(main, "load_config", return_value=config),
         patch.object(main, "prepare_state"),
@@ -263,6 +263,8 @@ def test_scheduled_history_and_accuracy_include_savings(tmp_path, capsys):
         {},
         0.1,
         {},
+        (),
+        5000,
         None,
         CONFIGS,
     )

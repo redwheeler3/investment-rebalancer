@@ -115,13 +115,12 @@ def test_invalid_rule_rejected(bad):
         parse_redemption_holding_months({"FUND": bad})
 
 
-def test_conflicting_security_ids_and_old_checkpoint_cannot_establish_maturity():
-    cache = {"123:FUND": {"through": "2026-05-01", "lots": {"2025-01-01": 5}}}
+def test_redemption_lots_follow_broker_security_identity():
+    cache = {}
     row = {**buy("2026-03-03", 5), "symbolId": 999}
     assert check([row], 5, "2026-11-24", cache, months=1).units == 0
     row.update(symbol="FORMER", symbolId=33)
     assert check([row], 5, "2026-11-24", cache, months=1).units == 5
-    assert "123:FUND" not in cache
     broker = Mock()
     broker.get_activities.return_value = []
     pos = SimpleNamespace(

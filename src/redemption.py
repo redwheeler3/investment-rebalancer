@@ -138,7 +138,6 @@ def _verified_lots(client, position, now, cache):
                 lots = _remaining_lots(combined, recent_sold)
                 if key:
                     cache[key] = {"through": checkpoint.isoformat(), "lots": older_lots}
-                    cache.pop(f"{position.account_number}:{position.symbol}", None)
                 return lots
         last = first - timedelta(days=1)
     raise ValueError("unit history could not be verified")

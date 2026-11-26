@@ -33,6 +33,9 @@ external_accounts:
       owner_name: Secondary
       account_type: Margin  # The broker account that sends and receives transfers.
 
+gic_account_types: [RRSP, SRRSP]  # Eligible Questrade account types for new certificates.
+gic_min_buy_cad: 5000             # Minimum funded amount per order in one account.
+
 targets:
   VCN.TO: 20.0
   VUN.TO: 25.0
@@ -77,8 +80,6 @@ tactical_deployment:
     "SAVEN:0001112223": 25.0  # Statement-backed savings balance.
     "GIC:2Y": 20.0            # Two-year original term across all accounts.
     "GIC:5Y": 20.0            # Five-year original term, including near maturity.
-  gic_account_types: [RRSP, SRRSP]  # Eligible Questrade account types for new certificates.
-  gic_min_buy_cad: 5000             # Minimum funded amount per order in one account.
   deploy_thresholds:
     - { drawdown_pct: -10.0, fixed_pct: 15.0 }
     - { drawdown_pct: -20.0, fixed_pct: 10.0 }

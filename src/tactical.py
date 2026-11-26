@@ -41,8 +41,6 @@ class TacticalConfig:
     recovery_thresholds: list[
         dict
     ]  # sorted by drawdown_pct ascending (most negative first)
-    gic_account_types: tuple[str, ...] = ()
-    gic_min_buy_cad: float = 5000
 
     @property
     def regimes(self):
@@ -199,28 +197,11 @@ def parse_tactical_config(raw: dict) -> TacticalConfig | None:
             )
         prior_drawdown, prior_fixed = d, fixed
 
-    types = raw.get("gic_account_types", [])
-    minimum = raw.get("gic_min_buy_cad", 5000)
-    if not isinstance(types, list) or any(
-        not isinstance(t, str) or not t.strip() or t != t.strip() for t in types
-    ):
-        raise ValueError("gic_account_types must list Questrade account type names.")
-    if (
-        type(minimum) not in (int, float)
-        or not math.isfinite(minimum)
-        or minimum < 0.01
-        or round(minimum, 2) != minimum
-    ):
-        raise ValueError(
-            "gic_min_buy_cad must be a positive CAD amount in whole cents."
-        )
     return TacticalConfig(
         baseline_fixed_pct=baseline_fixed_pct,
         fixed_composition=fixed_composition,
         deploy_thresholds=deploy_thresholds,
         recovery_thresholds=recovery_thresholds,
-        gic_account_types=tuple(types),
-        gic_min_buy_cad=minimum,
     )
 
 

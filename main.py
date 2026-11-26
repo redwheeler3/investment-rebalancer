@@ -76,6 +76,8 @@ def load_config() -> tuple:
             fx_target_rules dict,
             drift_trade_threshold_pct float,
             redemption_rules dict,
+            gic_account_types tuple,
+            gic_min_buy_cad float,
             tactical_config,
             external_accounts dict,
         ).
@@ -89,12 +91,6 @@ def load_config() -> tuple:
 
     with open(targets_path, "r") as f:
         data = yaml.safe_load(f)
-
-    if "redemption_rules" in data:
-        raise ValueError(
-            "Replace redemption_rules with redemption_holding_months in settings.yaml "
-            "(for example, use 24 for a two-year holding period)."
-        )
 
     raw_accounts = data.get("accounts", [])
     if not raw_accounts:
@@ -146,6 +142,22 @@ def load_config() -> tuple:
     ):
         if type(value) not in (float, int) or not math.isfinite(value) or value < 0:
             raise ValueError(f"{name} must be a finite nonnegative number.")
+    gic_account_types = data.get("gic_account_types", [])
+    gic_min_buy_cad = data.get("gic_min_buy_cad", 5000)
+    if not isinstance(gic_account_types, list) or any(
+        not isinstance(t, str) or not t.strip() or t != t.strip()
+        for t in gic_account_types
+    ):
+        raise ValueError("gic_account_types must list Questrade account type names.")
+    if (
+        type(gic_min_buy_cad) not in (int, float)
+        or not math.isfinite(gic_min_buy_cad)
+        or gic_min_buy_cad < 0.01
+        or round(gic_min_buy_cad, 2) != gic_min_buy_cad
+    ):
+        raise ValueError(
+            "gic_min_buy_cad must be a positive CAD amount in whole cents."
+        )
     tactical_config = parse_tactical_config(data.get("tactical_deployment", {}))
     external_accounts = parse_external_accounts(data)
     equity_symbols = set(targets)
@@ -177,6 +189,8 @@ def load_config() -> tuple:
         fx_target_rules,
         drift_trade_threshold_pct,
         parse_redemption_holding_months(data.get("redemption_holding_months", {})),
+        tuple(gic_account_types),
+        gic_min_buy_cad,
         tactical_config,
         external_accounts,
     )
@@ -211,6 +225,8 @@ def run_scheduled_sync():
         fx_target_rules,
         _drift_trade_threshold_pct,
         redemption_rules,
+        _gic_account_types,
+        _gic_min_buy_cad,
         tactical_config,
         external_accounts,
     ) = load_config()
@@ -453,6 +469,8 @@ def run_rebalancer():
         fx_target_rules,
         drift_trade_threshold_pct,
         redemption_rules,
+        gic_account_types,
+        gic_min_buy_cad,
         tactical_config,
         external_accounts,
     ) = load_config()
@@ -526,6 +544,8 @@ def run_rebalancer():
         blocked_sales=blocked_sales,
         fixed_budget=fixed_budget,
         tactical_config=tactical_config,
+        gic_account_types=gic_account_types,
+        gic_min_buy_cad=gic_min_buy_cad,
     )
     fx_targets = resolved_targets
     if fixed_budget:

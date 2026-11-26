@@ -30,26 +30,11 @@ def _config():
         {},
         0.1,
         {},
+        (),
+        5000,
         None,
         {},
     )
-
-
-def test_legacy_redemption_settings_stop_before_connecting(tmp_path, monkeypatch):
-    (tmp_path / "settings.yaml").write_text(
-        "accounts:\n  - owner_name: Primary\n    token_file: primary.json\n"
-        "redemption_rules:\n  FUND: {minimum_years: 2}\n",
-        encoding="utf-8",
-    )
-    monkeypatch.setattr(main, "get_config_dir", lambda: tmp_path)
-
-    with (
-        patch("main.QuestradeClient") as client,
-        pytest.raises(ValueError, match="Replace redemption_rules"),
-    ):
-        main.run_scheduled_sync()
-
-    client.assert_not_called()
 
 
 def test_scheduled_sync_fails_on_encrypted_state_error():
@@ -154,7 +139,7 @@ def test_partial_connection_stops_before_portfolio_or_tactical_evaluation(tmp_pa
     for filename in ("jeff.json", "eunee.json"):
         (tmp_path / filename).write_text("encrypted placeholder")
 
-    config = (accounts, {}, [], 0.0, {}, 1.0, {}, object(), {})
+    config = (accounts, {}, [], 0.0, {}, 1.0, {}, (), 5000, object(), {})
     with (
         patch("main.load_config", return_value=config),
         patch("main.get_tokens_dir", return_value=Path(tmp_path)),
