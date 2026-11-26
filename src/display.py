@@ -967,10 +967,13 @@ def display_external_transfers(portfolio, actions: list) -> None:
     awaiting = [
         item
         for item in portfolio.transfer_progress
-        if item.source_offset_cad > 0 or item.awaiting_broker_debit_cad
+        if (
+            item.source_offset_cad > 0
+            or item.awaiting_broker_debit_cad
+            or item.awaiting_broker_receipt_activity
+        )
     ]
-    # A settled cycle can retain unused allowance internally. Show only actionable
-    # instructions, money in transit, or an export needed to reconcile valuation.
+    # A settled cycle can retain unused allowance internally without a report row.
     if not transfers and not awaiting:
         return
     symbols = {item.symbol for item in transfers + awaiting}
@@ -1015,8 +1018,12 @@ def display_external_transfers(portfolio, actions: list) -> None:
             continue
         table.add_row(
             f"{external} -> {account_label}",
-            _format_money(item.source_offset_cad),
-            "Awaiting export",
+            _format_money(
+                item.received_cad
+                if item.awaiting_broker_receipt_activity
+                else item.source_offset_cad
+            ),
+            "Received" if item.awaiting_broker_receipt_activity else "Awaiting export",
         )
     console.print(table)
     console.print()

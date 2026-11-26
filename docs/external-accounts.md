@@ -168,8 +168,9 @@ actual broker cash changes only when the broker reports it.
 
 Transfer tables use configured names/types. A single-name table is named for that
 account; mixed names use `External Transfers`. Rows contain both endpoints, CAD
-amount, and `Planned`, `In transit`, or `Awaiting export`. Settled rows disappear
-immediately; an empty table is omitted. Symbols display as
+amount, and status. A broker cash receipt shows as `Received` until activity
+reconciles it. Fully reconciled rows disappear and an empty table is omitted.
+Symbols display as
 `PROVIDER:...<last-four>` while matching uses full identifiers.
 
 ## Adapter contract and real-transfer validation

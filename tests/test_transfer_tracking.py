@@ -931,7 +931,9 @@ def test_split_debits_stay_with_original_cycle(tmp_path, first_debit_before_rece
     assert ledger.progress(SAVEN, ACCOUNT).in_transit_cad == 120000
 
 
-def test_broker_cash_receipt_clears_transit_before_activity_without_replaying(tmp_path):
+def test_broker_cash_receipt_clears_transit_before_activity_without_replaying(
+    tmp_path, monkeypatch
+):
     from dataclasses import replace
 
     ledger, _ = baseline(tmp_path, "WITHDRAW")
@@ -944,6 +946,10 @@ def test_broker_cash_receipt_clears_transit_before_activity_without_replaying(tm
     # The balance evidence survives a report and the next day's opening balance.
     ledger.remember_recommendations([], routes)
     ledger = TransferLedger(ledger.data)
+    output = StringIO()
+    monkeypatch.setattr(
+        display, "console", Console(file=output, width=160, force_terminal=False)
+    )
     for rows in ([], [activity(20000)], [activity(20000), activity(38182.32, day=3)]):
         ledger.observe_broker(SAVEN, cash.number, rows)
         p = portfolio(bank, broker_value=558182.32, cash=cash.cash_cad)
@@ -952,6 +958,14 @@ def test_broker_cash_receipt_clears_transit_before_activity_without_replaying(tm
         assert progress.received_cad == 58182.32
         assert progress.in_transit_cad == 0
         assert p.total_value_cad == pytest.approx(1000000)
+        output.seek(0)
+        output.truncate()
+        display.display_external_transfers(p, [])
+        if len(rows) < 2:
+            assert "Saven Transfers" in output.getvalue()
+            assert "$58,182.32" in output.getvalue() and "Received" in output.getvalue()
+        else:
+            assert not output.getvalue()
     assert not progress.awaiting_broker_receipt_activity
 
 
