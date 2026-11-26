@@ -71,14 +71,14 @@ CAD/USD planning, and Questrade-specific workflow details.
 - **Fail-Closed Account Loading** — Stops before portfolio evaluation if any configured Questrade account is unavailable
 - **Target Allocation Tracking** — Compares holdings against configurable targets
 - **Accuracy Score** — Single percentage showing how close the portfolio is to target
-- **Smart Trade Placement** — Only recommends trades in accounts that already hold the position
+- **Trade placement** — Share buys use accounts that hold the security. Manual GIC buys use eligible account types, including when a term has no current holdings.
 - **Currency Handling** — Detects USD/CAD conversion needs and flags Norbert's Gambit status
 - **Transient Symbols** — Temporarily exclude symbols such as `DLR.TO` / `DLR.U.TO` during Norbert's Gambit
-- **Unknown Holdings** — Symbols not in targets are treated as implicit 0% targets and recommended for sale
+- **Untargeted holdings** — Tradable holdings outside the resolved targets have a 0% target. Locked certificates retain their broker value and cannot fund sales.
 - **Projected Accuracy** — Shows expected accuracy after recommended trades
-- **Whole-Share Trading** — Uses whole shares only, with bid pricing for sells and ask pricing for buys
-- **Iterative Algorithm** — Repeats Sell → Buy → Sweep rounds until positions are within tolerance (or a 10-round cap is reached)
-- **Configurable Drift Trade Threshold** — Only acts on positions that drift beyond your chosen threshold
+- **Whole-Share Trading** — Sizes share orders at the bid for sells and the ask for buys. GIC instructions specify a CAD amount.
+- **Iterative Algorithm** — Runs up to ten sell, buy, and cash-deployment rounds per planning attempt, stopping when a round produces no changes
+- **Configurable Drift Trade Threshold** — Suppresses small starter share trades
 - **Tolerance-Aware Status Display** — Marks symbols as `OK`, `OVER`, or `UNDER`
 - **Conservative FX Funding** — Uses conservative DLR bid/ask math for Norbert's Gambit sizing
 - **Tactical Defensive Deployment** — Drawdown-based regime system that deploys fixed-income assets into equities during market drops and rebuilds on recovery
@@ -110,9 +110,9 @@ these portfolio rules:
    - This can include buying a symbol that is merely the best eligible holding
      in an account, even if it is no longer globally underweight.
 
-5. **Only buy symbols that already exist in the account**
-   - An account's current holdings define its buyable universe.
-   - This rule is one of the main constraints that shapes the planner.
+5. **Place buys in eligible accounts**
+   - Buy shares in accounts that already hold the symbol.
+   - For a GIC term, use the household deficit and the funding available in each configured account type.
 
 6. **Prefer same-currency deployment before cross-currency deployment**
    - If an account has useful same-currency buys available, those come before a
@@ -142,10 +142,10 @@ these portfolio rules:
 9. **Use whole-share, real-side pricing**
    - Sells use bid pricing.
    - Buys use ask pricing.
-   - Trades are sized in whole shares only.
+   - Share trades are sized in whole units.
 
 10. **Treat unknown symbols as implicit 0% targets**
-    - If a holding is not in the target map, it is still eligible to be sold.
+    - Ordinary holdings outside the resolved targets can be sold when the proceeds are useful. Redemption restrictions still apply.
 
 11. **Respect transient/excluded symbols**
     - Symbols such as `DLR.TO` / `DLR.U.TO` can be temporarily excluded from
@@ -393,6 +393,8 @@ The private repo contains the live state the app reads through
 | `main.py` | CLI entry point — loads config, connects clients, orchestrates the run |
 | `src/portfolio.py` | Data model (positions, accounts, holdings), allocation math, and trade projection |
 | `src/rebalancer.py` | Core decision engine — decides what to trade and which accounts to use |
+| `src/fixed_income.py` | Reserves locked principal and funded GIC buys within the tactical fixed-income budget |
+| `src/redemption.py` | Determines eligible redemption units from verified broker activity |
 | `src/cash_deploy.py` | Residual cash deployment — builds buy trades from leftover cash |
 | `src/models.py` | Shared trade, transfer, transfer-progress, and alert data types |
 | `src/saven_export.py` | Saven-specific CSV parser returning common external balances and ledger rows |
@@ -516,7 +518,7 @@ Copy the public example file:
 - `config/settings.example.yaml` from this repo
 - into `config/settings.yaml` in your private state repo
 
-Then edit it with your real allocation targets and account definitions.
+Replace the sample accounts and weights with your own. The example enables Saven tracking. To use it, configure the matching statement account and broker route, then import your first export locally. To omit it, remove the sample Saven target and account entry and redistribute its fixed-income weight.
 
 The same file also defines which Questrade logins to connect to. Instead of
 hardcoding household-specific names or corporate labels in the public code,
@@ -814,6 +816,17 @@ persisted to `data/fx_targets_state.json` so stickiness carries across runs.
 
 ---
 
+## GIC purchases
+
+For guaranteed investment certificates (GICs), set original-term targets such as `GIC:2Y` and `GIC:5Y` in `tactical_deployment.fixed_composition`. Their weights are percentages of fixed income. Two top-level settings govern purchases:
+
+```yaml
+gic_account_types: [RRSP, SRRSP]
+gic_min_buy_cad: 5000
+```
+
+For example, a funded CAD $7,250 two-year purchase appears in **Recommended Trades** as `BUY GIC:2Y`, with the amount and destination account. The minimum applies to each order. Select the issuer and verify the available rate and settled cash before ordering. Existing certificates keep their broker symbols in Portfolio Holdings and count toward their original terms for allocation. [Locked certificates](docs/rebalancer.md#locked-certificates)
+
 ## External accounts without API access
 
 A target such as `SAVEN:<account-number>` selects a registered statement adapter.
@@ -849,7 +862,7 @@ The first observation baselines old activity. Keep the external target and route
 configured until its balance is zero and its transfers are settled.
 
 See the [external account guide](docs/external-accounts.md) for setup, imports,
-transit rules, state, console behavior, and real-transfer checks. The
+transit rules, saved state, and transfer statuses. The
 [Saven adapter section](docs/external-accounts.md#saven-statement-adapter) describes its specific export format. Keep real
 identifiers and financial state in the private repo.
 
@@ -868,10 +881,11 @@ Key fields:
 - `tactical_deployment` — drawdown-based regime system for fixed/equity split (optional)
 - `transient_symbols` — symbols to exclude temporarily from trading
 - `norberts_gambit_fee_cad` — estimated fee used in conversion suggestions
-- `drift_trade_threshold_pct` — minimum drift before the rebalancer acts
+- `drift_trade_threshold_pct` — minimum drift for ordinary starter share trades
+- `gic_account_types` and `gic_min_buy_cad` — eligible account types and minimum CAD amount per GIC purchase
+- `redemption_holding_months` — minimum holding period or `never` for restricted broker symbols
 
-Any non-transient symbol you hold that isn't in `targets` gets an implicit 0%
-target and will be recommended for sale.
+The planner checks holdings against the combined static, FX-derived, and tactical targets. Recognized GICs are automatically locked, including terms with a zero target.
 
 ---
 

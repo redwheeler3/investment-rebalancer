@@ -46,7 +46,11 @@ def run_rebalancer():
         resolved_targets = resolve_tactical_targets(resolved_targets, tactical_posture, ...)
     _validate_resolved_targets(resolved_targets)  # fail fast if not ~100%
 
-    trades = calculate_trades(portfolio, resolved_targets, ..., external_transfer_accounts=transfer_accounts)
+    fixed_composition = tactical_config.fixed_composition if tactical_config else {}
+    fixed_budget = fixed_income_budget(portfolio, resolved_targets, fixed_composition, usd_to_cad_rate)
+    trades = calculate_trades(portfolio, resolved_targets, ..., fixed_budget=fixed_budget,
+                             tactical_config=tactical_config, gic_account_types=gic_account_types,
+                             gic_min_buy_cad=gic_min_buy_cad, external_transfer_accounts=transfer_accounts)
     currency_conversions = calculate_currency_needs(trades, portfolio.accounts, ...)
     report = build_report_data(portfolio, resolved_targets, ..., trades, ...)
     record_value(portfolio.total_value_cad)
@@ -501,6 +505,11 @@ trades = calculate_trades(
     drift_trade_threshold_pct,
     transient_symbols=hidden_symbols,
     dlr_quotes=dlr_quotes,
+    external_transfer_accounts=transfer_accounts,
+    fixed_budget=fixed_budget,
+    tactical_config=tactical_config,
+    gic_account_types=gic_account_types,
+    gic_min_buy_cad=gic_min_buy_cad,
 )
 ```
 
@@ -532,7 +541,7 @@ shares_affordable = floor((cad_available - fee) / cad_buy_price)
 dlr_shares = min(shares_needed, shares_affordable)
 ```
 
-It also handles **sweep logic** — after trades, cash sitting in a currency the rebalancer can't deploy is structurally stranded, so the sweep converts it into the account's *home* currency. An account's home currencies are those in which it holds a post-trade position with a positive target; the sweep fires only when there is **exactly one** home, and converts the other currency's cash into it. This runs in both directions (leftover CAD swept into a USD home, and leftover USD swept into a CAD home). Accounts with **two** homes (genuinely mixed, positive targets on both sides) are skipped — their foreign cash is deployable same-currency by the planner, so converting here would force an unnecessary round-trip. Accounts with **zero** homes (only cash and/or target-0 wind-down positions) are also skipped, since the cash would just strand in the other currency. Because the rebalancer deploys residual cash only same-currency, this sweep is the sole rescue path for stranded foreign cash — including the proceeds of a target-0 wind-down (e.g. an untargeted holding being sold off) in an otherwise single-home mixed account.
+It also handles **sweep logic** — after trades, cash sitting in a currency the rebalancer can't deploy is structurally stranded, so the sweep converts it into the account's *home* currency. An account's home currencies are those in which it holds a post-trade position with a positive target; the sweep fires only when there is **exactly one** home, and converts the other currency's cash into it. This runs in both directions (leftover CAD swept into a USD home, and leftover USD swept into a CAD home). Accounts with **two** homes (genuinely mixed, positive targets on both sides) are skipped — their foreign cash is deployable same-currency by the planner, so converting here would force an unnecessary round-trip. Accounts with **zero** homes (only cash and/or target-0 wind-down positions) are also skipped, since the cash would just strand in the other currency. The sweep handles foreign cash left after same-currency and eligible cross-currency buys.
 
 ### The math layer (`fx_math.py`)
 
@@ -700,6 +709,8 @@ Scheduled sync publishes each replacement token immediately. After sync, the wor
 | `fx_math.py` | Pure math — conversion sizing, buying power calculations |
 | `fx_conversions.py` | Post-trade planning — Norbert's Gambit share counts |
 | `rebalancer.py` | Trade decisions — the core algorithm |
+| `fixed_income.py` | Reserves locked principal and funded certificate purchases, then budgets the remaining fixed holdings |
+| `redemption.py` | Verifies acquisition lots and account-level redemption limits |
 | `cash_deploy.py` | Residual cash — spends leftover cash optimally |
 | `report_builder.py` | Report assembly — bundles display data |
 | `display.py` | Terminal rendering — Rich tables and charts |

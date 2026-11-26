@@ -13,8 +13,9 @@ production adapter is [Saven CSV](#saven-statement-adapter).
 
 Use a quoted `PROVIDER:<account-id>` target in `targets`, or in
 `tactical_deployment.fixed_composition` with tactical deployment. The prefix
-selects a registered parser. Target membership enables tracking, including
-zero-weight members; metadata alone does not add an account to valuation.
+selects a registered parser. An external account with a zero target stays
+tracked until you remove the target. GIC term targets such as `GIC:2Y` group
+positions reported directly by Questrade and need no statement adapter or transfer route.
 
 Describe each account in private `config/settings.yaml`:
 
@@ -76,7 +77,7 @@ or pause flag is required.
 
 An outstanding recommendation and linked Questrade account supply intent for new
 cash movements through the intermediate bank. This is an inference, not an
-end-to-end transfer ID. Detection begins when Questrade posts activity.
+end-to-end transfer ID. The ledger matches new statement movements and posted broker activity. For an inbound deposit, an exact broker cash match can establish receipt before the activity row arrives.
 
 Recognized principal is capped across the whole recommendation:
 
@@ -173,7 +174,7 @@ reconciles it. Fully reconciled rows disappear and an empty table is omitted.
 Symbols display as
 `PROVIDER:...<last-four>` while matching uses full identifiers.
 
-## Adapter contract and real-transfer validation
+## Adapter contract
 
 Add a parser and an entry in `src/external_providers.py`. Registration provides
 ID validation, export discovery/reading, and a cache filename. It returns common
@@ -185,12 +186,6 @@ in the adapter. Names/types belong in settings.
 `src/external_accounts.py` owns shared configuration/loading. The fictitious
 non-CSV adapter in `tests/test_external_provider_boundary.py` verifies that loading,
 tracking, planning, and rendering work without changing the Questrade core.
-
-The first real transfer still needs checking: sync the recommendation first,
-compare actual balances and transit/offset rows, verify both totals, import
-continuous source data, and confirm settlement removes the box. Check partial
-payments, top-ups, replay, and posting delays. Activity dates can be date-only,
-so pay attention to same-day ordering.
 
 See [architecture](architecture.md#external-account-boundary) and
 [planner reconciliation](rebalancer.md#automatic-transit-reconciliation).

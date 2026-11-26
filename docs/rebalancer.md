@@ -12,12 +12,12 @@ The planner is built around these rules (defined in the project README). They're
 2. **Sell overweight positions and buy underweight positions** — The planner starts with symbols whose drift is materially away from target.
 3. **Use a drift threshold to avoid tiny starter trades** — The configured `drift_trade_threshold_pct` suppresses trades for symbols that are only slightly off target.
 4. **Minimize free cash whenever practical** — Useful account-level cash is deployed even when no symbol is far enough from target to start a normal rebalance. Idle cash flows to where it is most useful: to a real underweight when one exists, otherwise (best-available) to the holding with the most cascade potential. Crossing the currency boundary for a best-available buy is only worth a conversion when the destination has cascade potential; genuinely stranded foreign cash is instead handled by the post-rebalance conversion sweep.
-5. **Only buy symbols that already exist in the account** — An account's current holdings define its buyable universe.
+5. **Place share buys in accounts that hold the symbol** — GIC purchases use the configured account types.
 6. **Prefer same-currency deployment before cross-currency deployment** — Same-currency buys come before CAD/USD conversion, since a same-currency option of equal value avoids a Norbert's Gambit fee. Cross-currency funding is used when it closes a real underweight, or when a best-available buy on the other side has strictly higher cascade potential than anything same-currency.
 7. **Allow account-constrained cash deployment, then clean up globally** — If cash lands in an account with limited options, deploy it there first. If that creates excess exposure, sell the excess from another account where proceeds can fund underweight buys.
 8. **Avoid obviously wasteful churn** — Don't create trade patterns that undo each other without improving drift or reducing idle cash.
 9. **Use whole-share, real-side pricing** — Sells use bid pricing. Buys use ask pricing. Whole shares only.
-10. **Treat unknown symbols as implicit 0% targets** — Holdings not in the target map are eligible to be sold.
+10. **Treat unknown symbols as implicit 0% targets** — Sales of untargeted holdings still require trade eligibility and a productive use for the proceeds.
 11. **Respect transient/excluded symbols** — Symbols like `DLR.TO` / `DLR.U.TO` can be temporarily excluded while a Norbert's Gambit is in flight.
 
 ### Locked certificates
@@ -68,10 +68,14 @@ trades = calculate_trades(
     transient_symbols=hidden_symbols,
     dlr_quotes=dlr_quotes,
     external_transfer_accounts=transfer_accounts,
+    fixed_budget=fixed_budget,
+    tactical_config=tactical_config,
+    gic_account_types=gic_account_types,
+    gic_min_buy_cad=gic_min_buy_cad,
 )
 ```
 
-This creates a `RebalancePlanner` and calls `planner.build()`.
+Each planning attempt reserves the requested GIC amounts before allocating the remaining fixed-income budget. If the eligible accounts can fund only part of a reservation, `calculate_trades()` rebuilds the plan using the funded amounts. Only the final attempt supplies trades and funding instructions.
 
 ---
 
@@ -86,11 +90,14 @@ def __post_init__(self) -> None:
         self.portfolio, self.usd_to_cad_rate, excluded_symbols=self.hidden_symbols
     )
 
+    locked = {s for s, h in self.portfolio.holdings.items() if h.locked_bond_target}
+    if self.fixed_budget:
+        self.targets = self.targets | self.fixed_budget.targets
+
     # Compute initial drift: how far each symbol is from target
     self.initial_drifts = get_drifts(current_alloc, self.targets)
 
-    # Holdings view without transient symbols (this is what we rebalance)
-    self.holdings_view = get_holdings_view(self.portfolio, self.hidden_symbols)
+    self.holdings_view = get_holdings_view(self.portfolio, self.hidden_symbols | locked)
 
     # TradePlan: accumulates trades, projects future drifts
     self.plan = TradePlan(...)
@@ -110,6 +117,7 @@ def build(self) -> list:
     for _ in range(MAX_ROUNDS):     # Up to 10 iterations
         starter_changes = self._plan_external_transfers()
         starter_changes += self._sell_overweight_starters()
+        starter_changes += self._buy_gics()
         starter_changes += self._plan_external_transfers()
         starter_changes += self._buy_underweight_starters()
 
@@ -226,16 +234,16 @@ The configured-route/recommendation rule is an inference: posted broker activity
 has no final-destination identifier through the linked bank. A partial withdrawal
 confirmed by the current external export is authoritative; excess broker receipts
 are treated as outside-bank top-ups. Later unreported external withdrawals need a
-newer export. Validate this timing with the first real transfer.
+newer export.
 
-The display uses `Planned`, `In transit`, and `Awaiting export`. Settled movements are
+A matched cash deposit shows as `Received` until its activity row posts. Other transfer statuses are `Planned`, `In transit`, `Awaiting broker debit`, and `Awaiting export`. Settled movements are
 omitted immediately, so the transfer table disappears when nothing needs to be
 recommended or reconciled. Retaining an unused partial-cycle allowance internally
 does not create a display row.
 Account symbols such as `PROVIDER:<account-id>` are abbreviated as
 `PROVIDER:...<last-four>` only at rendering.
 The [external account guide](external-accounts.md) owns setup, export handling,
-operator workflow, and the first-real-transfer checklist; this section describes the planner's mechanics.
+and the operator workflow.
 
 The planner has no provider-name or statement-format branches. Adapters select
 transfer-eligible normalized rows; settings supply console labels. Questrade's
@@ -391,7 +399,7 @@ def sort_key(account):
     )
 ```
 
-**Key rule:** Only accounts that already hold the symbol are eligible. You can't put IVV in an account that doesn't have it.
+For share buys, only accounts that already hold the symbol are eligible. You can't put IVV in an account that doesn't have it.
 
 ### Step 4: Execute the buy in an account (`_buy_in_account`)
 
@@ -599,7 +607,7 @@ The planner generates trades across multiple rounds and layers. A single (symbol
 - A sell in Layer 1
 - A buy-back in Layer 3 (leftover cash)
 
-`net_trades()` consolidates:
+GIC buys for the same term and account are combined by CAD amount. Planned external transfers and arrivals already in transit are kept separate. Share orders are netted by quantity:
 
 ```python
 def net_trades(all_trades: list) -> list:
@@ -835,7 +843,7 @@ These scenarios demonstrate how the planner handles complex situations that aris
 **Setup:** You contribute $100,000 CAD to an RRSP that holds only one position — a US-listed ETF (e.g., QQQ). The rest of the portfolio across other accounts is roughly balanced.
 
 **Why this is tricky:**
-- Rule 5 ("Only buy symbols that already exist in the account") constrains the buyable universe
+- Rule 5 ("Place share buys in accounts that hold the symbol") constrains the buyable universe
 - The account's only buyable symbol is USD-denominated
 - The cash is CAD
 - Buying $100K worth of QQQ in this one account would massively overshoot the household target for QQQ
@@ -1226,7 +1234,7 @@ Post-trade planning (fx_conversions.py):
   the sweep shares are ADDED to the existing conversion (same journal entry).
 ```
 
-**Key insight:** The sweep logic in `fx_conversions.py` runs *after* the rebalancer. It detects "orphaned" foreign cash that can never be productively used and folds it into the conversion plan, preventing the slow accumulation of small unusable cash balances over time. Because the rebalancer deploys residual cash only same-currency, the sweep is the sole rescue path for stranded foreign cash — so it must catch every case.
+**Key insight:** The sweep logic in `fx_conversions.py` runs *after* the rebalancer. It detects "orphaned" foreign cash that can never be productively used and folds it into the conversion plan, preventing the slow accumulation of small unusable cash balances over time.
 
 The sweep is gated on the account having **exactly one home currency**, where a "home currency" is one in which the account holds a post-trade position with a positive target (`_positive_target_currency_homes`). The stranded (non-home) currency's cash is swept into the home currency. Three cases follow from this:
 
@@ -1301,10 +1309,10 @@ Final netted trades:
 
 | Scenario | Primary Rules Exercised |
 |----------|------------------------|
-| 1. Large cash deposit (single USD stock) | Rule 5 ("Only buy symbols that already exist in the account"), Rule 7 ("Allow account-constrained cash deployment, then clean up globally"), Rule 4 ("Minimize free cash whenever practical") |
-| 2. Sell allocation split | Rule 2 ("Sell overweight positions and buy underweight positions"), Rule 5 ("Only buy symbols that already exist in the account"), Rule 4 ("Minimize free cash whenever practical"), Rule 8 ("Avoid obviously wasteful churn") |
-| 3. Multi-account chain reaction | Rule 1 ("Treat all accounts as one household portfolio"), Rule 5 ("Only buy symbols that already exist in the account"), Rule 6 ("Prefer same-currency deployment before cross-currency deployment") |
-| 4. Best-available cash deployment | Rule 4 ("Minimize free cash whenever practical"), Rule 5 ("Only buy symbols that already exist in the account") |
+| 1. Large cash deposit (single USD stock) | Rule 5 ("Place share buys in accounts that hold the symbol"), Rule 7 ("Allow account-constrained cash deployment, then clean up globally"), Rule 4 ("Minimize free cash whenever practical") |
+| 2. Sell allocation split | Rule 2 ("Sell overweight positions and buy underweight positions"), Rule 5 ("Place share buys in accounts that hold the symbol"), Rule 4 ("Minimize free cash whenever practical"), Rule 8 ("Avoid obviously wasteful churn") |
+| 3. Multi-account chain reaction | Rule 1 ("Treat all accounts as one household portfolio"), Rule 5 ("Place share buys in accounts that hold the symbol"), Rule 6 ("Prefer same-currency deployment before cross-currency deployment") |
+| 4. Best-available cash deployment | Rule 4 ("Minimize free cash whenever practical"), Rule 5 ("Place share buys in accounts that hold the symbol") |
 | 5. Trade netting | Rule 8 ("Avoid obviously wasteful churn") |
 | 6. Cross-currency sweep | Rule 4 ("Minimize free cash whenever practical"), Rule 6 ("Prefer same-currency deployment before cross-currency deployment") |
 | 7. Cross-currency cascade | Rule 1 ("Treat all accounts as one household portfolio"), Rule 4 ("Minimize free cash whenever practical"), Rule 6 ("Prefer same-currency deployment before cross-currency deployment") |
@@ -1343,14 +1351,14 @@ rebalancer.py
 
 ## Restricted redemptions
 
-Verified lots are keyed by account and broker security ID. A ticker-only checkpoint must be rebuilt from posted activity before its units can be recommended. Conflicting broker IDs never match solely because the tickers agree.
+Verified lots are keyed by account and broker security ID. Conflicting broker IDs never match solely because the tickers agree.
 
 The optional `redemption_holding_months` section in private settings maps each
 broker symbol to a positive whole number of calendar months, such as `24`, or
 to `never` for holdings the planner should never recommend selling. Interactive
 and scheduled runs search backwards in 30-day windows until posted trades
 reconcile to the held units. The app retains
-verified acquisition dates and quantities per account and symbol in encrypted
+verified acquisition dates and quantities per account and broker security ID in encrypted
 `data/redemption_lots.json`, so lots can age beyond the broker's account-data
 window. Each lookup replays activity since the verified checkpoint. After a gap
 longer than the 16-month lookback it requires fresh evidence for the position.
