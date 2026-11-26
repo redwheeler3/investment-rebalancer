@@ -26,6 +26,7 @@ import math
 from dataclasses import dataclass, field, replace
 
 from src.cash_deploy import build_deploy_cash_underweight
+from src.fixed_income import FixedIncomeBudget
 from src.fx_math import consume_cross_currency_cash, cross_currency_buying_power, to_cad
 from src.models import TradeRecommendation, TransferRecommendation
 from src.portfolio import (
@@ -154,6 +155,7 @@ def calculate_trades(
     external_transfer_accounts: dict | None = None,
     *,
     blocked_sales: set[tuple[str, str, str | None]] | None = None,
+    fixed_budget: FixedIncomeBudget | None = None,
 ) -> list:
     """Calculate trades and optionally collect restricted sells for the report."""
     if portfolio.total_value_cad == 0:
@@ -168,6 +170,7 @@ def calculate_trades(
         hidden_symbols=transient_symbols,
         dlr_quotes=dlr_quotes,
         external_transfer_accounts=external_transfer_accounts or {},
+        fixed_budget=fixed_budget,
     )
     trades = planner.build()
     if blocked_sales is not None:
@@ -337,6 +340,7 @@ class RebalancePlanner:
     hidden_symbols: set[str] = field(default_factory=set)
     dlr_quotes: object | None = None
     external_transfer_accounts: dict = field(default_factory=dict)
+    fixed_budget: FixedIncomeBudget | None = None
     holdings_view: dict = field(init=False)
     initial_drifts: dict[str, float] = field(init=False)
     plan: TradePlan = field(init=False)
@@ -359,8 +363,13 @@ class RebalancePlanner:
             self.usd_to_cad_rate,
             excluded_symbols=self.hidden_symbols,
         )
+        locked = {s for s, h in self.portfolio.holdings.items() if h.locked_bond_target}
+        if self.fixed_budget:
+            self.targets = self.targets | self.fixed_budget.targets
         self.initial_drifts = get_drifts(current_alloc, self.targets)
-        self.holdings_view = get_holdings_view(self.portfolio, self.hidden_symbols)
+        self.holdings_view = get_holdings_view(
+            self.portfolio, self.hidden_symbols | locked
+        )
         self.plan = TradePlan(
             portfolio=self.portfolio,
             targets=self.targets,
@@ -395,6 +404,13 @@ class RebalancePlanner:
                     progress.account_number, "CAD", progress.in_transit_cad
                 )
 
+    def _fixed_buy_limits(self):
+        if self.fixed_budget is None:
+            return {}
+        return self.fixed_budget.buy_limits(
+            self.plan.projected_snapshot(), self.holdings_view, self.usd_to_cad_rate
+        )
+
     def build(self) -> list:
         """Run the planner phases and return the final recommended trades."""
         for _ in range(MAX_ROUNDS):
@@ -419,6 +435,13 @@ class RebalancePlanner:
                 continue
             amount = round(abs(drift) / 100 * self.portfolio.total_value_cad, 2)
             action = "WITHDRAW" if drift > 0 else "DEPOSIT"
+            if (
+                action == "DEPOSIT"
+                and self.fixed_budget
+                and symbol in self.fixed_budget.targets
+            ):
+                room = self.fixed_budget.room_cad(self.plan.projected_snapshot())
+                amount = min(amount, math.floor(room * 100 + 1e-8) / 100)
             progress = next(
                 (
                     entry
@@ -651,6 +674,11 @@ class RebalancePlanner:
         currency: str,
         remaining_shares: int,
     ) -> int:
+        remaining_shares = min(
+            remaining_shares, self._fixed_buy_limits().get(symbol, remaining_shares)
+        )
+        if not remaining_shares:
+            return 0
         buying_power = self.ledger.total_buying_power(
             acct.number,
             currency,
@@ -1015,6 +1043,7 @@ class RebalancePlanner:
             return None
 
         quantity = math.floor(available_cash / ask_price_native)
+        quantity = min(quantity, self._fixed_buy_limits().get(symbol, quantity))
         if quantity <= 0:
             return None
 
@@ -1052,8 +1081,12 @@ class RebalancePlanner:
         changing the cascade/drift ranking of the remaining candidates.
         """
         candidates = self._account_buyable_candidates(acct, currency, drifts)
+        limits = self._fixed_buy_limits()
         for _drift_pct, symbol, ask_price_native in candidates:
-            if math.floor(available_cash / ask_price_native) <= 0:
+            if (
+                limits.get(symbol) == 0
+                or math.floor(available_cash / ask_price_native) <= 0
+            ):
                 continue
             return (
                 symbol,
@@ -1100,6 +1133,7 @@ class RebalancePlanner:
                                 source_currency=source_currency,
                                 buy_currency=buy_currency,
                                 underweight_threshold_pct=0.0,
+                                buy_limits=self._fixed_buy_limits(),
                                 dlr_quotes=self.dlr_quotes if requires_fx else None,
                             )
                             if trade is None:

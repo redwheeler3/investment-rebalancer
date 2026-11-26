@@ -77,6 +77,8 @@ tactical_deployment:
     ZMMK.TO: 50.0    # Money market
     XSH.TO: 25.0     # Canadian short-term corporate bonds
     XIGS.TO: 25.0    # US short-term corporate bonds
+    # Original-term GIC targets (e.g. "GIC:2Y" and "GIC:5Y") can take part of
+    # this mix. Recognized broker certificates count automatically across accounts.
     # To include a Saven HISA, assign it part of this composition, e.g.
     # "SAVEN:0001112223": 25.0
     # Rebalance the other weights so the composition still sums to 100.

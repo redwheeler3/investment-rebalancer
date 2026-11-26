@@ -6,7 +6,9 @@ builds a unified portfolio view, calculates allocation percentages and drift,
 and projects what the portfolio would look like after a set of trades.
 """
 
+import logging
 import math
+import re
 from dataclasses import dataclass, field
 from datetime import UTC, datetime, timedelta
 
@@ -23,7 +25,40 @@ from src.fx_math import (
 )
 from src.models import TransferProgress
 from src.questrade_client import RETRYABLE_HTTP_STATUSES
-from src.redemption import RedemptionLimit, account_redemption_limits
+from src.redemption import RedemptionLimit, RedemptionRule, account_redemption_limits
+
+
+def is_gic_group(symbol: str) -> bool:
+    return re.fullmatch(r"GIC:[1-9][0-9]*Y", symbol) is not None
+
+
+def _locked_bond_target(symbol, details, currency, quantity, price, market_value):
+    """Only the verified compound-certificate format identifies an original term."""
+    if details.get("securityType") != "Bond" or details.get("isTradable") is True:
+        # Missing metadata must not turn a percent-of-par quote into share proceeds.
+        if market_value > 0 and math.isclose(
+            quantity * price / 100, market_value, rel_tol=0.0001
+        ):
+            return symbol
+        return None
+    if (
+        currency == "CAD"
+        and details.get("isQuotable") is False
+        and details.get("isTradable") is False
+    ):
+        match = re.fullmatch(
+            r".+?\s+MAT\s+(\d{2}/\d{2}/\d{4})\s+\d+(?:\.\d+)?%\s+([1-9]\d*)Y\s+CPD",
+            str(details.get("description", "")).strip(),
+            re.IGNORECASE,
+        )
+        if match:
+            try:
+                datetime.strptime(match[1], "%m/%d/%Y")
+            except ValueError:
+                pass
+            else:
+                return f"GIC:{match[2]}Y"
+    return symbol  # Keep the broker value visible under its own name pending review.
 
 
 def _coerce_numeric(value, default: float = 0.0) -> float:
@@ -48,11 +83,11 @@ def _normalize_currency(value) -> str | None:
 
 
 def _resolve_position_currency(
-    pos: dict, symbol_id: int, symbol: str, symbol_currency_map: dict[int, str]
+    pos: dict, symbol_id: int, symbol: str, details: dict
 ) -> str:
     """Require Questrade-provided currency data for each position."""
-    currency = _normalize_currency(pos.get("currency")) or symbol_currency_map.get(
-        symbol_id
+    currency = _normalize_currency(pos.get("currency")) or _normalize_currency(
+        details.get("currency")
     )
     if currency:
         return currency
@@ -117,6 +152,7 @@ class HoldingSummary:
     ask_price: float = 0.0
     prev_close_price: float = 0.0
     accounts: list["HoldingAccountDetail"] = field(default_factory=list)
+    locked_bond_target: str | None = None
 
 
 @dataclass
@@ -150,6 +186,7 @@ class AllocationSnapshot:
     allocations: dict
     drifts: dict
     accuracy: float
+    total_value_cad: float
 
 
 def build_portfolio(
@@ -204,15 +241,14 @@ def build_portfolio(
                 if symbol_id > 0:
                     symbol_ids.add(symbol_id)
 
-        symbol_currency_map = {}
+        symbol_details = {}
         if symbol_ids:
             for symbol_data in client.get_symbols(sorted(symbol_ids)):
                 symbol_id = int(
                     _coerce_numeric(symbol_data.get("symbolId", 0), default=0.0)
                 )
-                currency = _normalize_currency(symbol_data.get("currency"))
-                if symbol_id > 0 and currency:
-                    symbol_currency_map[symbol_id] = currency
+                if symbol_id > 0:
+                    symbol_details[symbol_id] = symbol_data
 
         for acct in accounts:
             acct_number = acct["number"]
@@ -269,19 +305,34 @@ def build_portfolio(
                 symbol_id = int(_coerce_numeric(pos.get("symbolId", 0), default=0.0))
                 avg_cost = _coerce_numeric(pos.get("averageEntryPrice", 0.0))
 
-                currency = _resolve_position_currency(
-                    pos,
-                    symbol_id,
-                    symbol,
-                    symbol_currency_map,
+                details = symbol_details.get(symbol_id, {})
+                currency = _resolve_position_currency(pos, symbol_id, symbol, details)
+                locked_target = _locked_bond_target(
+                    symbol, details, currency, quantity, current_price, market_value
                 )
+                rule = (redemption_rules or {}).get(symbol)
+                if (
+                    locked_target == symbol
+                    and rule
+                    and rule.minimum_months
+                    and math.isclose(
+                        quantity * current_price, market_value, abs_tol=0.01
+                    )
+                ):
+                    # Explicit manual-redemption products have verified per-unit pricing.
+                    locked_target = None
 
-                if symbol in {"CAD", "USD"} or symbol.startswith("TRANSIT:"):
+                if symbol in {"CAD", "USD"} or symbol.startswith(("TRANSIT:", "GIC:")):
                     raise ValueError(
                         f"Broker ticker {symbol} conflicts with a reserved portfolio key."
                     )
                 if symbol in holdings and holdings[symbol].currency != currency:
                     raise ValueError(f"Conflicting broker currencies for {symbol}.")
+                if (
+                    symbol in holdings
+                    and holdings[symbol].locked_bond_target != locked_target
+                ):
+                    raise ValueError(f"Conflicting broker bond details for {symbol}.")
                 if (
                     symbol_id
                     and security_ids.setdefault(symbol, symbol_id) != symbol_id
@@ -308,7 +359,13 @@ def build_portfolio(
                     value_cad = market_value * usd_to_cad_rate
 
                 if symbol not in holdings:
+                    if locked_target == symbol:
+                        logging.warning(
+                            "Review %s: unrecognized bond details. Position excluded from trading.",
+                            symbol,
+                        )
                     holdings[symbol] = HoldingSummary(
+                        locked_bond_target=locked_target,
                         current_price=current_price,
                         currency=currency,
                         bid_price=current_price,
@@ -331,6 +388,10 @@ def build_portfolio(
                     )
                 )
 
+            rules = dict(redemption_rules or {})
+            for position in positions:
+                if holdings[position.symbol].locked_bond_target:
+                    rules[position.symbol] = RedemptionRule(None)
             account_info = AccountInfo(
                 number=acct_number,
                 account_type=acct_type,
@@ -338,7 +399,7 @@ def build_portfolio(
                 owner=display_owner,
                 positions=positions,
                 redemption_limits=account_redemption_limits(
-                    client, positions, redemption_rules or {}, cache=updated_lots
+                    client, positions, rules, cache=updated_lots
                 ),
                 cash_cad=cash_cad,
                 cash_usd=cash_usd,
@@ -548,7 +609,7 @@ def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
 
 
 def _allocation_values(portfolio: PortfolioSummary, values: dict | None = None) -> dict:
-    """Assign bank-bound transit to its destination without changing reported balances."""
+    """Group certificates by original term and bank-bound transit by destination."""
     values = (
         dict(values)
         if values is not None
@@ -556,6 +617,10 @@ def _allocation_values(portfolio: PortfolioSummary, values: dict | None = None) 
             symbol: holding.value_cad for symbol, holding in portfolio.holdings.items()
         }
     )
+    for symbol, holding in portfolio.holdings.items():
+        group = holding.locked_bond_target
+        if group and group != symbol:
+            values[group] = values.get(group, 0.0) + values.pop(symbol)
     for progress in portfolio.transfer_progress:
         if progress.action == "DEPOSIT":
             # Count money already heading to savings toward that target, preventing
@@ -637,6 +702,7 @@ def build_allocation_snapshot_from_values(
         allocations=allocations,
         drifts=get_drifts(allocations, targets),
         accuracy=calculate_accuracy(allocations, targets),
+        total_value_cad=total_value_cad,
     )
 
 

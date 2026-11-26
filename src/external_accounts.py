@@ -15,7 +15,7 @@ from src.encrypted_state import read_encrypted_json, write_encrypted_json
 from src.external_providers import PROVIDERS, provider_for
 from src.models import ExternalExportNotFound
 from src.paths import get_data_dir
-from src.portfolio import ExternalBalance, HoldingSummary
+from src.portfolio import ExternalBalance, HoldingSummary, is_gic_group
 
 
 @dataclass(frozen=True)
@@ -89,6 +89,12 @@ def parse_external_accounts(settings: dict) -> dict[str, ExternalAccountConfig]:
     for mapping in (static, fixed):
         for symbol, weight in mapping.items():
             if not isinstance(symbol, str) or ":" not in symbol:
+                continue
+            if is_gic_group(symbol):
+                if mapping is static or symbol in settings.get("transient_symbols", []):
+                    raise ValueError(
+                        "GIC term groups belong only in fixed_composition."
+                    )
                 continue
             provider_for(symbol)
             try:

@@ -34,6 +34,7 @@ from src.external_accounts import (
     parse_external_accounts,
     resolve_external_transfer_accounts,
 )
+from src.fixed_income import fixed_income_budget
 from src.fx_conversions import calculate_currency_needs
 from src.fx_rate import MarketRateUnavailable, fetch_dlr_quotes, get_usd_to_cad_rate
 from src.fx_targets import resolve_targets
@@ -44,6 +45,7 @@ from src.portfolio import (
     build_allocation_snapshot,
     build_portfolio,
     fetch_quotes_for_holdings,
+    simulate_rebalance,
 )
 from src.questrade_client import QuestradeClient, RETRYABLE_HTTP_STATUSES
 from src.rebalancer import calculate_trades, redemption_suggestions
@@ -496,6 +498,17 @@ def run_rebalancer():
     transient_alerts = transient_status["alerts"]
 
     console.print("  [dim]Calculating trades...[/dim]")
+    fixed_budget = fixed_income_budget(
+        portfolio,
+        resolved_targets,
+        tactical_config.fixed_composition if tactical_config else {},
+        usd_to_cad_rate,
+    )
+    if fixed_budget and fixed_budget.locked_excess_cad >= 0.01:
+        console.print(
+            "  [yellow]Locked fixed income exceeds the tactical budget by "
+            f"CAD ${fixed_budget.locked_excess_cad:,.2f}.[/yellow]"
+        )
     blocked_sales = set()
     trades = calculate_trades(
         portfolio,
@@ -507,13 +520,30 @@ def run_rebalancer():
         dlr_quotes=dlr_quotes,
         external_transfer_accounts=transfer_accounts,
         blocked_sales=blocked_sales,
+        fixed_budget=fixed_budget,
     )
+    fx_targets = resolved_targets
+    if fixed_budget:
+        # A residual FX sweep needs a holding that can still accept a purchase.
+        projected = simulate_rebalance(
+            portfolio,
+            trades,
+            resolved_targets,
+            usd_to_cad_rate,
+            dlr_quotes=dlr_quotes,
+            fee_cad=norberts_gambit_fee_cad,
+        )
+        limits = fixed_budget.buy_limits(projected, portfolio.holdings, usd_to_cad_rate)
+        fx_targets = resolved_targets | fixed_budget.targets
+        for symbol, holding in portfolio.holdings.items():
+            if holding.locked_bond_target or limits.get(symbol) == 0:
+                fx_targets[symbol] = 0
     currency_conversions = calculate_currency_needs(
         trades,
         portfolio.accounts,
         usd_to_cad_rate,
         dlr_quotes,
-        resolved_targets,
+        fx_targets,
         norberts_gambit_fee_cad,
     )
     report = build_report_data(

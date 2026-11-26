@@ -65,6 +65,7 @@ def build_deploy_cash_underweight(
     buy_currency: str,
     underweight_threshold_pct: float,
     dlr_quotes=None,
+    buy_limits=None,
 ) -> TradeRecommendation | None:
     """Build one buy trade funded by available cash.
 
@@ -96,6 +97,8 @@ def build_deploy_cash_underweight(
 
     for symbol, drift_pct, ask_price_native in candidates:
         affordable_shares = math.floor(buying_power / ask_price_native)
+        if buy_limits and symbol in buy_limits:
+            affordable_shares = min(affordable_shares, buy_limits[symbol])
         if affordable_shares <= 0:
             continue
 

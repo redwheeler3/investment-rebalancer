@@ -20,6 +20,19 @@ The planner is built around these rules (defined in the project README). They're
 10. **Treat unknown symbols as implicit 0% targets** — Holdings not in the target map are eligible to be sold.
 11. **Respect transient/excluded symbols** — Symbols like `DLR.TO` / `DLR.U.TO` can be temporarily excluded while a Norbert's Gambit is in flight.
 
+### Locked certificates
+
+Portfolio Holdings retains the Questrade symbol and reported market value.
+Allocation combines recognized CAD compound certificates across accounts by
+the original term in their symbol details, such as `GIC:5Y`. A non-tradable
+bond with ambiguous details stays under its broker symbol for review.
+
+Certificates cannot fund trades. The planner reserves their value inside the
+tactical fixed-income budget and distributes the remainder using the other
+fixed holdings' configured weights. Restricted principal, available account
+cash, and whole-unit sizes limit those purchases. Reports and scheduled
+accuracy checks continue to compare actual holdings with the ideal targets.
+
 ---
 
 ## Design Philosophy
