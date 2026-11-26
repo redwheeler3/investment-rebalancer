@@ -972,7 +972,7 @@ def display_external_transfers(portfolio, actions: list) -> None:
         if (
             item.source_offset_cad > 0
             or item.awaiting_broker_debit_cad
-            or item.awaiting_broker_receipt_activity
+            or item.unposted_broker_cad
         )
     ]
     # A settled cycle can retain unused allowance internally without a report row.
@@ -987,6 +987,7 @@ def display_external_transfers(portfolio, actions: list) -> None:
     table.add_column("Direction")
     table.add_column("Amount CAD", justify="right")
     table.add_column("Status")
+    unposted = {item.symbol: item.unposted_broker_cad for item in awaiting}
     for transfer in transfers:
         account_label = _format_account_label(
             transfer.owner, transfer.account_type, transfer.account_number
@@ -999,11 +1000,16 @@ def display_external_transfers(portfolio, actions: list) -> None:
             if transfer.action == "DEPOSIT"
             else (external_label, account_label)
         )
-        table.add_row(
-            f"{source} -> {destination}",
-            _format_money(transfer.amount_cad),
-            "In transit" if transfer.in_progress else "Planned",
-        )
+        amount = transfer.amount_cad
+        if transfer.in_progress and transfer.action == "DEPOSIT":
+            # The cash-inferred portion is shown separately below.
+            amount = max(0, round(amount - unposted.get(transfer.symbol, 0), 2))
+        if amount > 0:
+            table.add_row(
+                f"{source} -> {destination}",
+                _format_money(amount),
+                "In transit" if transfer.in_progress else "Planned",
+            )
     for item in awaiting:
         account_label = _format_account_label(
             item.owner, item.account_type, item.account_number
@@ -1017,16 +1023,21 @@ def display_external_transfers(portfolio, actions: list) -> None:
                 _format_money(item.awaiting_broker_debit_cad),
                 "Awaiting broker debit",
             )
-            continue
-        table.add_row(
-            f"{external} -> {account_label}",
-            _format_money(
-                item.received_cad
-                if item.awaiting_broker_receipt_activity
-                else item.source_offset_cad
-            ),
-            "Received" if item.awaiting_broker_receipt_activity else "Awaiting export",
-        )
+        if item.unposted_broker_cad:
+            outbound = item.action == "DEPOSIT"
+            table.add_row(
+                f"{account_label} -> {external}"
+                if outbound
+                else f"{external} -> {account_label}",
+                _format_money(item.unposted_broker_cad),
+                "Sent (awaiting activity)" if outbound else "Received",
+            )
+        if item.source_offset_cad > item.unposted_broker_cad:
+            table.add_row(
+                f"{external} -> {account_label}",
+                _format_money(item.source_offset_cad - item.unposted_broker_cad),
+                "Awaiting export",
+            )
     console.print(table)
     console.print()
 

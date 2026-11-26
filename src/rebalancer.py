@@ -594,13 +594,12 @@ class RebalancePlanner:
                 None,
             )
             if progress is not None:
-                if (
-                    progress.awaiting_broker_debit_cad
-                    or progress.awaiting_broker_receipt_activity
-                ):
+                if progress.awaiting_broker_debit_cad:
                     continue
                 unsettled = (
-                    progress.in_transit_cad > 0 or progress.source_offset_cad > 0
+                    progress.in_transit_cad > 0
+                    or progress.source_offset_cad > 0
+                    or progress.unposted_broker_cad > 0
                 )
                 if unsettled and action != progress.action:
                     # Finish the observed movement before recommending a reversal.

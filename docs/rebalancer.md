@@ -236,7 +236,9 @@ confirmed by the current external export is authoritative; excess broker receipt
 are treated as outside-bank top-ups. Later unreported external withdrawals need a
 newer export.
 
-A matched cash deposit shows as `Received` until its activity row posts. Other transfer statuses are `Planned`, `In transit`, `Awaiting broker debit`, and `Awaiting export`. Settled movements are
+Cash-inferred deposits show as `Received` and outgoing withdrawals as
+`Sent (awaiting activity)` until the corresponding broker activity posts.
+Other transfer statuses are `Planned`, `In transit`, `Awaiting broker debit`, and `Awaiting export`. Settled movements are
 omitted immediately, so the transfer table disappears when nothing needs to be
 recommended or reconciled. Retaining an unused partial-cycle allowance internally
 does not create a display row.

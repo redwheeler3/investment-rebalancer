@@ -95,14 +95,16 @@ class TransferProgress:
     owner: str
     recommended_cad: float
     source_cad: float  # Observed source withdrawals, capped at the recommendation
-    received_cad: float  # Actual destination receipts, including outside top-ups
+    received_cad: float  # Recognized receipts, including posted outside top-ups
     in_transit_cad: float  # Positive asset: recognized source money not yet received
     source_offset_cad: float = 0.0  # Positive amount to deduct from a stale source
 
     awaiting_broker_debit_cad: float = (
         0.0  # Receipt principal still awaiting source evidence.
     )
-    awaiting_broker_receipt_activity: bool = False
+    unposted_broker_cad: float = (
+        0.0  # Portion supported by cash, awaiting an activity row.
+    )
 
     @property
     def transit_symbol(self) -> str:

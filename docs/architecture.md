@@ -97,7 +97,7 @@ and every app-managed file under `data/` are SOPS/age ciphertext at rest.
 
 Local runs select each configured provider's adapter and refresh its normalized
 exports into encrypted caches. Scheduled runs consume cached external balances.
-Both read posted Questrade activity and reconcile transit before history, tactical
+Both read posted Questrade activity and linked-account executions and reconcile transit before history, tactical
 evaluation, or allocation math. Shared import persistence updates statement
 evidence and balances together. Source failures do not become zero balances.
 
@@ -118,8 +118,11 @@ institution-name branches. Raw ID abbreviation uses the configured external keys
 
 `transfer_tracking.py` consumes normalized balances/rows, not provider formats.
 Its existing encrypted record shape, integer-cent counters, original caps, and
-multiset observation cursors remain common across adapters. Questrade activity
-queries cover polling gaps and active cycles within API-sized windows.
+multiset observation cursors are common across adapters. A cycle's dated cash
+baseline lets the next run compare like-for-like cash across broker days.
+`broker_cash.py` groups CAD fills and posted trades by trade day, security and
+side. Posted net amounts take over once the activity covers the executed
+quantity. Questrade queries cover polling gaps and active cycles in bounded windows.
 
 `PortfolioSummary.transfer_progress` carries valuation adjustments. Summaries show
 raw reported balances with separate transit/offset rows; allocation math groups

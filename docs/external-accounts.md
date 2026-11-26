@@ -77,7 +77,11 @@ or pause flag is required.
 
 An outstanding recommendation and linked Questrade account supply intent for new
 cash movements through the intermediate bank. This is an inference, not an
-end-to-end transfer ID. The ledger matches new statement movements and posted broker activity. For an inbound deposit, an exact broker cash match can establish receipt before the activity row arrives.
+end-to-end transfer ID. On the linked account, the ledger explains CAD cash
+changes using posted transactions and executions. A remaining change in the
+recommended direction counts provisionally, up to the outstanding amount.
+An unrelated payment in that same direction can therefore be attributed to the
+recommendation. Opposite-direction cash movements do not advance it.
 
 Recognized principal is capped across the whole recommendation:
 
@@ -109,14 +113,29 @@ python scripts/import_external_balance.py --account "SAVEN:<account-number>" --c
 
 Repeat with `--save` to close the verified cycle, then run the rebalancer to synchronize and calculate fresh instructions. The amount must exactly match the displayed gap. The receipt already counts in the bank balance, so confirmation changes neither cash nor household value.
 
-Posted CAD withdrawals establish transit up to the cap. This is an external
+An unexplained CAD cash debit can establish transit before the EFT posts. The
+transfer table shows that portion as `Sent (awaiting activity)`. A posted debit
+confirms the same principal. Partial withdrawals leave the unused allowance
+available, and excess withdrawals leave the tracked household. Transit is an external
 household asset, not broker buying power. A new statement confirming receipts
 replaces matched transit with the reported balance. A larger receipt can include
 a bank top-up; exact amount equality is not required.
 
 ### External account to Questrade
 
-Questrade can update its reported cash balance before the deposit appears in activity. When the increase after accounting for today's posted cash transactions exactly matches the outstanding transfer, the ledger clears transit and keeps that balance evidence until the activity arrives. An unexplained increase of another amount pauses the report rather than valuing the same money twice. The portfolio always uses the broker's actual cash balance.
+An unposted CAD receipt clears the corresponding portion of transit. For
+example, if the statement shows $10,000 withdrawn and the broker receives
+$4,000, $6,000 stays in transit. A $12,000 receipt clears all $10,000 and adds
+$2,000 of outside money. When the broker receives first, the recommendation
+caps the provisional adjustment until the source statement arrives. The report
+continues in all three cases.
+
+If the cash was spent on shares before the run, the account's CAD executions
+explain that spending, including reported fees. Posted trades and fills are
+matched by broker trade day, security and side, so a later trade posting does
+not charge the purchase twice. The broker cash shown in the report is the
+actual balance. Unobserved movements that offset one another between checks
+can only be inferred from their net change until additional evidence posts.
 
 Process a new statement as soon as it shows the withdrawal, even before Questrade
 receives the money. The lower external balance plus transit preserves tracked

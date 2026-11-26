@@ -229,6 +229,16 @@ class QuestradeClient:
             raise ValueError("Invalid account activities response")
         return rows
 
+    def get_executions(self, account_id: str, start_time: str, end_time: str) -> list:
+        """Read fills including their executed amounts, fees and timestamps."""
+        rows = self._get(
+            f"v1/accounts/{account_id}/executions",
+            params={"startTime": start_time, "endTime": end_time},
+        )["executions"]
+        if not isinstance(rows, list):
+            raise ValueError("Invalid account executions response")
+        return rows
+
     def get_symbols(self, symbol_ids: list) -> list:
         """
         Get symbol metadata for a list of Questrade symbol IDs.

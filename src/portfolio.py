@@ -132,6 +132,7 @@ class AccountInfo:
     cash_usd: float = 0.0
     redemption_limits: dict[str, RedemptionLimit] = field(default_factory=dict)
     start_of_day_cash_cad: float | None = None
+    cash_observed_at: datetime | None = None
 
 
 @dataclass
@@ -270,6 +271,7 @@ def build_portfolio(
 
             # Get balances
             balances_data = client.get_balances(acct_number)
+            cash_observed_at = datetime.now(UTC)
             balances = balances_data["perCurrencyBalances"]
             if not isinstance(balances, list) or not balances:
                 raise ValueError("Missing per-currency balances.")
@@ -416,6 +418,7 @@ def build_portfolio(
                 cash_cad=cash_cad,
                 cash_usd=cash_usd,
                 start_of_day_cash_cad=opening_cad,
+                cash_observed_at=cash_observed_at,
             )
             all_accounts.append(account_info)
 

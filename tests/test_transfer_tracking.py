@@ -1,6 +1,7 @@
 """Whole-run transfer scenarios: source limits, arrival order and replay safety."""
 
 from copy import deepcopy
+from decimal import Decimal
 from datetime import UTC, datetime
 from io import StringIO
 from unittest.mock import patch
@@ -10,6 +11,7 @@ from rich.console import Console
 
 import main
 from src import display
+from src.broker_cash import cash_by_day
 from src.external_accounts import (
     ExternalAccountConfig,
     attach_external_balances,
@@ -943,7 +945,7 @@ def test_broker_cash_receipt_clears_transit_before_activity_without_replaying(
     ledger.observe_external_balance(SAVEN, bank, parsed)
     cash = replace(ACCOUNT, cash_cad=58326.883, start_of_day_cash_cad=144.563)
     routes = {SAVEN: cash}
-    ledger.observe_broker_cash(SAVEN, cash, 0)
+    ledger.observe_broker_cash(SAVEN, cash, {}, NOW.date())
 
     # The balance evidence survives a report and the next day's opening balance.
     ledger.remember_recommendations([], routes)
@@ -965,20 +967,288 @@ def test_broker_cash_receipt_clears_transit_before_activity_without_replaying(
         display.display_external_transfers(p, [])
         if len(rows) < 2:
             assert "Saven Transfers" in output.getvalue()
-            assert "$58,182.32" in output.getvalue() and "Received" in output.getvalue()
+            expected = 58182.32 - sum(row["netAmount"] for row in rows)
+            assert (
+                f"${expected:,.2f}" in output.getvalue()
+                and "Received" in output.getvalue()
+            )
         else:
             assert not output.getvalue()
-    assert not progress.awaiting_broker_receipt_activity
+    assert not progress.unposted_broker_cad
 
 
-def test_unexplained_cash_increase_cannot_be_counted_alongside_transit(tmp_path):
+def test_partial_cash_receipt_after_other_posted_activity_reduces_transit(tmp_path):
     from dataclasses import replace
 
     ledger, _ = baseline(tmp_path, "WITHDRAW")
     bank, parsed = bank_withdrawal(tmp_path, 58182.32)
     ledger.observe_external_balance(SAVEN, bank, parsed)
     cash = replace(ACCOUNT, cash_cad=58182.32, start_of_day_cash_cad=0)
-    ledger.observe_broker_cash(SAVEN, cash, 58182.32)
+    ledger.observe_broker_cash(
+        SAVEN, cash, {NOW.date(): Decimal("58182.32")}, NOW.date()
+    )
     assert ledger.progress(SAVEN, cash).in_transit_cad == 58182.32
-    with pytest.raises(ValueError, match="without matching activity"):
-        ledger.observe_broker_cash(SAVEN, cash, 20000)
+    ledger.observe_broker_cash(SAVEN, cash, {NOW.date(): 20000}, NOW.date())
+    assert ledger.progress(SAVEN, cash).in_transit_cad == 20000
+    assert ledger.progress(SAVEN, cash).unposted_broker_cad == 38182.32
+
+
+def test_ordinary_broker_withdrawal_during_inbound_intent_stays_outside(tmp_path):
+    from dataclasses import replace
+
+    ledger, bank = baseline(tmp_path, "WITHDRAW")
+    account = replace(ACCOUNT, start_of_day_cash_cad=125.437, cash_cad=75.437)
+    for rows in ([], [activity(-50)], [activity(-50)]):
+        ledger.observe_broker(SAVEN, account.number, rows)
+        ledger.observe_broker_cash(
+            SAVEN, account, {NOW.date(): -50 if rows else 0}, NOW.date()
+        )
+        current = portfolio(bank, broker_value=499950, cash=account.cash_cad)
+        ledger.apply(current, {SAVEN: account})
+        assert current.total_value_cad == 999950
+        assert current.transfer_progress[0].in_transit_cad == 0
+        assert current.transfer_progress[0].received_cad == 0
+
+
+def test_cad_sale_proceeds_use_fees_then_posted_net_without_counting_twice():
+    stamp = NOW.isoformat()
+    fill = dict(
+        side="Sell",
+        symbol="EQ",
+        symbolId=11,
+        timestamp=stamp,
+        totalCost=500,
+        quantity=10,
+        commission=1,
+        canadianExecutionFee=0.03,
+    )
+    trade = dict(
+        activity(498.90, day=1),
+        type="Trades",
+        symbol="EQ",
+        symbolId=11,
+        action="Sell",
+        quantity=-10,
+        tradeDate=stamp,
+    )
+    for rows, expected in (
+        ([], "498.97"),
+        ([trade], "498.90"),
+        ([dict(trade, symbol="")], "498.90"),
+    ):
+        assert cash_by_day(rows, [fill], {11: "CAD"})[NOW.date()] == Decimal(expected)
+
+
+def test_provisional_debit_funds_only_transit_and_displays_unposted_part(
+    tmp_path, monkeypatch
+):
+    from dataclasses import replace
+
+    ledger, bank = baseline(tmp_path)
+    account = replace(ACCOUNT, cash_cad=0, start_of_day_cash_cad=10000)
+    ledger.observe_broker(SAVEN, account.number, [activity(-4000)])
+    ledger.observe_broker_cash(SAVEN, account, {NOW.date(): -4000}, NOW.date())
+    p = portfolio(bank, broker_value=490000, cash=0)
+    ledger.apply(p, {SAVEN: account})
+    assert p.total_value_cad == 1000000
+    transfers = calculate_trades(
+        p, {"EQ": 49, SAVEN: 51}, 1.35, 0, 0.1, set(), None, ROUTES
+    )
+    assert (
+        len(transfers) == 1
+        and transfers[0].in_progress
+        and transfers[0].amount_cad == 10000
+    )
+    assert simulate_rebalance(p, transfers, {}, 1.35).allocations["CAD"] == 0
+    output = StringIO()
+    monkeypatch.setattr(display, "console", Console(file=output, width=160))
+    display.display_external_transfers(p, transfers)
+    assert any(
+        "$4,000.00" in line and "In transit" in line
+        for line in output.getvalue().splitlines()
+    )
+    assert any(
+        "$6,000.00" in line and "Sent (awaiting activity)" in line
+        for line in output.getvalue().splitlines()
+    )
+
+
+@pytest.mark.parametrize("action,sign", [("DEPOSIT", -1), ("WITHDRAW", 1)])
+def test_partial_cash_evidence_survives_midnight_and_split_postings(
+    tmp_path, action, sign
+):
+    from dataclasses import replace
+
+    ledger, bank = baseline(tmp_path, action)
+    if action == "WITHDRAW":
+        bank, parsed = bank_withdrawal(tmp_path, 10000)
+        ledger.observe_external_balance(SAVEN, bank, parsed)
+    day = NOW.date()
+    next_day = NOW.replace(day=2).date()
+    account = replace(
+        ACCOUNT, start_of_day_cash_cad=20000, cash_cad=20000 + sign * 4000
+    )
+    ledger.observe_broker_cash(SAVEN, account, {}, day)
+    assert ledger.progress(SAVEN, account).unposted_broker_cad == 4000
+    assert ledger.progress(SAVEN, account).in_transit_cad == (
+        4000 if sign == -1 else 6000
+    )
+    ledger.remember_recommendations([], {SAVEN: account})
+    ledger = TransferLedger(ledger.data)
+    account = replace(
+        account, start_of_day_cash_cad=account.cash_cad, cash_cad=20000 + sign * 10000
+    )
+    posted = [activity(sign * 2000)]
+    for _ in range(2):
+        ledger.observe_broker(SAVEN, account.number, posted)
+        ledger.observe_broker_cash(SAVEN, account, {next_day: sign * 2000}, next_day)
+        progress = ledger.progress(SAVEN, account)
+        assert progress.unposted_broker_cad == 8000
+        assert progress.in_transit_cad == (10000 if sign == -1 else 0)
+    if sign == -1:
+        bank, parsed = bank_deposit(tmp_path, 10000)
+        ledger.observe_external_balance(SAVEN, bank, parsed)
+        assert ledger.progress(SAVEN, account).in_transit_cad == 0
+        with pytest.raises(ValueError, match="until its transfer settles"):
+            ledger.retain_routes({})
+    posted.append(activity(sign * 8000))
+    ledger.observe_broker(SAVEN, account.number, posted)
+    ledger.observe_broker_cash(SAVEN, account, {next_day: sign * 10000}, next_day)
+    progress = ledger.progress(SAVEN, account)
+    assert progress.received_cad == progress.source_cad == 10000
+    assert progress.in_transit_cad == progress.unposted_broker_cad == 0
+
+
+@pytest.mark.parametrize(
+    "action,change,source,expected",
+    [
+        ("DEPOSIT", -200000, 0, 180000),
+        ("WITHDRAW", 12000, 10000, 10000),
+        ("WITHDRAW", 7000, 6000, 6000),
+        ("WITHDRAW", 12000, 0, 12000),
+        ("WITHDRAW", 200000, 0, 180000),
+        ("DEPOSIT", 500, 0, 0),
+    ],
+)
+def test_cash_inference_caps_principal_and_keeps_outside_money(
+    tmp_path, action, change, source, expected
+):
+    from dataclasses import replace
+
+    ledger, bank = baseline(tmp_path, action)
+    if source:
+        bank, parsed = bank_withdrawal(tmp_path, source)
+        ledger.observe_external_balance(SAVEN, bank, parsed)
+    account = replace(ACCOUNT, start_of_day_cash_cad=250000, cash_cad=250000 + change)
+    ledger.observe_broker_cash(SAVEN, account, {}, NOW.date())
+    p = portfolio(bank, 500000 + change, account.cash_cad)
+    ledger.apply(p, {SAVEN: account})
+    progress = p.transfer_progress[0]
+    assert progress.unposted_broker_cad == expected
+    assert progress.source_offset_cad == (
+        expected if action == "WITHDRAW" and source == 0 else 0
+    )
+    assert (
+        p.total_value_cad
+        == 1000000
+        + change
+        - source
+        + progress.in_transit_cad
+        - progress.source_offset_cad
+    )
+    assert p.cash_cad_total == account.cash_cad
+
+
+def test_new_cycle_excludes_existing_same_day_cash_movement(tmp_path):
+    from dataclasses import replace
+
+    ledger, _ = baseline(tmp_path)
+    ledger.remember_recommendations([], ROUTES)
+    account = replace(ACCOUNT, start_of_day_cash_cad=500, cash_cad=450)
+    day = NOW.date()
+    ledger.observe_broker_cash(SAVEN, account, {}, day)
+    ledger.remember_recommendations([recommendation()], {SAVEN: account}, NOW)
+    ledger.observe_broker_cash(SAVEN, account, {}, day)
+    assert ledger.progress(SAVEN, account).in_transit_cad == 0
+    account.cash_cad -= 100
+    ledger.observe_broker_cash(SAVEN, account, {}, day)
+    assert ledger.progress(SAVEN, account).in_transit_cad == 100
+
+
+@pytest.mark.parametrize("posted_qty", [0, 4, 10])
+def test_invested_receipt_recognized_through_normal_reconciliation(
+    tmp_path, encrypted_store, posted_qty
+):
+    from dataclasses import replace
+
+    ledger, _ = baseline(tmp_path, "WITHDRAW")
+    bank, parsed = bank_withdrawal(tmp_path, 1001)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
+    ledger.path = encrypted_store[0] / "transfer_tracking.json"
+    ledger.save()
+    stamp = "2026-11-02T10:00:00-05:00"
+    trade = dict(
+        activity(1),
+        type="Trades",
+        action="Buy",
+        symbol="EQ",
+        symbolId=99,
+        quantity=posted_qty,
+        netAmount=-posted_qty * 100 - (1 if posted_qty == 10 else 0),
+    )
+    fill = {
+        "side": "Buy",
+        "symbol": "EQ",
+        "symbolId": 99,
+        "timestamp": stamp,
+        "totalCost": 400,
+        "quantity": 4,
+        "commission": 0.4,
+        "id": 1,
+    }
+
+    class Client:
+        def get_accounts(self):
+            return [{"number": "broker"}]
+
+        def get_activities(self, *args):
+            # Yesterday's buy settled today and was already in the opening balance.
+            return [
+                dict(
+                    trade,
+                    tradeDate="2026-11-01T00:00:00-04:00",
+                    quantity=5,
+                    netAmount=-500,
+                )
+            ] + ([trade] if posted_qty else [])
+
+        def get_executions(self, *args):
+            return [
+                fill,
+                fill,
+                dict(fill, quantity=6, totalCost=600, commission=0.6, id=2),
+                dict(fill, symbol="USD_ETF", symbolId=77, side="Sell", id=3),
+            ]
+
+        def get_symbols(self, ids):
+            return [
+                {"symbolId": i, "currency": "USD" if i == 77 else "CAD"} for i in ids
+            ]
+
+    for _ in range(2):
+        p = portfolio(bank, broker_value=501001, cash=42.10)
+        account = replace(
+            p.accounts[0],
+            start_of_day_cash_cad=42.10,
+            cash_observed_at=NOW.replace(day=2, hour=18),
+        )
+        ledger = reconcile_transfer_activity(
+            p, {SAVEN: bank}, [Client()], {SAVEN: account}
+        )
+        assert p.total_value_cad == 1000000
+        assert (
+            p.transfer_progress[0].received_cad
+            == p.transfer_progress[0].unposted_broker_cad
+            == 1001
+        )
+        assert p.transfer_progress[0].in_transit_cad == 0
