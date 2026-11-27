@@ -32,18 +32,25 @@ def is_gic_group(symbol: str) -> bool:
     return re.fullmatch(r"GIC:[1-9][0-9]*Y", symbol) is not None
 
 
-def _locked_bond_target(symbol, details, currency, quantity, price, market_value):
+def _quote_divisor(quantity, price, market_value):
+    """Verify the broker's quote basis against the position's native market value."""
+    if market_value > 0:
+        for divisor in (1, 100):
+            if math.isclose(quantity * price / divisor, market_value, rel_tol=0.0001):
+                return divisor
+    return None
+
+
+def _locked_bond_target(symbol, details, currency, quote_divisor):
     """Only the verified compound-certificate format identifies an original term."""
     description = str(details.get("description", "")).strip()
     if details.get("securityType") != "Bond" or details.get("isTradable") is True:
-        if details.get("securityType") == "Bond" and re.search(
-            r"\bGIC\b", description, re.I
+        if details.get("securityType") == "Bond" and (
+            quote_divisor is None or re.search(r"\bGIC\b", description, re.I)
         ):
             return symbol
         # Missing metadata must not turn a percent-of-par quote into share proceeds.
-        if market_value > 0 and math.isclose(
-            quantity * price / 100, market_value, rel_tol=0.0001
-        ):
+        if quote_divisor == 100:
             return symbol
         return None
     if (
@@ -159,6 +166,9 @@ class HoldingSummary:
     prev_close_price: float = 0.0
     accounts: list["HoldingAccountDetail"] = field(default_factory=list)
     locked_bond_target: str | None = None
+    quote_divisor: int | None = (
+        1  # Raw quote units per holding unit; None if unverified.
+    )
 
 
 @dataclass
@@ -314,9 +324,8 @@ def build_portfolio(
 
                 details = symbol_details.get(symbol_id, {})
                 currency = _resolve_position_currency(pos, symbol_id, symbol, details)
-                locked_target = _locked_bond_target(
-                    symbol, details, currency, quantity, current_price, market_value
-                )
+                divisor = _quote_divisor(quantity, current_price, market_value)
+                locked_target = _locked_bond_target(symbol, details, currency, divisor)
                 rule = (redemption_rules or {}).get(symbol)
                 if (
                     locked_target == symbol
@@ -349,10 +358,18 @@ def build_portfolio(
                 ):
                     raise ValueError(f"Conflicting broker security IDs for {symbol}.")
 
-                if locked_target and is_gic_group(locked_target):
-                    # Certificate quantity is face dollars. Broker prices are per $100 par.
-                    current_price /= 100
-                    avg_cost /= 100
+                if not locked_target:
+                    divisor = 1
+                if divisor is None:
+                    current_price = market_value / quantity if quantity else 0.0
+                    avg_cost = (
+                        _coerce_numeric(pos.get("totalCost")) / quantity
+                        if quantity
+                        else 0.0
+                    )
+                else:
+                    current_price /= divisor
+                    avg_cost /= divisor
                 position = Position(
                     symbol=symbol,
                     symbol_id=symbol_id,
@@ -380,6 +397,7 @@ def build_portfolio(
                         )
                     holdings[symbol] = HoldingSummary(
                         locked_bond_target=locked_target,
+                        quote_divisor=divisor,
                         current_price=current_price,
                         currency=currency,
                         bid_price=current_price,
@@ -387,11 +405,20 @@ def build_portfolio(
                     )
 
                 holding = holdings[symbol]
+                if holding.quote_divisor != divisor:
+                    holding.quote_divisor = None
                 holding.value_cad += value_cad
                 holding.total_quantity += quantity
                 holding.current_price = current_price
-                holding.bid_price = current_price  # Will be updated with quote data
-                holding.ask_price = current_price  # Will be updated with quote data
+                if holding.quote_divisor is None and holding.total_quantity:
+                    native_value = (
+                        holding.value_cad / usd_to_cad_rate
+                        if currency == "USD"
+                        else holding.value_cad
+                    )
+                    holding.current_price = native_value / holding.total_quantity
+                holding.bid_price = holding.current_price
+                holding.ask_price = holding.current_price
                 holding.accounts.append(
                     HoldingAccountDetail(
                         account_number=acct_number,
@@ -576,7 +603,11 @@ def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
     symbol_id_map = {}  # symbol_id -> symbol
     for acct in portfolio.accounts:
         for pos in acct.positions:
-            if pos.symbol_id > 0 and pos.symbol in portfolio.holdings:
+            if (
+                pos.symbol_id > 0
+                and pos.symbol in portfolio.holdings
+                and portfolio.holdings[pos.symbol].quote_divisor is not None
+            ):
                 symbol_id_map[pos.symbol_id] = pos.symbol
 
     if not symbol_id_map:
@@ -592,7 +623,9 @@ def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
         symbol = quote.get("symbol", "")
         if symbol in portfolio.holdings:
             holding = portfolio.holdings[symbol]
-            divisor = 100 if is_gic_group(holding.locked_bond_target or "") else 1
+            divisor = holding.quote_divisor
+            if divisor is None:
+                continue
             holding.bid_price = float(quote.get("bidPrice") or 0) / divisor
             holding.ask_price = float(quote.get("askPrice") or 0) / divisor
             holding.current_price = (
@@ -611,8 +644,7 @@ def fetch_quotes_for_holdings(portfolio: PortfolioSummary, clients: list):
                     symbol_id,
                     exclude_date=quote_trade_dates.get(symbol),
                 )
-                if is_gic_group(holding.locked_bond_target or ""):
-                    prev_close /= 100
+                prev_close /= holding.quote_divisor
             except requests.HTTPError as error:
                 status = getattr(error.response, "status_code", None)
                 if status == 404:
@@ -666,7 +698,9 @@ def get_current_allocations(
     )
 
 
-def calculate_accuracy(current_allocations: dict, targets: dict) -> float:
+def calculate_accuracy(
+    current_allocations: dict, targets: dict, *, unallocated_pct: float = 0.0
+) -> float:
     """
     Calculate portfolio accuracy score.
 
@@ -679,12 +713,13 @@ def calculate_accuracy(current_allocations: dict, targets: dict) -> float:
     Args:
         current_allocations: Current allocation percentages by symbol.
         targets: Target allocation percentages by symbol.
+        unallocated_pct: Household weight held in excluded securities.
 
     Returns:
         Accuracy score as a percentage (0-100).
     """
     all_symbols = current_allocations.keys() | targets.keys()
-    total_abs_drift = sum(
+    total_abs_drift = unallocated_pct + sum(
         abs(current_allocations.get(s, 0.0) - targets.get(s, 0.0)) for s in all_symbols
     )
 
@@ -717,10 +752,18 @@ def build_allocation_snapshot_from_values(
         usd_to_cad_rate=usd_to_cad_rate,
         excluded_symbols=excluded_symbols,
     )
+    # Holdings listed in transient_symbols still contribute unallocated value
+    # to accuracy while the planner excludes them from trades.
+    excluded_value = sum(
+        holdings_value_cad.get(s, 0.0) for s in (excluded_symbols or ())
+    )
+    unallocated_pct = 100 * excluded_value / total_value_cad if total_value_cad else 0.0
     return AllocationSnapshot(
         allocations=allocations,
         drifts=get_drifts(allocations, targets),
-        accuracy=calculate_accuracy(allocations, targets),
+        accuracy=calculate_accuracy(
+            allocations, targets, unallocated_pct=unallocated_pct
+        ),
         total_value_cad=total_value_cad,
     )
 

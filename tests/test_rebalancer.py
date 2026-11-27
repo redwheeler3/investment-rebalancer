@@ -1366,7 +1366,7 @@ class TestPlannerTransientSymbols:
                             "currency": "CAD",
                         },
                         {
-                            "symbol": "DLR.TO",
+                            "symbol": "TEMP_A",
                             "qty": 500,
                             "price": 13.79,
                             "currency": "CAD",
@@ -1383,13 +1383,11 @@ class TestPlannerTransientSymbols:
             1.36,
             10.49,
             0.5,
-            transient_symbols={"DLR.TO"},
+            transient_symbols={"TEMP_A"},
             dlr_quotes=None,
         )
 
-        # DLR.TO should not appear in any trades
-        dlr_trades = [t for t in trades if t.symbol == "DLR.TO"]
-        assert len(dlr_trades) == 0
+        assert all(t.symbol != "TEMP_A" for t in trades)
 
 
 class TestPlannerUnknownSymbols:

@@ -18,7 +18,7 @@ The planner is built around these rules (defined in the project README). They're
 8. **Avoid obviously wasteful churn** — Don't create trade patterns that undo each other without improving drift or reducing idle cash.
 9. **Use whole-share, real-side pricing** — Sells use bid pricing. Buys use ask pricing. Whole shares only.
 10. **Treat unknown symbols as implicit 0% targets** — Sales of untargeted holdings still require trade eligibility and a productive use for the proceeds.
-11. **Respect transient/excluded symbols** — Symbols like `DLR.TO` / `DLR.U.TO` can be temporarily excluded while a Norbert's Gambit is in flight.
+11. **Respect transient/excluded symbols** — The planner skips holdings listed in `transient_symbols` when generating trades.
 
 ### Locked certificates
 
@@ -39,8 +39,10 @@ certificate of a term or replace its last matured certificate. The planner
 checks the household term deficit and applies `gic_min_buy_cad` to each
 funded order. Recommended Trades shows the term, account, and CAD amount.
 The investor selects the issuer and confirms funds have settled before ordering.
-Questrade certificate prices quoted per $100 of principal are normalized to
-face-dollar units for holdings and daily P&L.
+The position's quantity, quote and reported market value establish whether a
+bond price is per unit or per $100 of principal, including for unfamiliar
+certificates. If those figures do not establish a consistent unit, Holdings
+uses market value per unit and shows daily P&L as unavailable.
 
 Cashability does not authorize a planner sale. A manual redemption or maturity
 becomes spendable when the broker posts the proceeds. A recognized certificate
@@ -85,7 +87,7 @@ Before any trades are planned, `__post_init__` sets up the working state:
 
 ```python
 def __post_init__(self) -> None:
-    # Calculate current allocations (excluding transient symbols like DLR.TO)
+    # Calculate current allocations for planning, excluding transient_symbols
     current_alloc = get_current_allocations(
         self.portfolio, self.usd_to_cad_rate, excluded_symbols=self.hidden_symbols
     )

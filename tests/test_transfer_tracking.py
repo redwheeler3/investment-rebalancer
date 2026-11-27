@@ -1326,6 +1326,62 @@ def test_distinct_ordinary_and_completed_cycle_debits_can_post_together(tmp_path
         assert progress.unposted_broker_cad == 0
 
 
+@pytest.mark.parametrize(
+    ("sign", "kind", "action"),
+    [(-1, "Fees and rebates", "WITHDRAW"), (1, "Interest", "DEPOSIT")],
+)
+def test_late_nontransfer_explains_cash_seen_before_recommendation(
+    tmp_path, sign, kind, action
+):
+    from dataclasses import replace
+
+    ledger, bank = baseline(tmp_path)
+    ledger.remember_recommendations([], ROUTES, NOW)
+    account = replace(ACCOUNT, start_of_day_cash_cad=500, cash_cad=500 + sign * 50)
+    day = NOW.date()
+    ledger.observe_broker_cash(SAVEN, account, {}, day)
+    ledger.remember_recommendations(
+        [recommendation(action, 10000)], {SAVEN: account}, NOW
+    )
+    # A partial posting and its replay both leave the real household total intact.
+    for parts in ([20], [20], [20, 30]):
+        ledger = TransferLedger(ledger.data)
+        rows = [activity(sign * n, day=1, kind=kind) for n in parts]
+        ledger.observe_broker(SAVEN, account.number, rows, NOW)
+        daily = cash_by_day(rows, [], {})
+        ledger.observe_broker_cash(SAVEN, account, daily, day)
+        p = portfolio(bank, broker_value=500000 + sign * 50, cash=account.cash_cad)
+        ledger.apply(p, {SAVEN: account})
+        assert p.total_value_cad == 1000000 + sign * 50
+        assert p.transfer_progress[0].unposted_broker_cad == 0
+    account.cash_cad -= sign * 100
+    ledger.observe_broker_cash(SAVEN, account, daily, day)
+    assert ledger.progress(SAVEN, account).unposted_broker_cad == 100
+
+
+def test_postintent_fee_with_a_real_cash_debit_leaves_prior_eft_evidence_intact(
+    tmp_path,
+):
+    from dataclasses import replace
+
+    ledger, _ = baseline(tmp_path)
+    ledger.remember_recommendations([], ROUTES, NOW)
+    day = NOW.date()
+    account = replace(ACCOUNT, start_of_day_cash_cad=500, cash_cad=450)
+    ledger.observe_broker_cash(SAVEN, account, {}, day)
+    ledger.remember_recommendations([recommendation("WITHDRAW")], {SAVEN: account}, NOW)
+    account.cash_cad -= 10
+    fee = activity(-10, day=1, kind="Fees and rebates")
+    for rows in ([fee], [fee, activity(-50, day=1)]):
+        ledger.observe_broker(SAVEN, account.number, rows, NOW)
+        daily = cash_by_day(rows, [], {})
+        ledger.observe_broker_cash(SAVEN, account, daily, day)
+        assert ledger.progress(SAVEN, account).received_cad == 0
+    account.cash_cad += 100
+    ledger.observe_broker_cash(SAVEN, account, daily, day)
+    assert ledger.progress(SAVEN, account).received_cad == 100
+
+
 @pytest.mark.parametrize("posted_qty", [0, 4, 10])
 def test_invested_receipt_recognized_through_normal_reconciliation(
     tmp_path, encrypted_store, posted_qty

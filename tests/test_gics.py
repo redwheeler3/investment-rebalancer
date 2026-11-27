@@ -353,6 +353,39 @@ def test_cashable_certificate_with_unfamiliar_terms_stays_locked():
     assert calculate_trades(portfolio, {"EQ": 100}, 1, 0, 0.1, set(), None) == []
 
 
+@pytest.mark.parametrize(("broker_price", "divisor"), [(100, 100), (1, 1), (75, None)])
+def test_unrecognized_bond_prices_follow_verified_units(broker_price, divisor):
+    from src.portfolio import fetch_quotes_for_holdings
+    from src.display import _compute_portfolio_day_pnl
+
+    client = posted_portfolio()
+    client.get_symbols.return_value[0]["description"] = "EXAMPLE BOND"
+    client.get_positions.return_value[0].update(
+        currentPrice=broker_price, averageEntryPrice=broker_price
+    )
+    p = build_portfolio([client], 1)
+    h = p.holdings["CERTA"]
+    assert h.locked_bond_target == "CERTA" and h.value_cad == 80000
+    assert h.current_price == 1
+    client.get_quote.return_value = [
+        {
+            "symbol": "CERTA",
+            "bidPrice": broker_price,
+            "askPrice": broker_price,
+            "lastTradePrice": broker_price * 1.01,
+        }
+    ]
+    client.get_candles.side_effect = lambda sid, *a, **kw: (
+        [{"start": "2020-01-01", "close": broker_price}] if sid == 1 else []
+    )
+    fetch_quotes_for_holdings(p, [client])
+    if divisor:
+        assert h.bid_price == h.ask_price == h.prev_close_price == 1
+        assert _compute_portfolio_day_pnl(p, 1) == pytest.approx((800, 1))
+    else:
+        assert h.current_price == 1 and h.prev_close_price == 0
+
+
 def test_partial_gic_funding_keeps_inaccessible_parked_money_in_its_account():
     accounts = [
         {
@@ -371,6 +404,28 @@ def test_partial_gic_funding_keeps_inaccessible_parked_money_in_its_account():
         ("MM", "SELL", 5000),
         ("GIC:2Y", "BUY", 5000),
     ]
+
+
+def test_unrecognized_par_bonds_count_at_reported_value_in_day_return():
+    from requests import HTTPError, Response
+    from src.portfolio import fetch_quotes_for_holdings
+    from src.display import _compute_portfolio_day_pnl
+
+    client = posted_portfolio()
+    client.get_symbols.return_value[0]["description"] = "EXAMPLE BOND"
+    p = build_portfolio([client], 1)
+    client.get_quote.return_value = [{"symbol": "EQ", "lastTradePrice": 101}]
+
+    def candles(sid, *args, **kwargs):
+        if sid == 3:
+            return [{"start": "2020-01-01", "close": 100}]
+        response = Response()
+        response.status_code = 404
+        raise HTTPError(response=response)
+
+    client.get_candles.side_effect = candles
+    fetch_quotes_for_holdings(p, [client])
+    assert _compute_portfolio_day_pnl(p, 1) == pytest.approx((2, 100 * 2 / 160200))
 
 
 def test_example_config_enables_saven_and_gic_purchases(tmp_path, monkeypatch):

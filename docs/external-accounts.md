@@ -87,6 +87,9 @@ When a recommendation starts, the ledger records any unexplained difference
 between opening and current CAD cash after accounting for the day's activity.
 If a deposit or withdrawal already visible in that balance posts later, its
 activity row does not create transit or a second receipt for the new recommendation.
+The ledger also checks newly explained cash against the balance change between
+observations. A late fee or interest posting can explain an opening difference
+without creating a new transfer.
 
 Recognized principal is capped across the whole recommendation:
 

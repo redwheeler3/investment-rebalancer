@@ -88,7 +88,7 @@ and every app-managed file under `data/` are SOPS/age ciphertext at rest.
 - **accounts** — who you are, where your tokens live
 - **targets** — desired allocation percentages (e.g., `VSP.TO: 53.0`)
 - **fx_target_rules** — dynamic allocation splits based on exchange rate
-- **transient_symbols** — things like DLR.TO you're temporarily holding during a conversion
+- **transient_symbols** — holdings to exclude from trade recommendations
 - **drift_trade_threshold_pct** — minimum drift before a trade is recommended
 - **norberts_gambit_fee_cad** — per-conversion fee
 - **gic_account_types** and **gic_min_buy_cad** govern account eligibility and the minimum per certificate purchase.
@@ -491,7 +491,7 @@ def get_transient_status(portfolio, transient_symbols):
         # Build alert for display
 ```
 
-Transient symbols (e.g., DLR.TO mid-conversion) are excluded from rebalancing but still shown in the portfolio value.
+Holdings listed in `transient_symbols` count toward household value and contribute unallocated value to accuracy. The planner skips them when generating trades.
 
 ---
 

@@ -216,7 +216,7 @@ class TransferLedger:
                 baseline = cycle["cash_baseline"]
                 if (
                     not isinstance(baseline, dict)
-                    or set(baseline)
+                    or set(baseline) - {"other_cash_cursor"}
                     not in (
                         {"day", "cents"},
                         {"day", "cents", "opening_gap", "posted_start"},
@@ -232,6 +232,15 @@ class TransferLedger:
                 ):
                     raise ValueError("Invalid broker cash baseline.")
                 date.fromisoformat(baseline["day"])
+                if "other_cash_cursor" in baseline:
+                    cursor = baseline["other_cash_cursor"]
+                    if (
+                        "opening_gap" not in baseline
+                        or not isinstance(cursor, dict)
+                        or set(cursor) != {"net", "residual"}
+                        or any(type(n) is not int for n in cursor.values())
+                    ):
+                        raise ValueError("Invalid non-transfer cash evidence.")
                 if "opening_gap" in baseline:
                     gap = baseline["opening_gap"]
                     if (
@@ -495,6 +504,46 @@ class TransferLedger:
         posted = record["broker_out"] - cycle["source_start"]
         return "balance_debit", posted - debit
 
+    def _unexplained_cash(self, record, cash, explained):
+        """Remove cash effects that were already in the balance before intent."""
+        baseline = record["cycle"]["cash_baseline"]
+        residual = round(100 * (cash - explained)) - baseline["cents"]
+        debit, credit = self._prior_broker_postings(record, residual)
+        adjusted = residual + credit - debit
+        gap = baseline.get("opening_gap", 0)
+        if not gap:
+            return adjusted
+
+        # Changes in this net exclude EFTs. Executions and their subsequent
+        # trade postings already describe a single debit or credit in explained.
+        other_net = round(100 * explained) - (
+            record["broker_in"] - record["broker_out"]
+        )
+        cursor = baseline.get("other_cash_cursor")
+        if cursor is not None:
+            sign = 1 if gap > 0 else -1
+            newly_explained = sign * (other_net - cursor["net"])
+            without_cash_change = sign * (cursor["residual"] - adjusted)
+            matched = min(abs(gap), newly_explained, without_cash_change)
+            if matched > 0:
+                correction = sign * matched
+                baseline["cents"] -= correction
+                baseline["opening_gap"] -= correction
+                if not baseline["opening_gap"]:
+                    for key in (
+                        "opening_gap",
+                        "posted_start",
+                        "matched_debits",
+                        "other_cash_cursor",
+                    ):
+                        baseline.pop(key, None)
+                residual += correction
+                debit, credit = self._prior_broker_postings(record, residual)
+                adjusted = residual + credit - debit
+        if "opening_gap" in baseline:
+            baseline["other_cash_cursor"] = {"net": other_net, "residual": adjusted}
+        return adjusted
+
     def observe_broker_cash(self, symbol, endpoint, daily, day):
         """Infer the unposted cash movement in the intended direction, up to the cap."""
         record = self.account(symbol)
@@ -516,6 +565,11 @@ class TransferLedger:
                 snapshot.update(
                     opening_gap=gap,
                     posted_start=record["broker_in" if gap > 0 else "broker_out"],
+                    other_cash_cursor={
+                        "net": round(100 * daily.get(day, 0))
+                        - (record["broker_in"] - record["broker_out"]),
+                        "residual": 0,
+                    },
                 )
         if not cycle:
             return
@@ -541,12 +595,8 @@ class TransferLedger:
         baseline = cycle["cash_baseline"]
         start = date.fromisoformat(baseline["day"])
         explained = sum(value for d, value in daily.items() if d >= start)
-        residual = round(100 * (cash - explained)) - baseline["cents"]
-        # A late posting for money already in the opening snapshot changes
-        # the activity sum without changing cash since the recommendation.
-        debit, credit = self._prior_broker_postings(record, residual)
+        residual = self._unexplained_cash(record, cash, explained)
         field, posted = self._broker_evidence(record)
-        residual += credit - debit
         cap = cycle["limit"]
         if field == "balance_receipt":
             source = record["bank_out"] - cycle["source_start"]

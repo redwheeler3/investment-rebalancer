@@ -73,7 +73,7 @@ CAD/USD planning, and Questrade-specific workflow details.
 - **Accuracy Score** — Single percentage showing how close the portfolio is to target
 - **Trade placement** — Share buys use accounts that hold the security. Manual GIC buys use eligible account types, including when a term has no current holdings.
 - **Currency Handling** — Detects USD/CAD conversion needs and flags Norbert's Gambit status
-- **Transient Symbols** — Temporarily exclude symbols such as `DLR.TO` / `DLR.U.TO` during Norbert's Gambit
+- **Transient symbols** — List temporary holdings in `transient_symbols` to exclude them from recommended trades.
 - **Untargeted holdings** — Tradable holdings outside the resolved targets have a 0% target. Locked certificates retain their broker value and cannot fund sales.
 - **Projected Accuracy** — Shows expected accuracy after recommended trades
 - **Whole-Share Trading** — Sizes share orders at the bid for sells and the ask for buys. GIC instructions specify a CAD amount.
@@ -148,8 +148,7 @@ these portfolio rules:
     - Ordinary holdings outside the resolved targets can be sold when the proceeds are useful. Redemption restrictions still apply.
 
 11. **Respect transient/excluded symbols**
-    - Symbols such as `DLR.TO` / `DLR.U.TO` can be temporarily excluded from
-      rebalancing while a Norbert's Gambit is in flight.
+    - Holdings listed in `transient_symbols` remain in household value and are excluded from trade recommendations.
 
 This rule set is meant to reflect the practical objective of the project:
 
@@ -333,7 +332,7 @@ around it:
 - detecting when cross-currency funding is needed
 - sizing the conversion conservatively with DLR bid/ask pricing
 - accounting for the configured gambit fee in the recommendation
-- letting you mark `DLR.TO` / `DLR.U.TO` as transient while the gambit is in flight
+- letting you list the conversion instruments in `transient_symbols` while the gambit is in flight
 
 That keeps the rebalance plan realistic without pretending that the conversion is
 instant or free.
@@ -940,6 +939,10 @@ The accuracy score is calculated as:
 ```text
 Accuracy = 100% - (sum of absolute drifts / 2)
 ```
+
+Holdings listed in `transient_symbols` count as unallocated value in the accuracy
+score. Moving cash into one of those holdings at the same market value leaves
+the score unchanged.
 
 - **100%** = perfectly balanced
 - **>95%** = green, very close to target

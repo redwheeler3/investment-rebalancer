@@ -76,16 +76,16 @@ class TestCalculateAllocations:
         assert result == {}
 
     def test_excludes_transient_symbols(self):
-        holdings = {"VCN.TO": 800000.0, "DLR.TO": 50000.0}
+        holdings = {"VCN.TO": 800000.0, "TEMP_A": 50000.0}
         result = calculate_allocations_for_values(
             holdings_value_cad=holdings,
             total_value_cad=1000000.0,
             cash_cad_total=150000.0,
             cash_usd_total=0.0,
             usd_to_cad_rate=1.36,
-            excluded_symbols={"DLR.TO"},
+            excluded_symbols={"TEMP_A"},
         )
-        assert "DLR.TO" not in result
+        assert "TEMP_A" not in result
         assert "VCN.TO" in result
 
 
@@ -159,6 +159,42 @@ class TestCalculateAccuracy:
 
 
 class TestBuildAllocationSnapshot:
+    def test_transient_shares_count_as_unallocated_for_accuracy_only(self):
+        def snapshot(holdings, cash):
+            return build_allocation_snapshot_from_values(
+                holdings, cash, 0, 100000, {"EQ": 100}, 1.35, {"TEMP_A", "TEMP_B"}
+            )
+
+        cash = snapshot({"EQ": 92000}, 8000)
+        transient = snapshot({"EQ": 92000, "TEMP_A": 3000, "TEMP_B": 5000}, 0)
+        assert cash.accuracy == transient.accuracy == 92
+        assert transient.allocations["CAD"] == 0
+        assert "TEMP_A" not in transient.allocations and "TEMP_B" not in transient.drifts
+
+    def test_transient_holding_is_neither_buying_power_nor_a_sale(self):
+        from tests.test_rebalancer import _build_test_portfolio
+        from src.portfolio import build_allocation_snapshot
+        from src.rebalancer import calculate_trades
+
+        p = _build_test_portfolio(
+            [
+                dict(
+                    number="a",
+                    type="Margin",
+                    owner="Example",
+                    positions=[
+                        dict(symbol="EQ", qty=920, price=100, currency="CAD"),
+                        dict(symbol="TEMP_A", qty=800, price=10, currency="CAD"),
+                    ],
+                )
+            ],
+            1.35,
+        )
+        targets, hidden = {"EQ": 100}, {"TEMP_A"}
+        assert calculate_trades(p, targets, 1.35, 10, 1, hidden, None) == []
+        assert build_allocation_snapshot(p, targets, 1.35, hidden).accuracy == 92
+        assert simulate_rebalance(p, [], targets, 1.35, hidden).accuracy == 92
+
     def test_snapshot_has_correct_fields(self):
         snapshot = build_allocation_snapshot_from_values(
             holdings_value_cad={"VCN.TO": 500000.0, "VUN.TO": 500000.0},
