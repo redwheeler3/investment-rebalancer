@@ -13,6 +13,7 @@ class FixedIncomeBudget:
     # Feasible fixed weights as a percentage of the household.
     targets: dict[str, float]
     locked_excess_cad: float
+    restricted_floor_symbols: set[str]
 
     def room_cad(self, snapshot):
         invested_pct = sum(snapshot.allocations.get(s, 0.0) for s in self.targets)
@@ -59,14 +60,18 @@ def fixed_income_budget(
         budgets[symbol] += amount
     weights = {s: w for s, w in composition.items() if s not in locked}
     # Manual redemptions cannot finance other trades in this run.
-    floors = {}
+    redemption_floors = {}
     for acct in portfolio.accounts:
         for pos in acct.positions:
             if pos.symbol in weights and pos.symbol in acct.redemption_limits:
-                floors[pos.symbol] = floors.get(pos.symbol, 0.0) + to_cad(
-                    pos.market_value, pos.currency, rate
+                value = to_cad(pos.market_value, pos.currency, rate)
+                redemption_floors[pos.symbol] = (
+                    redemption_floors.get(pos.symbol, 0.0) + value
                 )
-    locked_excess = max(0.0, sum(locked.values()) + sum(floors.values()) - total)
+    locked_excess = max(
+        0.0, sum(locked.values()) + sum(redemption_floors.values()) - total
+    )
+    floors = redemption_floors.copy()
     for symbol, value in (unreleased or {}).items():
         if symbol in weights:
             floors[symbol] = max(floors.get(symbol, 0.0), value)
@@ -89,4 +94,9 @@ def fixed_income_budget(
         total,
         {s: 100 * value / portfolio.total_value_cad for s, value in budgets.items()},
         locked_excess,
+        {
+            s
+            for s, value in redemption_floors.items()
+            if value > 0 and budgets[s] == value
+        },
     )

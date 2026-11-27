@@ -260,6 +260,16 @@ This rule set is meant to reflect the practical objective of the project:
 │ USD     │     2.0% │      2.1% │ +0.1% │   OK   │
 ╰─────────┴──────────┴───────────┴───────┴────────╯
 
+                    Currency Conversions (Norbert's Gambit)
+╭─────────────────┬────────────┬────────┬────────┬───────────┬─────────────────╮
+│ Account         │ Direction  │ Buy    │ Shares │ DLR Price │   Amount (incl. │
+│                 │            │        │        │           │            fee) │
+├─────────────────┼────────────┼────────┼────────┼───────────┼─────────────────┤
+│ Alice TFSA      │ CAD -> USD │ DLR.TO │    302 │    $13.79 │   $4,174.07 CAD │
+│ (12345678)      │            │        │        │           │  -> US$3,065.30 │
+│                 │            │        │        │           │             USD │
+╰─────────────────┴────────────┴────────┴────────┴───────────┴─────────────────╯
+
                                Recommended Trades
 ╭─────────┬────────┬─────┬───────────┬─────────────┬─────────────┬─────────────╮
 │ Symbol  │ Action │ Qty │     Price │  Est. Value │ Account     │ Note        │
@@ -276,16 +286,6 @@ This rule set is meant to reflect the practical objective of the project:
 │         │        │     │           │             │ (34567890)  │ cash        │
 │         │        │     │           │             │             │ deployment  │
 ╰─────────┴────────┴─────┴───────────┴─────────────┴─────────────┴─────────────╯
-
-                    Currency Conversions (Norbert's Gambit)
-╭─────────────────┬────────────┬────────┬────────┬───────────┬─────────────────╮
-│ Account         │ Direction  │ Buy    │ Shares │ DLR Price │   Amount (incl. │
-│                 │            │        │        │           │            fee) │
-├─────────────────┼────────────┼────────┼────────┼───────────┼─────────────────┤
-│ Alice TFSA      │ CAD -> USD │ DLR.TO │    302 │    $13.79 │   $4,174.07 CAD │
-│ (12345678)      │            │        │        │           │  -> US$3,065.30 │
-│                 │            │        │        │           │             USD │
-╰─────────────────┴────────────┴────────┴────────┴───────────┴─────────────────╯
 
          Projected Allocation (After Trades)
 ╭─────────┬──────────┬─────────────┬───────┬────────╮

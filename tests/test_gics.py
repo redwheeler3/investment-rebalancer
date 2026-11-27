@@ -1,6 +1,7 @@
 """Posted broker units, household allocation and funding for locked certificates."""
 
 from dataclasses import replace
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 import pytest
@@ -11,11 +12,12 @@ from src.fx_conversions import calculate_currency_needs
 from src.fx_rate import DlrQuotes
 from src.portfolio import (
     HoldingSummary,
+    build_allocation_snapshot,
     build_portfolio,
     get_current_allocations,
     simulate_rebalance,
 )
-from src.rebalancer import calculate_trades
+from src.rebalancer import calculate_trades, redemption_suggestions
 from src.redemption import RedemptionLimit
 from src.tactical import parse_tactical_config
 from tests.test_rebalancer import _build_test_portfolio
@@ -150,6 +152,52 @@ def test_level_one_budget_keeps_ideal_targets_and_respects_restricted_floor():
     amounts = dollar_budgets()
     assert amounts["PRIVATE"] == pytest.approx(120000)
     assert amounts["MM"] == pytest.approx((remaining - 120000) * 10 / 35)
+
+
+@pytest.mark.parametrize("fund_target, expected_rows", [(10, 1), (20, 0)])
+def test_restricted_floor_preserves_redemption_review(fund_target, expected_rows):
+    portfolio = _build_test_portfolio(
+        [
+            {
+                "number": "111",
+                "type": "TFSA",
+                "owner": "Example",
+                "positions": [
+                    {"symbol": "FUND", "qty": 20, "price": 100, "currency": "CAD"},
+                    {"symbol": "CERT", "qty": 10, "price": 100, "currency": "CAD"},
+                    {"symbol": "EQ", "qty": 70, "price": 100, "currency": "CAD"},
+                ],
+            }
+        ]
+    )
+    account = portfolio.accounts[0]
+    limit = RedemptionLimit(0, "24-month hold")
+    account.redemption_limits["FUND"] = limit
+    account.redemption_limits["CERT"] = RedemptionLimit(0, "redemption disabled")
+    portfolio.holdings["CERT"].locked_bond_target = "GIC:5Y"
+    targets = {"FUND": fund_target, "GIC:5Y": 10, "EQ": 90 - fund_target}
+    composition = {"FUND": 50, "GIC:5Y": 50}
+    budget = fixed_income_budget(portfolio, targets, composition, 1)
+    blocked_sales = set()
+    trades = calculate_trades(
+        portfolio,
+        targets,
+        1,
+        0,
+        0.1,
+        set(),
+        None,
+        fixed_budget=budget,
+        blocked_sales=blocked_sales,
+    )
+    assert trades == []
+    report = SimpleNamespace(
+        current=build_allocation_snapshot(portfolio, targets, 1), projected=None
+    )
+    reviews = redemption_suggestions(
+        portfolio, report, 1, 0.1, set(), blocked_sales=blocked_sales
+    )
+    assert reviews == [(account, "FUND", limit, 0)] * expected_rows
 
 
 @pytest.mark.parametrize("room, expected_units", [(-200, 0), (0, 0), (99, 0), (250, 2)])

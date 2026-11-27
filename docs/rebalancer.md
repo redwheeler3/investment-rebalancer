@@ -1373,8 +1373,13 @@ lot qualifies on the first day of the following month. Prior sales reduce the
 oldest eligible lots first, which gives a conservative limit when the broker
 does not identify redeemed lots.
 
+Review Currency Conversions, Saven Transfers, and Redemption Eligibility above
+Recommended Trades to identify funding and reconciliation steps.
+
 The Redemption Eligibility table appears when the planner recommends a
-redemption or a restriction blocks an overweight or funding sale. Rows show
+redemption or a restriction blocks an overweight or funding sale. This includes
+a restricted position that remains overweight against its ideal target because
+the fixed-income budget reserves its principal. Rows show
 the eligible quantity and the next date more units qualify. The household
 redemption recommendation is capped by verified mature units.
 Confirm the broker can redeem those lots

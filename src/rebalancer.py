@@ -248,6 +248,16 @@ def calculate_trades(
         requested = funded
     if blocked_sales is not None:
         blocked_sales.update(planner.blocked_sales)
+        if budget:
+            # A restricted floor can absorb the entire sell gap in the funded plan.
+            # The redemption report still checks the gap against the ideal target.
+            blocked_sales.update(
+                (acct.number, symbol, None)
+                for acct in portfolio.accounts
+                for symbol in budget.restricted_floor_symbols.intersection(
+                    acct.redemption_limits
+                )
+            )
     return trades
 
 

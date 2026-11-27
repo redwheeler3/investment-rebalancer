@@ -1153,10 +1153,10 @@ def display_full_report(
         portfolio.external_balances,
     )
     display_transient_alerts(transient_alerts)
-    display_trades(trades)
     display_currency_conversions(currency_conversions)
     display_external_transfers(portfolio, trades)
     display_redemptions(redemption_reviews)
+    display_trades(trades)
     display_projected_allocations(
         projected_allocations,
         targets,
