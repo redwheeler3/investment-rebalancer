@@ -1373,8 +1373,9 @@ lot qualifies on the first day of the following month. Prior sales reduce the
 oldest eligible lots first, which gives a conservative limit when the broker
 does not identify redeemed lots.
 
-Review Currency Conversions, Saven Transfers, and Redemption Eligibility above
-Recommended Trades to identify funding and reconciliation steps.
+Currency Conversions, Saven Transfers, and Redemption Eligibility appear after
+Recommended Trades. Review them for funding and reconciliation steps before
+placing orders.
 
 The Redemption Eligibility table appears when the planner recommends a
 redemption or a restriction blocks an overweight or funding sale. This includes
