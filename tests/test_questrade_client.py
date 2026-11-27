@@ -66,12 +66,71 @@ def _response(status_code: int, reason: str, data: dict | None = None):
 def test_reads_account_activity_with_explicit_date_bounds():
     client = _client()
     rows = [{"type": "Withdrawals", "currency": "CAD", "netAmount": -50000}]
-    with patch.object(client, "_get", return_value={"activities": rows}) as get:
+    with patch(
+        "src.questrade_client.requests.get",
+        return_value=_response(200, "OK", {"activities": rows}),
+    ) as get:
         assert client.get_activities("00012345", "start", "end") == rows
     get.assert_called_once_with(
-        "v1/accounts/00012345/activities",
+        "https://api.example/v1/accounts/00012345/activities",
+        headers={"Authorization": "Bearer first-access-token"},
         params={"startTime": "start", "endTime": "end"},
+        timeout=30,
     )
+
+
+@pytest.mark.parametrize("recovers", [True, False])
+def test_activity_read_allows_up_to_five_retries(recovers):
+    client = _client()
+    gateway_timeout = _response(504, "Gateway Timeout")
+    final = _response(200, "OK", {"activities": []}) if recovers else gateway_timeout
+    with (
+        patch(
+            "src.questrade_client.requests.get",
+            side_effect=[gateway_timeout] * 5 + [final],
+        ) as get,
+        patch("src.questrade_client.time.sleep") as sleep,
+        patch("src.questrade_client.random.uniform", return_value=1.1),
+    ):
+        if recovers:
+            assert client.get_activities("00012345", "start", "end") == []
+        else:
+            with pytest.raises(requests.HTTPError, match="504"):
+                client.get_activities("00012345", "start", "end")
+
+    assert get.call_count == 6
+    assert [call.args[0] for call in sleep.call_args_list] == pytest.approx(
+        [1.1, 2.2, 4.4, 8.8, 17.6]
+    )
+    assert all(
+        call.kwargs["params"] == {"startTime": "start", "endTime": "end"}
+        for call in get.call_args_list
+    )
+
+
+def test_activity_read_uses_remaining_budget_as_final_attempt_timeout():
+    client = _client()
+    elapsed = 0.0
+
+    def advance(seconds):
+        nonlocal elapsed
+        elapsed += seconds
+
+    def timeout(*args, **kwargs):
+        advance(kwargs["timeout"])
+        raise requests.Timeout("activity read timed out")
+
+    with (
+        patch("src.questrade_client.requests.get", side_effect=timeout) as get,
+        patch("src.questrade_client.time.sleep", side_effect=advance),
+        patch("src.questrade_client.time.monotonic", side_effect=lambda: elapsed),
+        patch("src.questrade_client.random.uniform", return_value=1),
+        pytest.raises(requests.Timeout, match="activity read timed out"),
+    ):
+        client.get_activities("00012345", "start", "end")
+
+    assert [call.kwargs["timeout"] for call in get.call_args_list] == [30, 30, 27]
+    assert elapsed == 90
 
 
 def test_get_refreshes_auth_once_after_401_and_displays_recovery(capsys):

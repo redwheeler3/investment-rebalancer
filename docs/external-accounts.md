@@ -180,8 +180,11 @@ State is SOPS ciphertext in the private repo:
   cents, and movement signature counts. Identical-looking repeated transactions
   retain multiplicity; polls and overlapping queries do not replay them.
 
-Reconciliation precedes history and tactical evaluation. Source-read failures do
-not produce those updates from an unreconciled snapshot.
+Reconciliation reads Questrade activity in 30-day windows. Each activity read
+can retry transient failures up to five times with jittered exponential backoff
+and a 90-second retry budget. Reconciliation precedes history and tactical
+evaluation. Source-read failures do not produce those updates from an
+unreconciled snapshot.
 
 ## Console and projected funding
 

@@ -4,6 +4,7 @@ Questrade API client for authentication and data retrieval.
 Handles OAuth token refresh, account listing, positions, balances, and market quotes.
 """
 
+import random
 import time
 from pathlib import Path
 
@@ -18,6 +19,8 @@ from src.state_sync import StateSyncError, preserve_failed_rotation, sync_state
 
 QUESTRADE_AUTH_URL = "https://login.questrade.com/oauth2/token"
 GET_RETRY_DELAYS_SECONDS = (0.5, 1.0)
+ACTIVITY_RETRY_DELAYS_SECONDS = (1.0, 2.0, 4.0, 8.0, 16.0)
+ACTIVITY_RETRY_BUDGET_SECONDS = 90
 RETRYABLE_HTTP_STATUSES = {429, 500, 502, 503, 504}
 
 
@@ -96,66 +99,89 @@ class QuestradeClient:
         """Return authorization headers for API requests."""
         return {"Authorization": f"Bearer {self.access_token}"}
 
-    def _get(self, endpoint: str, params: dict | None = None) -> dict:
+    def _get(
+        self,
+        endpoint: str,
+        params: dict | None = None,
+        *,
+        retry_delays: tuple[float, ...] = GET_RETRY_DELAYS_SECONDS,
+        retry_budget_seconds: float | None = None,
+    ) -> dict:
         """
         Make a GET request to the Questrade API.
 
         Args:
             endpoint: API endpoint path (e.g., "/v1/accounts").
             params: Optional query parameters.
+            retry_delays: Backoff delays after transient failures.
+            retry_budget_seconds: Optional elapsed-time limit for retrying the read.
 
         Returns:
             JSON response as a dictionary.
         """
         refreshed_auth = False
         transient_retries = 0
+        deadline = (
+            time.monotonic() + retry_budget_seconds
+            if retry_budget_seconds is not None
+            else None
+        )
 
         while True:
+            timeout = 30
+            if deadline is not None:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise requests.Timeout("Questrade read retry budget exhausted.")
+                timeout = min(timeout, remaining)
             url = f"{self.api_server}{endpoint}"
             try:
                 resp = requests.get(
                     url,
                     headers=self._headers(),
                     params=params,
-                    timeout=30,
+                    timeout=timeout,
                 )
-            except (requests.ConnectionError, requests.Timeout) as error:
-                if transient_retries >= len(GET_RETRY_DELAYS_SECONDS):
+                if resp.status_code != 401 or refreshed_auth:
+                    resp.raise_for_status()
+                    return resp.json()
+            except (
+                requests.ConnectionError,
+                requests.Timeout,
+                requests.HTTPError,
+            ) as error:
+                if transient_retries >= len(retry_delays):
                     raise
-                delay = GET_RETRY_DELAYS_SECONDS[transient_retries]
+                if isinstance(error, requests.HTTPError):
+                    response = error.response
+                    if (
+                        response is None
+                        or response.status_code not in RETRYABLE_HTTP_STATUSES
+                    ):
+                        raise
+                    reason = f"HTTP {response.status_code} {response.reason}"
+                else:
+                    reason = f"{type(error).__name__}: {error}"
+                delay = retry_delays[transient_retries]
+                if deadline is not None:
+                    delay *= random.uniform(0.8, 1.2)
+                    if time.monotonic() + delay >= deadline:
+                        raise
                 transient_retries += 1
                 self._show_retry(
-                    f"{type(error).__name__}: {error}",
-                    f"retrying request in {delay:g}s "
-                    f"({transient_retries}/{len(GET_RETRY_DELAYS_SECONDS)})",
+                    reason,
+                    f"retrying request in {delay:.3g}s "
+                    f"({transient_retries}/{len(retry_delays)})",
                 )
                 time.sleep(delay)
                 continue
 
-            if resp.status_code == 401 and not refreshed_auth:
-                refreshed_auth = True
-                self._show_retry(
-                    "HTTP 401 Unauthorized",
-                    "refreshing authentication and retrying request (1/1)",
-                )
-                self._authenticate()
-                continue
-
-            if resp.status_code in RETRYABLE_HTTP_STATUSES and transient_retries < len(
-                GET_RETRY_DELAYS_SECONDS
-            ):
-                delay = GET_RETRY_DELAYS_SECONDS[transient_retries]
-                transient_retries += 1
-                self._show_retry(
-                    f"HTTP {resp.status_code} {resp.reason}",
-                    f"retrying request in {delay:g}s "
-                    f"({transient_retries}/{len(GET_RETRY_DELAYS_SECONDS)})",
-                )
-                time.sleep(delay)
-                continue
-
-            resp.raise_for_status()
-            return resp.json()
+            refreshed_auth = True
+            self._show_retry(
+                "HTTP 401 Unauthorized",
+                "refreshing authentication and retrying request (1/1)",
+            )
+            self._authenticate()
 
     def _show_retry(self, error: str, action: str) -> None:
         """Display automatic recovery so transient API failures are visible."""
@@ -224,6 +250,8 @@ class QuestradeClient:
         rows = self._get(
             f"v1/accounts/{account_id}/activities",
             params={"startTime": start_time, "endTime": end_time},
+            retry_delays=ACTIVITY_RETRY_DELAYS_SECONDS,
+            retry_budget_seconds=ACTIVITY_RETRY_BUDGET_SECONDS,
         )["activities"]
         if not isinstance(rows, list):
             raise ValueError("Invalid account activities response")
