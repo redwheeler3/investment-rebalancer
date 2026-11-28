@@ -385,6 +385,27 @@ def test_noncontinuous_csv_fails_without_partially_advancing_state(tmp_path):
     assert ledger.data == before
 
 
+def test_bank_replay_uses_the_tracked_close_when_a_statement_label_changes(tmp_path):
+    ledger, _ = baseline(tmp_path, "WITHDRAW")
+    opening = ("01/11/2026", "Deposit", 500000, 500000)
+    bank, parsed = export(
+        tmp_path, [("02/11/2026", "Preauthorized Debit SVF", 50000, 450000), opening]
+    )
+    ledger.observe_external_balance(SAVEN, bank, parsed)
+    bank, parsed = export(
+        tmp_path,
+        [
+            ("03/11/2026", "Withdrawal", 30000, 420000),
+            ("02/11/2026", "Preauthorized Debit SVF SVF", 50000, 450000),
+            opening,
+        ],
+    )
+    ledger.observe_external_balance(SAVEN, bank, parsed)
+    ledger.observe_external_balance(SAVEN, bank, parsed)
+    assert ledger.progress(SAVEN, ACCOUNT).in_transit_cad == 80000
+    assert ledger.account(SAVEN)["bank"]["balance"] == cents(420000)
+
+
 @pytest.mark.parametrize("include_anchor", [False, True])
 def test_cached_only_startup_can_reconcile_a_later_statement(tmp_path, include_anchor):
     bank, _ = export(tmp_path)

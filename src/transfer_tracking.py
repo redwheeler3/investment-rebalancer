@@ -335,6 +335,20 @@ class TransferLedger:
                     break
                 new_rows.append(row)
                 new_counts[key] -= 1
+            if new_rows:
+                oldest = new_rows[-1]
+                if abs(cents(oldest.balance_cad) - prior["balance"]) != abs(
+                    cents(oldest.amount_cad)
+                ):
+                    # A revised label changes the signature but leaves the close intact.
+                    anchors = [
+                        index
+                        for index, row in enumerate(new_rows)
+                        if row.date.isoformat() == prior["date"]
+                        and cents(row.balance_cad) == prior["balance"]
+                    ]
+                    if len(anchors) == 1:
+                        new_rows = new_rows[: anchors[0]]
             current["seen"] = dict(Counter(prior["seen"]) | Counter(current["seen"]))
         else:
             # A cached balance can establish the baseline without ledger rows.

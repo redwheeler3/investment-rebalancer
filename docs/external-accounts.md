@@ -269,7 +269,9 @@ transit, planning, and console code consume institution-neutral data.
 - Match by format/account, then select the newest file modification time. Tied
   newest files are an error.
 - Use the newest ledger balance after validating order and adjacent movements.
-  Exports must contain continuous activity from the tracked balance.
+  Exports must contain continuous activity from the tracked balance. If Saven
+  revises the label on the tracked transaction, its date and closing balance can
+  identify it when they match a single row in the unmatched activity.
 - Interest, fee, and charge descriptions are excluded from transfer principal
   while remaining part of the actual balance.
 
